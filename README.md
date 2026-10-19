@@ -16,20 +16,49 @@ Composer or Node.
 
 ## Install
 
+**macOS, Linux**
+
 ```sh
-brew install puniserv/tap/skillcask   # macOS, Linux
-npm install -g skillcask              # or: bun add -g skillcask
-npx skillcask install --frozen        # or: bunx skillcask …, no global install
-cargo install skillcask
+brew install puniserv/tap/skillcask
+# or, without Homebrew:
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/puniserv/skillcask/releases/latest/download/skillcask-installer.sh | sh
+```
+
+**Windows (PowerShell)**
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/puniserv/skillcask/releases/latest/download/skillcask-installer.ps1 | iex"
+```
+
+The two installer scripts download the binary for your platform from the latest release and put
+it in `~/.cargo/bin` (`%USERPROFILE%\.cargo\bin` on Windows).
+
+**npm, bun**
+
+```sh
+npm install -g skillcask      # global
+bun add -g skillcask          # global, bun
+npx skillcask install --frozen
+bunx skillcask install --frozen
 ```
 
 The npm package is a thin wrapper that downloads the release binary for your platform from
-GitHub. It does not check a checksum itself; where that matters, install the binary directly
-and verify it.
+GitHub. It does not check a checksum itself; where that matters, use Homebrew or a release
+archive and verify it.
 
-Prebuilt binaries for macOS, Linux and Windows are on the
+**From source**
+
+```sh
+cargo install --locked --git https://github.com/puniserv/skillcask
+```
+
+**Release archives** for macOS, Linux and Windows are on the
 [releases page](https://github.com/puniserv/skillcask/releases), with sha256 checksums and GitHub
-build provenance attestations (`gh attestation verify <file> -R puniserv/skillcask`).
+build provenance attestations:
+
+```sh
+gh attestation verify skillcask-x86_64-unknown-linux-gnu.tar.xz -R puniserv/skillcask
+```
 
 ## Use
 
