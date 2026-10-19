@@ -147,6 +147,10 @@ fn run(cli: Cli) -> Result<(), Error> {
 /// Runs a user-installed `skillcask-<name>` executable. Packages never provide these.
 fn plugin(args: &[OsString]) -> Result<(), Error> {
     let name = args[0].to_string_lossy();
+    // A separator would make Command run a path relative to the cwd instead of searching PATH.
+    if name.contains(['/', '\\']) {
+        return Err(Error::new(MANIFEST, format!("unknown command {name:?}")));
+    }
     let exe = format!("skillcask-{name}");
     let status = std::process::Command::new(&exe).args(&args[1..]).status().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
@@ -159,7 +163,12 @@ fn plugin(args: &[OsString]) -> Result<(), Error> {
 }
 
 fn main() {
-    if let Err(e) = run(Cli::parse()) {
+    // clap exits 2 on usage errors, which here means authentication.
+    let cli = Cli::try_parse().unwrap_or_else(|e| {
+        let _ = e.print();
+        std::process::exit(if e.use_stderr() { MANIFEST.into() } else { 0 });
+    });
+    if let Err(e) = run(cli) {
         eprintln!("error: {e}");
         std::process::exit(e.code.into());
     }

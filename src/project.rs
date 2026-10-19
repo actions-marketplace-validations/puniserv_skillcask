@@ -46,8 +46,26 @@ pub fn store_names(root: &Path) -> Result<Vec<String>> {
     Ok(out)
 }
 
+/// Refuses when `sub` or any of its parents below `root` is a symlink. A repository can commit
+/// `.agents/skills -> ~/.config`, and skillcask would then write and delete outside the project.
+pub fn no_symlink(root: &Path, sub: &str) -> Result<()> {
+    let mut p = root.to_path_buf();
+    for c in Path::new(sub).components() {
+        p.push(c);
+        if p.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
+            bail!(
+                MANIFEST,
+                "{} is a symlink; skillcask only writes inside the project, replace it with a real file or directory",
+                rel(root, &p)
+            );
+        }
+    }
+    Ok(())
+}
+
 /// A sibling temp dir in the store, so the final rename stays on one filesystem.
 pub fn temp_dir(root: &Path) -> Result<tempfile::TempDir> {
+    no_symlink(root, STORE)?;
     let store = root.join(STORE);
     std::fs::create_dir_all(&store)?;
     Ok(tempfile::Builder::new().prefix(".skillcask-tmp-").tempdir_in(store)?)
@@ -253,38 +271,17 @@ pub fn write_modes(root: &Path, modes: &BTreeSet<String>) -> Result<()> {
     Ok(())
 }
 
-pub fn read_block(root: &Path) -> Vec<String> {
+/// `.gitignore` split into lines outside the block, the index of the first block, and block lines.
+struct Gitignore {
+    text: String,
+    kept: Vec<String>,
+    at: Option<usize>,
+    block: Vec<String>,
+}
+
+fn read_gitignore(root: &Path) -> Result<Gitignore> {
     let text = std::fs::read_to_string(root.join(".gitignore")).unwrap_or_default();
-    let mut inside = false;
-    let mut out = Vec::new();
-    for l in text.lines() {
-        match l.trim_end() {
-            BEGIN => inside = true,
-            END => inside = false,
-            l if inside && !l.is_empty() => out.push(l.to_string()),
-            _ => {}
-        }
-    }
-    out
-}
-
-/// Skill names that the current block marks as managed.
-pub fn block_managed(root: &Path) -> BTreeSet<String> {
-    let prefix = format!("/{STORE}/");
-    // The block is user-editable; only plain skill names may reach remove_dir_all.
-    read_block(root)
-        .iter()
-        .filter_map(|l| l.strip_prefix(&prefix)?.strip_suffix('/'))
-        .filter(|n| crate::skill::valid_name(n))
-        .map(String::from)
-        .collect()
-}
-
-/// Rewrites the block in place (or appends it); drops it when empty. Returns true if the file changed.
-pub fn write_block(root: &Path, lines: &[String]) -> Result<bool> {
-    let path = root.join(".gitignore");
-    let text = std::fs::read_to_string(&path).unwrap_or_default();
-    let mut kept = Vec::new();
+    let (mut kept, mut block) = (Vec::new(), Vec::new());
     let mut inside = false;
     let mut at = None;
     for l in text.lines() {
@@ -294,10 +291,42 @@ pub fn write_block(root: &Path, lines: &[String]) -> Result<bool> {
                 at.get_or_insert(kept.len());
             }
             END if inside => inside = false,
-            _ if inside => {}
+            b if inside => {
+                if !b.is_empty() {
+                    block.push(b.to_string());
+                }
+            }
             _ => kept.push(l.to_string()),
         }
     }
+    // Without END every user line after BEGIN would count as managed and be dropped on rewrite.
+    if inside {
+        bail!(MANIFEST, ".gitignore: the skillcask block has no end line {END:?}; restore it by hand");
+    }
+    Ok(Gitignore { text, kept, at, block })
+}
+
+pub fn read_block(root: &Path) -> Result<Vec<String>> {
+    Ok(read_gitignore(root)?.block)
+}
+
+/// Skill names that the current block marks as managed.
+pub fn block_managed(root: &Path) -> Result<BTreeSet<String>> {
+    let prefix = format!("/{STORE}/");
+    // The block is user-editable; only plain skill names may reach remove_dir_all.
+    Ok(read_block(root)?
+        .iter()
+        .filter_map(|l| l.strip_prefix(&prefix)?.strip_suffix('/'))
+        .filter(|n| crate::skill::valid_name(n))
+        .map(String::from)
+        .collect())
+}
+
+/// Rewrites the block in place (or appends it); drops it when empty. Returns true if the file changed.
+pub fn write_block(root: &Path, lines: &[String]) -> Result<bool> {
+    no_symlink(root, ".gitignore")?;
+    let path = root.join(".gitignore");
+    let Gitignore { text, mut kept, at, .. } = read_gitignore(root)?;
     let mut block = Vec::new();
     if !lines.is_empty() {
         block.push(BEGIN.to_string());
@@ -376,9 +405,9 @@ mod tests {
             )
         );
         assert!(!write_block(root, &lines).unwrap());
-        assert_eq!(block_managed(root), managed);
+        assert_eq!(block_managed(root).unwrap(), managed);
         std::fs::write(root.join(".gitignore"), format!("{BEGIN}\n/.agents/skills/../../home/\n/.agents/skills/ok/\n{END}\n")).unwrap();
-        assert_eq!(block_managed(root), BTreeSet::from(["ok".to_string()]), "traversal in the editable block is ignored");
+        assert_eq!(block_managed(root).unwrap(), BTreeSet::from(["ok".to_string()]), "traversal in the editable block is ignored");
         std::fs::write(root.join(".gitignore"), &text).unwrap();
 
         std::fs::write(root.join(".gitignore"), format!("{text}/after\n")).unwrap();

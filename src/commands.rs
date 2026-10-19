@@ -144,15 +144,39 @@ impl Ctx {
         })
     }
 
-    /// Makes disk match the lock: store, links, gitignore block, git index.
-    fn materialize(&self, m: &Manifest, lock: &Lock, mut prepared: HashMap<String, Fetched>) -> Result<()> {
+    /// Conflicts that would stop `materialize`, checked before `add` writes skills.toml and skills.lock.
+    fn preflight(&self, m: &Manifest, lock: &Lock) -> Result<()> {
         let root = &self.root;
-        let old_managed = project::block_managed(root);
+        for p in m.targets.iter().map(String::as_str).chain([STORE, ".gitignore"]) {
+            project::no_symlink(root, p)?;
+        }
+        let old_managed = project::block_managed(root)?;
         let locked = locked_names(lock)?;
         let locals = project::local_names(root, &m.local)?;
         if let Some(n) = locals.iter().find(|n| locked.contains_key(*n)) {
             bail!(MANIFEST, "skill {n:?} is both a project skill in {} and provided by {}", m.local, locked[n].0.name);
         }
+        for (n, (p, s)) in &locked {
+            let dir = project::store_dir(root, n);
+            if dir.exists() && !old_managed.contains(n) && !installed_ok(root, s) {
+                bail!(MANIFEST, "{STORE}/{n} exists and is not managed by skillcask, but {} provides a skill with that name", p.name);
+            }
+            for t in &m.targets {
+                if project::link_state(root, t, STORE, n) == LinkState::Foreign {
+                    bail!(MANIFEST, "{t}/{n} exists and was not created by skillcask; move it away");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Makes disk match the lock: store, links, gitignore block, git index.
+    fn materialize(&self, m: &Manifest, lock: &Lock, mut prepared: HashMap<String, Fetched>) -> Result<()> {
+        self.preflight(m, lock)?;
+        let root = &self.root;
+        let old_managed = project::block_managed(root)?;
+        let locked = locked_names(lock)?;
+        let locals = project::local_names(root, &m.local)?;
         for n in project::stale_local_links(root, &m.local, &locals) {
             if locked.contains_key(&n) || old_managed.contains(&n) {
                 continue;
@@ -163,13 +187,6 @@ impl Ctx {
             project::unlink(root, STORE, &n)?;
         }
         let hand = hand_written(root, lock, &old_managed, &locals)?;
-
-        for (n, (p, s)) in &locked {
-            let dir = project::store_dir(root, n);
-            if dir.exists() && !old_managed.contains(n) && !installed_ok(root, s) {
-                bail!(MANIFEST, "{STORE}/{n} exists and is not managed by skillcask, but {} provides a skill with that name", p.name);
-            }
-        }
 
         let mut modes = project::read_modes(root);
         for p in &lock.packages {
@@ -368,7 +385,7 @@ pub fn add(ctx: &Ctx, spec: &str, repository: Option<String>) -> Result<()> {
     let pkg = ctx.lock_candidate(&req, &repo, &c, &mut prepared)?;
     let mut lock = Lock::load(&ctx.root)?;
     lock.upsert(pkg);
-    locked_names(&lock)?;
+    ctx.preflight(&m, &lock)?;
 
     if !existed {
         std::fs::write(ctx.root.join(manifest::FILE), manifest::TEMPLATE)?;
@@ -501,7 +518,7 @@ pub fn status(ctx: &Ctx) -> Result<()> {
         row(&mut rows, &p.name, &p.version, "-", "not in skills.toml");
     }
     let locals = project::local_names(&ctx.root, &m.local)?;
-    for h in hand_written(&ctx.root, &lock, &project::block_managed(&ctx.root), &locals)? {
+    for h in hand_written(&ctx.root, &lock, &project::block_managed(&ctx.root)?, &locals)? {
         row(&mut rows, "-", "-", &h, "hand-written");
     }
     for l in &locals {
@@ -519,9 +536,12 @@ pub fn doctor(ctx: &Ctx, fix: bool) -> Result<()> {
     let root = &ctx.root;
     let m = Manifest::load(root)?;
     let lock = Lock::load(root)?;
+    for p in m.targets.iter().map(String::as_str).chain([STORE, ".gitignore"]) {
+        project::no_symlink(root, p)?;
+    }
     let locked = locked_names(&lock)?;
     let locals = project::local_names(root, &m.local)?;
-    let hand = hand_written(root, &lock, &project::block_managed(root), &locals)?;
+    let hand = hand_written(root, &lock, &project::block_managed(root)?, &locals)?;
     let mut open = Vec::new();
     let mut fixed = Vec::new();
 
@@ -556,7 +576,7 @@ pub fn doctor(ctx: &Ctx, fix: bool) -> Result<()> {
     }
 
     let lines = project::block_lines(&managed, &m.targets, &copies);
-    if project::read_block(root) != lines {
+    if project::read_block(root)? != lines {
         if fix {
             project::write_block(root, &lines)?;
             fixed.push(".gitignore: stale managed block".into());
