@@ -46,10 +46,10 @@ The npm package is a thin wrapper that downloads the release binary for your pla
 GitHub. It does not check a checksum itself; where that matters, use Homebrew or a release
 archive and verify it.
 
-**From source**
+**Cargo**
 
 ```sh
-cargo install --locked --git https://github.com/puniserv/skillcask
+cargo install --locked skillcask
 ```
 
 **Release archives** for macOS, Linux and Windows are on the
