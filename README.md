@@ -8,9 +8,11 @@ version constraints and commits a lock with content hashes. In CI it does frozen
 fail on drift, and it links every skill into each agent's skill directory. It ships as a single
 static binary with no runtime, so it works in a repository in any language.
 
-Skills are distributed through the Composer repository protocol. Packagist serves public skills;
-GitLab's Composer registry, Satis, Private Packagist or the static repository built by
-`skillcask publish` serve private ones. skillcask does not need PHP or Composer.
+Skills come from Composer repositories or straight from GitHub. Packagist serves public skill
+packages; GitLab's Composer registry, Satis, Private Packagist or the static repository built by
+`skillcask publish` serve private ones. Any GitHub repository with `SKILL.md` files works too,
+which covers most of what [skills.sh](https://skills.sh) lists. skillcask does not need PHP,
+Composer or Node.
 
 ## Install
 
@@ -33,6 +35,7 @@ build provenance attestations (`gh attestation verify <file> -R puniserv/skillca
 
 ```sh
 skillcask add netresearch/agent-jira-skill   # resolve, write skills.toml + skills.lock, install
+skillcask add github:mattpocock/skills/tdd   # one skill from a GitHub repository
 skillcask install --frozen                   # CI: install exactly the lock or exit non-zero
 skillcask status                             # manifest vs lock vs installed files
 ```
@@ -65,6 +68,8 @@ acme = { type = "composer", url = "https://git.example.com/api/v4/group/42/-/pac
 "netresearch/agent-jira-skill" = "^3.34"
 "acme/agents-md" = { version = "^1.0", repository = "acme" }
 "acme/review" = { version = "1.4.2", repository = "acme", skills = ["review"] }
+"mattpocock/skills" = { github = true, version = "^1.3", skills = ["tdd", "grill-me"] }
+"anthropics/skills" = { github = true, skills = ["pdf"] }      # default branch
 
 [agents]
 targets = [".claude/skills", ".junie/skills"]
@@ -86,6 +91,7 @@ Constraints follow Composer semantics: `^0.3` means `>=0.3.0 <0.4.0`, `~1.2` mea
 |---|---|
 | `init` | Create `skills.toml`. |
 | `add <vendor/name>[@constraint] [--repository r]` | Resolve, lock and install. |
+| `add github:<owner/repo>[/skill][@version-or-ref]` | The same from a GitHub repository, see below. |
 | `remove <vendor/name>…` | Drop from manifest and lock; delete files, links and gitignore lines. |
 | `install [--frozen]` | Install the lock. `--frozen` (implied by `CI`) fails when the lock is out of date. |
 | `update [vendor/name…]` | Re-resolve within constraints. |
@@ -99,6 +105,49 @@ Constraints follow Composer semantics: `^0.3` means `>=0.3.0 <0.4.0`, `~1.2` mea
 Exit codes: 0 ok, 1 manifest/lock/status problems, 2 authentication, 3 network, 4 hash mismatch,
 5 IO or archive error.
 
+### Skills from GitHub and skills.sh
+
+[skills.sh](https://skills.sh) lists skills as `owner/repo/skill`, for example
+`mattpocock/skills/grill-me`. Put `github:` in front and add it:
+
+```sh
+skillcask add github:mattpocock/skills/grill-me   # one skill
+skillcask add github:mattpocock/skills/tdd        # a second one from the same repository
+skillcask add github:anthropics/skills            # every skill in the repository
+```
+
+All skills of one repository share one entry in `skills.toml`:
+
+```toml
+"mattpocock/skills" = { github = true, version = "^1.3", skills = ["grill-me", "tdd"] }
+```
+
+Which version you get:
+
+- **Repository with version tags** (`v1.3.1`): `add` writes `version = "^<major.minor>"`, like
+  for Composer packages, and `update` moves within it. The release time of a tag is its commit
+  date.
+- **Repository without tags**: the entry follows the default branch; `ref = "main"` names a
+  branch, tag or commit instead. The lock pins the commit sha, so `install` keeps installing that
+  commit until you run `update`.
+- `@` picks explicitly: `github:owner/repo@^2.0` (version tags), `github:owner/repo@main` or
+  `@<commit sha>` (ref).
+- With `policy.allow-ranges = false` a branch counts as a range: `add` writes the full commit sha
+  as `ref`, and a hand-written branch name is rejected.
+
+Skills are found by their `SKILL.md` anywhere in the repository, except inside another skill.
+The install name is the frontmatter `name`; when that is not a valid name (`Jira Automation`), the
+directory name is used. `skills = [...]` takes these names.
+
+GitHub allows 60 anonymous API requests per hour. `add`, `update` and `outdated` use a few per
+entry; `install` from the lock uses none, it downloads the pinned archive. Set `GITHUB_TOKEN`
+(GitHub Actions has one) or Composer's `"github-oauth": {"github.com": "<token>"}` in `auth.json`
+for a higher limit and for private repositories. `SKILLCASK_GITHUB_API` points at GitHub
+Enterprise (`https://ghe.example.com/api/v3`).
+
+skills.sh itself is not queried: its API needs a Vercel token. Search on the website, then add
+what you picked.
+
 ## Security
 
 - The lock pins the version, the commit reference, the sha256 of the downloaded archive and
@@ -110,6 +159,9 @@ Exit codes: 0 ok, 1 manifest/lock/status problems, 2 authentication, 3 network, 
   No symlink is ever written from a package. Size and file count are capped (`--max-download`,
   `--max-unpacked`, `--max-files`).
 - No package code runs, ever. No telemetry.
+- `min-release-age` for GitHub sources reads commit dates, which the committer sets. A
+  backdated commit passes the cooldown; reviewing what `add`/`update` change in `skills.lock` is
+  the real check there.
 - Credentials come from Composer's `auth.json` / `COMPOSER_AUTH` (`http-basic`, `bearer`,
   `gitlab-token`, `gitlab-oauth`) and are never printed. In GitLab CI use `http-basic` with the
   user `gitlab-ci-token` and the password `$CI_JOB_TOKEN`.

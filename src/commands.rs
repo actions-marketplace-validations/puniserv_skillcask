@@ -9,9 +9,10 @@ use sha2::{Digest, Sha256};
 use crate::archive::{self, Limits};
 use crate::bail;
 use crate::error::{Context, Error, HASH, MANIFEST, NETWORK, Result};
+use crate::github;
 use crate::http::Http;
 use crate::lock::{Dist, Lock, LockedSkill, Package};
-use crate::manifest::{self, Manifest, Repository, SkillReq};
+use crate::manifest::{self, GitHub, Manifest, Repository, SkillReq};
 use crate::project::{self, LinkState, STORE};
 use crate::registry::{self, Candidate, Registry};
 use crate::skill::{self, FileEntry};
@@ -87,6 +88,10 @@ impl Ctx {
     }
 
     fn resolve(&self, m: &Manifest, req: &SkillReq, prepared: &mut HashMap<String, Fetched>) -> Result<Package> {
+        if req.github.is_some() {
+            let c = github::resolve(self.http()?, req, m.policy.min_release_age, Timestamp::now())?;
+            return self.lock_candidate(req, &github::repository(&req.name), &c, prepared);
+        }
         let reg = Registry::new(self.http()?);
         let (repo, cands) = reg.find(&m.repositories, &req.name, req.repository.as_deref())?;
         let c = registry::select(&cands, &req.name, &req.constraint, m.policy.min_release_age, Timestamp::now())?;
@@ -95,8 +100,11 @@ impl Ctx {
 
     fn lock_candidate(&self, req: &SkillReq, repo: &Repository, c: &Candidate, prepared: &mut HashMap<String, Fetched>) -> Result<Package> {
         let (sha, f) = self.fetch(&c.name, &c.dist, None, c.dist_shasum.as_deref())?;
-        let mut skills: Vec<LockedSkill> = Vec::new();
-        for p in &c.skill_paths {
+        // GitHub repositories declare no skill paths; any SKILL.md counts.
+        let discovered = c.skill_paths.is_empty();
+        let paths = if discovered { github::discover(&f.entries) } else { c.skill_paths.clone() };
+        let mut found: Vec<(String, String)> = Vec::new();
+        for p in &paths {
             let p = p.trim_start_matches("./").trim_end_matches('/');
             let rel = Path::new(p);
             if p.is_empty() || p.contains('\\') || rel.components().any(|c| !matches!(c, Component::Normal(_))) {
@@ -109,26 +117,43 @@ impl Ctx {
             };
             let text = std::fs::read_to_string(f.dir.path().join(&md))
                 .map_err(|_| Error::new(MANIFEST, format!("{} {}: {md} is missing from the package", c.name, c.version)))?;
-            let name = skill::frontmatter(&text)
-                .remove("name")
-                .ok_or_else(|| Error::new(MANIFEST, format!("{} {}: {md} has no frontmatter name", c.name, c.version)))?;
-            if !skill::valid_name(&name) {
-                bail!(MANIFEST, "{}: skill name {name:?} must match [a-z0-9][a-z0-9-]*", c.name);
-            }
-            if skills.iter().any(|s| s.name == name) {
-                bail!(MANIFEST, "{}: skill name {name:?} appears twice in the package", c.name);
-            }
-            let tree_sha256 = skill::tree_hash(&f.skill_files(&c.name, &name, &dir)?);
-            skills.push(LockedSkill { name, path: dir, tree_sha256 });
+            let name = skill::frontmatter(&text).remove("name").filter(|n| skill::valid_name(n));
+            // Repositories written for other tools often use a display name; their directory is the id.
+            let name = if discovered {
+                let base = dir.rsplit('/').next().filter(|d| !d.is_empty()).unwrap_or_else(|| c.name.rsplit('/').next().unwrap_or(""));
+                match name.or_else(|| skill::valid_name(base).then(|| base.to_string())) {
+                    Some(n) => n,
+                    None => {
+                        eprintln!("warning: {}: skipping {md}: no valid skill name ([a-z0-9][a-z0-9-]*)", c.name);
+                        continue;
+                    }
+                }
+            } else {
+                name.ok_or_else(|| {
+                    Error::new(MANIFEST, format!("{} {}: {md} has no frontmatter name matching [a-z0-9][a-z0-9-]*", c.name, c.version))
+                })?
+            };
+            found.push((name, dir));
         }
         if let Some(sel) = &req.skills {
             for s in sel {
-                if !skills.iter().any(|k| &k.name == s) {
-                    let have: Vec<&str> = skills.iter().map(|k| k.name.as_str()).collect();
+                if !found.iter().any(|(n, _)| n == s) {
+                    let have: Vec<&str> = found.iter().map(|(n, _)| n.as_str()).collect();
                     bail!(MANIFEST, "{}: no skill {s:?} in {} (it has: {})", req.name, c.version, have.join(", "));
                 }
             }
-            skills.retain(|k| sel.contains(&k.name));
+            found.retain(|(n, _)| sel.contains(n));
+        }
+        if found.is_empty() {
+            bail!(MANIFEST, "{} {}: no skills found", c.name, c.version);
+        }
+        let mut skills: Vec<LockedSkill> = Vec::new();
+        for (name, dir) in found {
+            if let Some(other) = skills.iter().find(|s| s.name == name) {
+                bail!(MANIFEST, "{}: skill name {name:?} appears twice in the package ({} and {dir})", c.name, other.path);
+            }
+            let tree_sha256 = skill::tree_hash(&f.skill_files(&c.name, &name, &dir)?);
+            skills.push(LockedSkill { name, path: dir, tree_sha256 });
         }
         skills.sort_by(|a, b| a.name.cmp(&b.name));
         prepared.insert(c.name.clone(), f);
@@ -311,9 +336,7 @@ fn reconcile(m: &Manifest, lock: &Lock) -> (Vec<SkillReq>, Vec<String>, Vec<Stri
             Some(p) if p.constraint != req.constraint => {
                 Some(format!("constraint changed from {:?} to {:?}", p.constraint, req.constraint))
             }
-            Some(p) if req.repository.as_ref().and_then(|r| m.repository(r)).is_some_and(|r| r.url != p.repository) => {
-                Some("repository changed".to_string())
-            }
+            Some(p) if source_changed(m, req, p) => Some("repository changed".to_string()),
             // ponytail: removing `skills = [...]` does not re-resolve to all skills; run `update` for that.
             Some(p)
                 if req.skills.as_ref().is_some_and(|sel| {
@@ -340,6 +363,14 @@ fn reconcile(m: &Manifest, lock: &Lock) -> (Vec<SkillReq>, Vec<String>, Vec<Stri
     (needs, stale, why)
 }
 
+fn source_changed(m: &Manifest, req: &SkillReq, p: &Package) -> bool {
+    match (req.github, &req.repository) {
+        (Some(_), _) => p.repository != github::repository(&req.name).url,
+        (None, Some(r)) => m.repository(r).is_some_and(|r| r.url != p.repository),
+        (None, None) => github::is_github(&p.repository),
+    }
+}
+
 pub fn init(ctx: &Ctx) -> Result<()> {
     let path = ctx.root.join(manifest::FILE);
     if path.exists() {
@@ -351,6 +382,12 @@ pub fn init(ctx: &Ctx) -> Result<()> {
 }
 
 pub fn add(ctx: &Ctx, spec: &str, repository: Option<String>) -> Result<()> {
+    if let Some(rest) = spec.strip_prefix("github:") {
+        if repository.is_some() {
+            bail!(MANIFEST, "--repository does not apply to github: sources");
+        }
+        return add_github(ctx, rest);
+    }
     let (name, constraint) = match spec.split_once('@') {
         Some((n, c)) => (n.to_string(), Some(c.to_string())),
         None => (spec.to_string(), None),
@@ -372,6 +409,9 @@ pub fn add(ctx: &Ctx, spec: &str, repository: Option<String>) -> Result<()> {
         }
     }
     let existing = m.skill(&name).cloned();
+    if existing.as_ref().is_some_and(|e| e.github.is_some()) && repository.is_none() {
+        return add_github(ctx, spec);
+    }
     let repository = repository.or_else(|| existing.as_ref().and_then(|e| e.repository.clone()));
 
     let reg = Registry::new(ctx.http()?);
@@ -380,17 +420,79 @@ pub fn add(ctx: &Ctx, spec: &str, repository: Option<String>) -> Result<()> {
     let constraint = constraint.unwrap_or_else(|| {
         if m.policy.allow_ranges { c.parsed.major_minor() } else { c.version.trim_start_matches(['v', 'V']).to_string() }
     });
-    let req = SkillReq { name, constraint, repository, skills: existing.and_then(|e| e.skills) };
+    let req = SkillReq { name, constraint, repository, skills: existing.and_then(|e| e.skills), github: None };
+    finish_add(ctx, existed, &m, &req, &repo, &c)
+}
+
+/// `owner/repo[/skill][@constraint-or-ref]`, the form skills.sh shows as `owner/repo/skill`.
+fn add_github(ctx: &Ctx, spec: &str) -> Result<()> {
+    let (path, at) = match spec.split_once('@') {
+        Some((p, a)) => (p, Some(a.to_string())),
+        None => (spec, None),
+    };
+    let mut parts = path.splitn(3, '/');
+    let name = format!("{}/{}", parts.next().unwrap_or(""), parts.next().unwrap_or("")).to_lowercase();
+    if !manifest::valid_package_name(&name) {
+        bail!(MANIFEST, "{spec:?}: expected github:owner/repo[/skill][@version-or-ref]");
+    }
+    let skill = parts.next().map(String::from);
+    if let Some(s) = &skill
+        && !skill::valid_name(s)
+    {
+        bail!(MANIFEST, "{s:?} is not a valid skill name ([a-z0-9][a-z0-9-]*)");
+    }
+    let existed = ctx.root.join(manifest::FILE).exists();
+    let m = ctx.manifest_or_default()?;
+    let existing = m.skill(&name).filter(|e| e.github.is_some()).cloned();
+    let skills = match (skill, existing.as_ref().map(|e| e.skills.clone())) {
+        (None, have) => have.flatten(),
+        // Already installs every skill of the repository.
+        (Some(_), Some(None)) => None,
+        (Some(s), Some(Some(mut have))) => {
+            if !have.contains(&s) {
+                have.push(s);
+            }
+            Some(have)
+        }
+        (Some(s), None) => Some(vec![s]),
+    };
+    let (given, mode) = match (at, &existing) {
+        (Some(a), _) => {
+            let mode = if Constraint::parse(&a).is_ok() { GitHub::Tags } else { GitHub::Ref };
+            (Some(a), mode)
+        }
+        (None, Some(e)) => (Some(e.constraint.clone()), e.github.expect("filtered to GitHub entries")),
+        (None, None) if github::tags(ctx.http()?, &name)?.is_empty() => (None, GitHub::Ref),
+        (None, None) => (None, GitHub::Tags),
+    };
+    let any = if mode == GitHub::Tags { "*" } else { manifest::DEFAULT_REF };
+    let mut req = SkillReq { name, constraint: given.clone().unwrap_or_else(|| any.into()), repository: None, skills, github: Some(mode) };
+    if given.is_some() {
+        manifest::check_constraint(&req, &m.policy).map_err(|e| Error::new(MANIFEST, format!("{}: {e}", req.name)))?;
+    }
+    let c = github::resolve(ctx.http()?, &req, m.policy.min_release_age, Timestamp::now())?;
+    if given.is_none() {
+        req.constraint = match (mode, m.policy.allow_ranges) {
+            (GitHub::Tags, true) => c.parsed.major_minor(),
+            (GitHub::Tags, false) => c.version.trim_start_matches(['v', 'V']).to_string(),
+            (GitHub::Ref, true) => manifest::DEFAULT_REF.into(),
+            (GitHub::Ref, false) => c.dist.reference.clone().expect("GitHub candidates carry their sha"),
+        };
+    }
+    finish_add(ctx, existed, &m, &req, &github::repository(&req.name), &c)
+}
+
+fn finish_add(ctx: &Ctx, existed: bool, m: &Manifest, req: &SkillReq, repo: &Repository, c: &Candidate) -> Result<()> {
     let mut prepared = HashMap::new();
-    let pkg = ctx.lock_candidate(&req, &repo, &c, &mut prepared)?;
+    let pkg = ctx.lock_candidate(req, repo, c, &mut prepared)?;
     let mut lock = Lock::load(&ctx.root)?;
     lock.upsert(pkg);
-    ctx.preflight(&m, &lock)?;
+    ctx.preflight(m, &lock)?;
 
     if !existed {
         std::fs::write(ctx.root.join(manifest::FILE), manifest::TEMPLATE)?;
     }
-    manifest::write_skill(&ctx.root, &req)?;
+    manifest::write_skill(&ctx.root, req)?;
     lock.save(&ctx.root)?;
     println!("added {} = {:?} ({})", req.name, req.constraint, c.version);
     ctx.materialize(&Manifest::load(&ctx.root)?, &lock, prepared)
@@ -465,6 +567,13 @@ pub fn outdated(ctx: &Ctx) -> Result<()> {
     let now = Timestamp::now();
     let mut rows = vec![["package", "locked", "within constraint", "latest", "note"].map(String::from)];
     for req in &m.skills {
+        let locked = lock.get(&req.name).map_or("-".into(), |p| p.version.clone());
+        if req.github.is_some() {
+            let (within, latest) = github::newest(ctx.http()?, req)?;
+            let dash = |v: Option<String>| v.unwrap_or_else(|| "-".into());
+            rows.push([req.name.clone(), locked, dash(within), dash(latest), String::new()]);
+            continue;
+        }
         let (_, cands) = reg.find(&m.repositories, &req.name, req.repository.as_deref())?;
         let c = Constraint::parse(&req.constraint).map_err(|e| Error::new(MANIFEST, e))?;
         let within = registry::newest(&cands, Some(&c));
@@ -475,13 +584,7 @@ pub fn outdated(ctx: &Ctx) -> Result<()> {
             _ => String::new(),
         };
         let v = |c: Option<&Candidate>| c.map_or("-".to_string(), |c| c.version.clone());
-        rows.push([
-            req.name.clone(),
-            lock.get(&req.name).map_or("-".into(), |p| p.version.clone()),
-            v(within),
-            v(registry::newest(&cands, None)),
-            note,
-        ]);
+        rows.push([req.name.clone(), locked, v(within), v(registry::newest(&cands, None)), note]);
     }
     print_table(&rows);
     Ok(())

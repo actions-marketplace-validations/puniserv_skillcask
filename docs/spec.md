@@ -38,7 +38,7 @@ byte-identical skills to the ones committed in the lock, or a non-zero exit.
 ## Non-goals (v1)
 
 - Dependencies between skills (`require` in skill packages is ignored).
-- Installing from plain git repositories or URLs without a Composer repository.
+- Installing from plain git repositories or URLs other than GitHub (see D11).
 - Trust prompts: an entry in `skills.toml` is the decision.
 - Running any code from a package (scripts, hooks, plugins). Never, not only in v1.
 - GitLab Generic Package Registry archive layouts (`.skill` archives + `CATALOG.md`).
@@ -59,6 +59,7 @@ byte-identical skills to the ones committed in the lock, or a non-zero exit.
 | D8 | Authentication reads Composer's `auth.json` / `COMPOSER_AUTH`. | Existing GitLab and Private Packagist credentials, including CI job tokens, work as they are. |
 | D9 | Publishing supports both one-repo-per-skill (standard Composer) and monorepos (`skillcask publish` builds a static Composer repository). | Many skills live in monorepos; GitLab's Composer registry accepts one package per project. |
 | D10 | MIT OR Apache-2.0, no telemetry. | Usual Rust dual licence; nothing leaves the machine except registry requests. |
+| D11 | GitHub repositories are a second source (`github = true`), resolved through the GitHub REST API; the lock format is unchanged. | Most public skills (the ones skills.sh lists) live in GitHub repositories without Composer metadata. Pinning the commit sha plus both hashes keeps D6. skills.sh itself is not used: its API needs a Vercel OIDC token. |
 
 ## Project files
 
@@ -99,6 +100,10 @@ packagist = true           # false: drop the implicit Packagist repository
 - `skills = [...]` selects skills from a package that ships several; default: all.
 - `policy.allow-ranges = false` is for organisations whose standard forbids ranges even with a
   lock; `add` then writes the resolved exact version.
+- GitHub entries: `{ github = true, version = "^1.3" }` resolves over version tags;
+  `{ github = true, ref = "main" }` follows a branch, tag or commit; neither means the default
+  branch (`HEAD`). The key is `owner/repo`, lowercase. `repository` cannot be combined with
+  `github`. With `allow-ranges = false`, `ref` must be a full commit sha.
 
 ### `skills.lock`
 
@@ -159,11 +164,31 @@ is the frontmatter `name`; it must match `[a-z0-9][a-z0-9-]*` and is the directo
    match, the error names the newest version and when it becomes eligible.
 6. Pick the highest remaining version.
 
+### GitHub sources
+
+1. `version`: list tags (`GET /repos/{o}/{r}/tags`, up to 1,000), keep those that parse as
+   versions, apply the constraint. Release time is the tag's commit date, fetched newest first
+   until one passes the cooldown.
+2. `ref`: `GET /repos/{o}/{r}/commits/{ref}`. If that commit is newer than the cooldown and the
+   ref is not a sha, take the newest commit on the ref before the cutoff
+   (`commits?sha={ref}&until={cutoff}`) and say so.
+3. Lock: `repository` = `<api>/repos/{o}/{r}`, `dist.url` = `<api>/repos/{o}/{r}/zipball/{sha}`,
+   `reference` = the sha, `version` = the tag, or the first 12 characters of the sha for a ref.
+4. Skills: every `SKILL.md` in the archive that is not inside another skill. Name: frontmatter
+   `name` if valid, else the directory name (the repository name for a root `SKILL.md`); neither
+   valid skips it with a warning.
+
+Commit dates are set by the committer, so the cooldown is weaker than with registry release times;
+the pinned sha and hashes still make `install` reproduce exactly what was reviewed. GitHub
+zipballs are not guaranteed byte-stable; if GitHub regenerates one, `install` stops with a hash
+mismatch (exit 4) rather than installing unverified content.
+
 ## Commands
 
 | Command | Behaviour |
 |---|---|
 | `init` | Create `skills.toml` with defaults. |
+| `add github:<owner/repo>[/skill][@version-or-ref]` | GitHub entry; `/skill` adds to `skills = [...]`. `@x` is a version constraint when it parses as one, else a ref. Without `@`: version tags if the repository has any (`^<major.minor>`), else the default branch. |
 | `add <vendor/name>[@constraint] [--repository r]` | Resolve first (typo or no match leaves files untouched), write manifest and lock, install. No constraint: `^<major.minor>` of the resolved version, or exact with `allow-ranges = false`. |
 | `remove <vendor/name>…` | Drop from manifest and lock; remove installed directories, links and gitignore lines. |
 | `install [--frozen]` | Install exactly the lock: download dist, verify `dist-sha256`, unpack to a temp dir, verify every `tree-sha256`, move into place, link, rewrite the gitignore block. Entries in the manifest but not in the lock (or with a changed constraint) are resolved and locked; with `--frozen` (implied when `CI` is set) that is exit 1 instead. Already-installed skills whose tree hash matches are skipped. |
@@ -200,7 +225,9 @@ Exit codes: 0 ok; 1 manifest/lock/status problems or drift under `--frozen`; 2 a
 
 Sources, first match per host: `COMPOSER_AUTH` (JSON), `./auth.json`, `$COMPOSER_HOME/auth.json`
 (default `~/.composer/auth.json` or `~/.config/composer/auth.json`). Supported keys:
-`http-basic`, `bearer`, `gitlab-token`, `gitlab-oauth`. A GitLab CI job reads the registry with
+`http-basic`, `bearer`, `gitlab-token`, `gitlab-oauth`, `github-oauth` (a `github.com` token is
+also used for `api.github.com`). `GITHUB_TOKEN` or `GH_TOKEN` is the last fallback for the GitHub
+API host (`SKILLCASK_GITHUB_API`, default `https://api.github.com`). A GitLab CI job reads the registry with
 `http-basic` user `gitlab-ci-token`, password `$CI_JOB_TOKEN`. Tokens are never printed, including
 in `--verbose` URLs.
 

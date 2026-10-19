@@ -57,6 +57,10 @@ impl Auth {
                 Err(e) => return Err(e.into()),
             }
         }
+        let token = ["GITHUB_TOKEN", "GH_TOKEN"].iter().find_map(|k| std::env::var(k).ok().filter(|t| !t.is_empty()));
+        if let (Some(t), Some(host)) = (token, Url::parse(&crate::github::api()).ok().and_then(|u| u.host_str().map(String::from))) {
+            auth.0.push((host, Cred::Bearer(t)));
+        }
         Ok(auth)
     }
 
@@ -78,6 +82,14 @@ impl Auth {
         }
         for (host, c) in section("gitlab-oauth") {
             self.0.push((host.clone(), Cred::Bearer(str_or(c, "token").ok_or_else(bad)?)));
+        }
+        for (host, c) in section("github-oauth") {
+            let token = Cred::Bearer(c.as_str().ok_or_else(bad)?.into());
+            // Composer keys the token by github.com; the API that skillcask calls lives on api.github.com.
+            if host.eq_ignore_ascii_case("github.com") {
+                self.0.push(("api.github.com".into(), token.clone()));
+            }
+            self.0.push((host.clone(), token));
         }
         Ok(())
     }
@@ -180,7 +192,11 @@ impl Http {
                     cur = cur.join(loc).map_err(|e| Error::new(NETWORK, format!("{shown}: bad redirect: {e}")))?;
                 }
                 404 | 410 => return Ok(None),
-                401 | 403 => bail!(AUTH, "{shown}: HTTP {status}; check auth.json / COMPOSER_AUTH for {}", cur.host_str().unwrap_or("")),
+                401 | 403 => bail!(
+                    AUTH,
+                    "{shown}: HTTP {status}; check auth.json / COMPOSER_AUTH for {} (GitHub: GITHUB_TOKEN, also for the anonymous rate limit)",
+                    cur.host_str().unwrap_or("")
+                ),
                 _ => bail!(NETWORK, "{shown}: HTTP {status}"),
             }
         }
@@ -209,13 +225,14 @@ mod tests {
             "env",
         )
         .unwrap();
-        a.add(r#"{"http-basic":{"git.example.com":{"username":"other","password":"x"}},"gitlab-token":{"gl.example.com":{"username":"u","token":"pt"}},"gitlab-oauth":{"oa.example.com":"ot"},"bearer":{"repo.example.com":"b2"}}"#, "file").unwrap();
+        a.add(r#"{"http-basic":{"git.example.com":{"username":"other","password":"x"}},"gitlab-token":{"gl.example.com":{"username":"u","token":"pt"}},"gitlab-oauth":{"oa.example.com":"ot"},"bearer":{"repo.example.com":"b2"},"github-oauth":{"github.com":"gh"}}"#, "file").unwrap();
         let get = |u: &str| a.lookup(&Url::parse(u).unwrap()).cloned();
         assert_eq!(get("https://git.example.com/x"), Some(Cred::Basic("gitlab-ci-token".into(), "job".into())));
         assert_eq!(get("https://repo.example.com:8443/x"), Some(Cred::Bearer("b1".into())));
         assert_eq!(get("https://repo.example.com/x"), Some(Cred::Bearer("b2".into())));
         assert_eq!(get("https://gl.example.com/x"), Some(Cred::PrivateToken("pt".into())));
         assert_eq!(get("https://oa.example.com/x"), Some(Cred::Bearer("ot".into())));
+        assert_eq!(get("https://api.github.com/repos/a/b"), Some(Cred::Bearer("gh".into())));
         assert_eq!(get("https://none.example.com/x"), None);
         assert_eq!(Cred::Basic("a".into(), "b".into()).header().1, "Basic YTpi");
         assert!(a.add("not json", "x").is_err());

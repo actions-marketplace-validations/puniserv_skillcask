@@ -554,3 +554,96 @@ fn project_skills_in_dot_skills_are_linked_and_committable() {
     p.write(".skills/one/SKILL.md", &skill_md("one"));
     assert!(p.expect(&["install"], 1).contains("both a project skill"));
 }
+
+fn gh_commit(sha: &str, hours: i64) -> serde_json::Value {
+    json!({ "sha": sha, "commit": { "committer": { "date": ago(hours) } } })
+}
+
+fn with_github(mut p: Project, s: &Server) -> Project {
+    p.env.push(("SKILLCASK_GITHUB_API".into(), s.base.clone()));
+    p
+}
+
+#[test]
+fn github_branch_respects_cooldown_and_selects_skills() {
+    let s = Server::start();
+    let (old, new) = ("a".repeat(40), "b".repeat(40));
+    let zip = |v: &str| {
+        zipball(&[
+            ("README.md", "repo"),
+            ("skills/one/SKILL.md", &skill_md("one")),
+            ("skills/two/SKILL.md", &format!("---\nname: Two Display Name\n---\n{v}")),
+            ("skills/two/ref/x.md", "x"),
+        ])
+    };
+    s.put("/repos/acme/tools/tags", "[]");
+    s.put("/repos/acme/tools/commits/HEAD", gh_commit(&new, 1).to_string());
+    s.put("/repos/acme/tools/commits", json!([gh_commit(&old, 240)]).to_string());
+    s.put(&format!("/repos/acme/tools/zipball/{old}"), zip("old"));
+    s.put(&format!("/repos/acme/tools/zipball/{new}"), zip("new"));
+    let p = with_github(Project::new(&s), &s);
+    p.manifest(&s, "");
+
+    let out = p.ok(&["add", "github:Acme/tools/two"]);
+    assert!(out.contains("newer commits on \"HEAD\""), "{out}");
+    assert!(p.read("skills.toml").contains(r#""acme/tools" = { github = true, skills = ["two"] }"#), "{}", p.read("skills.toml"));
+    let lock = p.read("skills.lock");
+    assert!(lock.contains(&format!("zipball/{old}")) && lock.contains(&format!("version = \"{}\"", &old[..12])), "{lock}");
+    assert!(p.read(".agents/skills/two/SKILL.md").ends_with("old"), "display name falls back to the directory name");
+    assert!(p.exists(".agents/skills/two/ref/x.md") && !p.exists(".agents/skills/one") && !p.exists(".agents/skills/README.md"));
+
+    p.ok(&["add", "github:acme/tools/one"]);
+    assert!(p.read("skills.toml").contains(r#"skills = ["two", "one"]"#));
+    assert!(p.exists(".claude/skills/one/SKILL.md"));
+    p.ok(&["status"]);
+
+    let mut ci = with_github(clone_of(&p, &s), &s);
+    ci.env.push(("CI".into(), "true".into()));
+    ci.ok(&["install"]);
+    assert_eq!(store_hash(&ci, "two"), store_hash(&p, "two"));
+
+    p.write("skills.toml", &p.read("skills.toml").replace("github = true,", "github = true, ref = \"main\","));
+    assert!(p.expect(&["install", "--frozen"], 1).contains("constraint changed"));
+    s.put("/repos/acme/tools/commits/main", gh_commit(&new, 1).to_string());
+    p.write("skills.toml", &p.read("skills.toml").replace("packagist = false", "packagist = false\nmin-release-age = \"0\""));
+    p.ok(&["install"]);
+    assert!(p.read("skills.lock").contains(&format!("zipball/{new}")));
+    assert!(p.read(".agents/skills/two/SKILL.md").ends_with("new"));
+    assert!(p.ok(&["outdated"]).contains(&new[..12]));
+
+    p.write("skills.toml", &p.read("skills.toml").replace("min-release-age = \"0\"", "allow-ranges = false"));
+    assert!(p.expect(&["install"], 1).contains("full commit sha"));
+}
+
+#[test]
+fn github_tags_are_versions() {
+    let s = Server::start();
+    let (c1, c2) = ("1".repeat(40), "2".repeat(40));
+    s.put(
+        "/repos/acme/tagged/tags",
+        json!([
+            { "name": "v2.0.0", "commit": { "sha": c2 } },
+            { "name": "latest", "commit": { "sha": c2 } },
+            { "name": "v1.1.0", "commit": { "sha": c1 } },
+        ])
+        .to_string(),
+    );
+    s.put(&format!("/repos/acme/tagged/commits/{c2}"), gh_commit(&c2, 1).to_string());
+    s.put(&format!("/repos/acme/tagged/commits/{c1}"), gh_commit(&c1, 240).to_string());
+    s.put(&format!("/repos/acme/tagged/zipball/{c1}"), zipball(&[("SKILL.md", &skill_md("tagged"))]));
+    let p = with_github(Project::new(&s), &s);
+    p.manifest(&s, "");
+    p.ok(&["add", "github:acme/tagged"]);
+    assert!(p.read("skills.toml").contains(r#""acme/tagged" = { github = true, version = "^1.1" }"#), "{}", p.read("skills.toml"));
+    assert!(p.read("skills.lock").contains("version = \"v1.1.0\""));
+    assert_eq!(p.read(".agents/skills/tagged/SKILL.md"), skill_md("tagged"));
+    let out = p.ok(&["outdated"]);
+    assert!(out.contains("v1.1.0") && out.contains("v2.0.0"), "{out}");
+    assert!(p.expect(&["add", "github:acme/tagged@^2.0"], 1).contains("becomes eligible at"));
+
+    s.require_auth(Some("Bearer ght0ken"));
+    let mut c = with_github(clone_of(&p, &s), &s);
+    c.expect(&["install"], 2);
+    c.env.push(("GITHUB_TOKEN".into(), "ght0ken".into()));
+    c.ok(&["install"]);
+}
