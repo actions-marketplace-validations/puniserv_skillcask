@@ -352,11 +352,12 @@ jobs:
           pattern: artifacts-*
           path: npm/
           merge-multiple: true
+      # No registry-url: setup-node would then export a placeholder NODE_AUTH_TOKEN that npm sends
+      # instead of exchanging the OIDC token, and the publish fails with E404.
       - uses: actions/setup-node@v6
         with:
           node-version: '24.x'
-          registry-url: 'https://registry.npmjs.org'
-      - run: npm install -g npm@^11.5.1
+      - run: npm install -g npm@^11.5.1 && npm --version
       - run: |
           for release in $(echo "$PLAN" | jq --compact-output '.releases[] | select([.artifacts[] | endswith("-npm-package.tar.gz")] | any)'); do
             pkg=$(echo "$release" | jq '.artifacts[] | select(endswith("-npm-package.tar.gz"))' --raw-output)
