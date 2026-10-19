@@ -1,0 +1,31 @@
+[package]
+name = "skillcask"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "A lockfile-first package manager for AI agent skills (SKILL.md), backed by Composer repositories"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/puniserv/skillcask"
+homepage = "https://github.com/puniserv/skillcask"
+readme = "README.md"
+keywords = ["skills", "agents", "claude", "lockfile", "package-manager"]
+categories = ["command-line-utilities", "development-tools"]
+exclude = ["/.github", "/tests", "/docs"]
+
+[dependencies]
+base64 = "0.23.1"
+clap = { version = "4.6.7", features = ["derive"] }
+hex = "0.4.3"
+jiff = "0.2.38"
+serde_json = "1.0.154"
+sha1 = "0.11.0"
+sha2 = "0.11.1"
+tempfile = "3.27.0"
+toml_edit = "0.25.17"
+ureq = { version = "3.4.2", features = ["platform-verifier"] }
+url = "2.5.8"
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+rcgen = "0.14.10"
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
