@@ -1,6 +1,6 @@
 //! Safe zip extraction for installs and deterministic zips for `publish`.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::io::{Cursor, Read, Write};
 use std::path::Path;
 
@@ -30,6 +30,7 @@ impl Default for Limits {
 
 struct Entry {
     index: usize,
+    raw: String,
     parts: Vec<String>,
     dir: bool,
     link: bool,
@@ -39,6 +40,15 @@ struct Entry {
 pub struct Extracted {
     pub files: Vec<FileEntry>,
     pub links: Vec<Link>,
+    /// Not written: names some OS cannot hold or would fold into one. Fatal only to a skill
+    /// that contains one, so a stray file elsewhere in a repository does not block its skills.
+    pub skipped: Vec<Skipped>,
+}
+
+pub struct Skipped {
+    pub path: String,
+    /// The error a skill containing it fails with.
+    pub why: String,
 }
 
 /// A symlink in the archive. Never written as a link: when it points to a regular file in the
@@ -67,9 +77,6 @@ pub fn extract(zip: &[u8], dest: &Path, limits: &Limits) -> Result<Extracted> {
         if parts.iter().any(|p| p == "..") {
             bail!(IO, "archive: unsafe entry name {raw:?}");
         }
-        if let Some(p) = parts.iter().find(|p| !portable(p)) {
-            bail!(IO, "archive: {raw:?}: {p:?} is not a valid file name on every OS");
-        }
         let mode = f.unix_mode().unwrap_or(0);
         let kind = mode & S_IFMT;
         let dir = f.is_dir();
@@ -90,7 +97,7 @@ pub fn extract(zip: &[u8], dest: &Path, limits: &Limits) -> Result<Extracted> {
                 bail!(IO, "archive: unpacked size exceeds {} bytes", limits.unpacked);
             }
         }
-        entries.push(Entry { index, parts, dir, link, exec: mode & 0o111 != 0 });
+        entries.push(Entry { index, raw, parts, dir, link, exec: mode & 0o111 != 0 });
     }
 
     let top = entries.first().map(|e| e.parts[0].clone());
@@ -101,7 +108,13 @@ pub fn extract(zip: &[u8], dest: &Path, limits: &Limits) -> Result<Extracted> {
         }
         entries.retain(|e| !e.parts.is_empty());
     }
-    check_collisions(&entries)?;
+    let mut why: HashMap<usize, String> = HashMap::new();
+    for e in entries.iter().filter(|e| !e.dir) {
+        if let Some(p) = e.parts.iter().find(|p| !portable(p)) {
+            why.insert(e.index, format!("archive: {:?}: {p:?} is not a valid file name on every OS", e.raw));
+        }
+    }
+    why.extend(collisions(&entries, &why)?);
 
     let mut ancestors = BTreeSet::new();
     for e in entries.iter().filter(|e| !e.dir) {
@@ -113,6 +126,8 @@ pub fn extract(zip: &[u8], dest: &Path, limits: &Limits) -> Result<Extracted> {
         bail!(IO, "archive: empty directory {:?}", e.parts.join("/"));
     }
 
+    let (bad, entries): (Vec<&Entry>, Vec<&Entry>) = entries.iter().partition(|e| why.contains_key(&e.index));
+    let skipped = bad.iter().filter_map(|e| why.remove(&e.index).map(|why| Skipped { path: e.parts.join("/"), why })).collect();
     let mut out = Vec::new();
     let mut written = 0u64;
     for e in entries.iter().filter(|e| !e.dir && !e.link) {
@@ -163,7 +178,7 @@ pub fn extract(zip: &[u8], dest: &Path, limits: &Limits) -> Result<Extracted> {
     if on_disk != out.iter().map(|f| f.path.clone()).collect() {
         bail!(IO, "archive: the extracted files differ from the archive entries");
     }
-    Ok(Extracted { files: out, links })
+    Ok(Extracted { files: out, links, skipped })
 }
 
 fn charge(written: &mut u64, n: usize, limits: &Limits) -> Result<()> {
@@ -195,30 +210,41 @@ fn portable(name: &str) -> bool {
     !(reserved || name.ends_with(['.', ' ']) || name.contains(|c: char| c.is_control() || "<>:\"|?*\\".contains(c)))
 }
 
-/// Rejects two entries that are distinct here but one file on a case-insensitive or
-/// normalising file system (macOS, Windows), so an archive fails the same way on every OS.
-fn check_collisions(entries: &[Entry]) -> Result<()> {
+/// Entries (by archive index) distinct here but one file on a case-insensitive or normalising
+/// file system (macOS, Windows), so they are skipped the same way on every OS. `skip`: entries
+/// already skipped, which are never written and so collide with nothing.
+fn collisions(entries: &[Entry], skip: &HashMap<usize, String>) -> Result<HashMap<usize, String>> {
     let nfc = icu_normalizer::ComposingNormalizerBorrowed::new_nfc();
     // Upper then lower also folds letters whose lowercase alone stays distinct (`ſ`, `K`).
     let fold = |p: &String| nfc.normalize(&p.to_uppercase().to_lowercase()).into_owned();
-    let mut seen: HashMap<String, (String, bool)> = HashMap::new();
-    for e in entries.iter().filter(|e| !e.dir) {
-        let folded: Vec<String> = e.parts.iter().map(fold).collect();
+    let files: Vec<(&Entry, Vec<String>)> =
+        entries.iter().filter(|e| !e.dir && !skip.contains_key(&e.index)).map(|e| (e, e.parts.iter().map(fold).collect())).collect();
+    // The first spelling of each folded path prefix, and the error of the first entry spelling it
+    // otherwise: every entry of the group gets that one, the text a whole-archive check gave.
+    let mut first: HashMap<String, String> = HashMap::new();
+    let mut group: HashMap<String, String> = HashMap::new();
+    let mut seen = HashSet::new();
+    for (e, folded) in &files {
+        if !seen.insert(e.parts.join("/")) {
+            bail!(IO, "archive: duplicate entry {:?}", e.parts.join("/"));
+        }
         for n in 1..=e.parts.len() {
-            let (path, file) = (e.parts[..n].join("/"), n == e.parts.len());
-            match seen.get(&folded[..n].join("/")) {
-                Some((other, _)) if *other != path => {
-                    bail!(IO, "archive: {:?} and {other:?} are one name on case-insensitive file systems", e.parts.join("/"))
-                }
-                Some((_, true)) if file => bail!(IO, "archive: duplicate entry {path:?}"),
-                Some(_) => {}
-                None => {
-                    seen.insert(folded[..n].join("/"), (path, file));
-                }
+            let key = folded[..n].join("/");
+            let other = first.entry(key.clone()).or_insert_with(|| e.parts[..n].join("/"));
+            if *other != e.parts[..n].join("/") {
+                let msg = format!("archive: {:?} and {other:?} are one name on case-insensitive file systems", e.parts.join("/"));
+                group.entry(key).or_insert(msg);
+                break;
             }
         }
     }
-    Ok(())
+    let mut out = HashMap::new();
+    for (e, folded) in &files {
+        if let Some(msg) = (1..=e.parts.len()).find_map(|n| group.get(&folded[..n].join("/"))) {
+            out.insert(e.index, msg.clone());
+        }
+    }
+    Ok(out)
 }
 
 /// Resolves a relative link target against the link's directory; `None` if it leaves the archive.
@@ -350,11 +376,18 @@ mod tests {
         assert!(try_extract(&[Item::File("a", 0o644, b"x"), Item::File("./a", 0o644, b"y")], Limits::default()).is_err());
     }
 
-    fn err(items: &[Item]) -> String {
-        match try_extract(items, Limits::default()) {
-            Ok(_) => panic!("accepted"),
-            Err(e) => e.msg,
-        }
+    /// The skipped entries as (path, why); checks they are not on disk and the rest is.
+    fn skipped(items: &[Item]) -> Vec<(String, String)> {
+        let dir = tempfile::tempdir().unwrap();
+        let x = extract(&build(items), dir.path(), &Limits::default()).unwrap();
+        let on_disk: Vec<String> = scan_dir(dir.path()).unwrap().into_iter().map(|f| f.path).collect();
+        assert_eq!(on_disk.len(), x.files.len());
+        assert!(x.skipped.iter().all(|s| !on_disk.contains(&s.path)));
+        x.skipped.into_iter().map(|s| (s.path, s.why)).collect()
+    }
+
+    fn paths(skipped: &[(String, String)]) -> Vec<&str> {
+        skipped.iter().map(|(p, _)| p.as_str()).collect()
     }
 
     /// Patches every occurrence (`all`) or only the first one (the local header) of `from`.
@@ -386,27 +419,40 @@ mod tests {
     }
 
     #[test]
-    fn rejects_names_that_fold_together() {
-        let e = err(&[Item::File("skills/a/SKILL.md", 0o644, b"s"), Item::File("Skills/a/evil.sh", 0o755, b"x")]);
-        assert!(e.contains("\"Skills/a/evil.sh\" and \"skills\""), "{e}");
-        err(&[Item::File("caf\u{e9}/SKILL.md", 0o644, b"s"), Item::File("cafe\u{301}/x", 0o644, b"x")]);
-        err(&[Item::File("a/SKILL.md", 0o644, b"s"), Item::File("A/SKILL.md", 0o644, b"x")]);
-        err(&[Item::File("a/x", 0o644, b"s"), Item::File("a/x.", 0o644, b"x")]);
-        err(&[Item::File("a/x", 0o644, b"s"), Item::Link("a/X", "x")]);
+    fn skips_names_that_fold_together() {
+        let s = skipped(&[Item::File("skills/a/SKILL.md", 0o644, b"s"), Item::File("Skills/a/evil.sh", 0o755, b"x")]);
+        assert_eq!(paths(&s), ["skills/a/SKILL.md", "Skills/a/evil.sh"]);
+        assert!(s[1].1.contains("\"Skills/a/evil.sh\" and \"skills\" are one name"), "{s:?}");
+        assert_eq!(skipped(&[Item::File("caf\u{e9}/SKILL.md", 0o644, b"s"), Item::File("cafe\u{301}/x", 0o644, b"x")]).len(), 2);
+        assert_eq!(skipped(&[Item::File("a/SKILL.md", 0o644, b"s"), Item::File("A/SKILL.md", 0o644, b"x")]).len(), 2);
+        assert_eq!(
+            paths(&skipped(&[Item::File("a/x", 0o644, b"s"), Item::File("a/x.", 0o644, b"x")])),
+            ["x."],
+            "the single top dir is stripped"
+        );
+        assert_eq!(skipped(&[Item::File("a/x", 0o644, b"s"), Item::Link("a/X", "x")]).len(), 2);
+        let s = skipped(&[
+            Item::File("src/README.md", 0o644, b"1"),
+            Item::File("src/readme.md", 0o644, b"2"),
+            Item::File("src/x", 0o644, b"3"),
+            Item::File("SKILL.md", 0o644, b"4"),
+        ]);
+        assert_eq!(paths(&s), ["src/README.md", "src/readme.md"], "only the colliding entries");
         let ok = [Item::File("a/b", 0o644, b"1"), Item::File("a/c", 0o644, b"2"), Item::File("caf\u{e9}", 0o644, b"3")];
         assert_eq!(try_extract(&ok, Limits::default()).unwrap().len(), 3);
     }
 
     #[test]
-    fn rejects_names_windows_cannot_hold() {
+    fn skips_names_windows_cannot_hold() {
         for name in
             ["CON", "con.txt", "a/Nul", "LPT1.md", "com9", "aux.tar.gz", "x ", "x.", "a<b", "a>b", "a|b", "a?b", "a*b", "a\"b", "a\tb"]
         {
-            let e = err(&[Item::File("ok", 0o644, b"1"), Item::File(name, 0o644, b"x")]);
-            assert!(e.contains(&format!("{name:?}")), "{name:?}: {e}");
+            let s = skipped(&[Item::File("ok", 0o644, b"1"), Item::File(name, 0o644, b"x")]);
+            assert_eq!(paths(&s), [name]);
+            assert!(s[0].1.contains(&format!("{name:?}")), "{name:?}: {s:?}");
         }
-        let e = err(&[Item::File("ok", 0o644, b"1"), Item::File("\x1b[31mred", 0o644, b"x")]);
-        assert!(!e.contains('\x1b'), "{e}");
+        let s = skipped(&[Item::File("ok", 0o644, b"1"), Item::File("\x1b[31mred", 0o644, b"x")]);
+        assert!(!s[0].1.contains('\x1b'), "{s:?}");
         let ok = [Item::File("console.md", 0o644, b"1"), Item::File("com10", 0o644, b"2"), Item::File("a.b/c", 0o644, b"3")];
         assert!(try_extract(&ok, Limits::default()).is_ok());
     }

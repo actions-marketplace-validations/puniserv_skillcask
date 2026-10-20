@@ -33,10 +33,15 @@ struct Fetched {
     dir: tempfile::TempDir,
     entries: Vec<FileEntry>,
     links: Vec<archive::Link>,
+    skipped: Vec<archive::Skipped>,
 }
 
 impl Fetched {
     fn skill_files(&self, package: &str, skill: &str, dir: &str) -> Result<Vec<FileEntry>> {
+        let prefix = if dir.is_empty() { String::new() } else { format!("{}/", dir.trim_end_matches('/')) };
+        if let Some(x) = self.skipped.iter().find(|x| x.path.starts_with(&prefix)) {
+            bail!(crate::error::IO, "{package}: {}", x.why);
+        }
         if let Some(l) = archive::bad_link_in(&self.links, dir) {
             bail!(
                 crate::error::IO,
@@ -102,7 +107,7 @@ impl Ctx {
         }
         let dir = project::temp_dir(&self.s)?;
         let x = archive::extract(&bytes, dir.path(), &self.limits).ctx(name)?;
-        Ok((sha, Fetched { dir, entries: x.files, links: x.links }))
+        Ok((sha, Fetched { dir, entries: x.files, links: x.links, skipped: x.skipped }))
     }
 
     /// `locked`: the entry's lock entry before this command, if any.
@@ -182,8 +187,10 @@ impl Ctx {
             } else {
                 (p.to_string(), format!("{p}/{}", skill::SKILL_MD))
             };
-            let text = std::fs::read_to_string(f.dir.path().join(&md))
-                .map_err(|_| Error::new(MANIFEST, format!("{} {}: {md} is missing from the package", c.name, c.version)))?;
+            let text = std::fs::read_to_string(f.dir.path().join(&md)).map_err(|_| match f.skipped.iter().find(|x| x.path == md) {
+                Some(x) => Error::new(crate::error::IO, format!("{}: {}", c.name, x.why)),
+                None => Error::new(MANIFEST, format!("{} {}: {md} is missing from the package", c.name, c.version)),
+            })?;
             let name = skill::frontmatter(&text).remove("name").filter(|n| skill::valid_name(n));
             // Repositories written for other tools often use a display name; their directory is the id.
             let name = if discovered {

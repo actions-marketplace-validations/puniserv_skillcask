@@ -1082,3 +1082,35 @@ fn rename_of_a_skill_without_a_name_line() {
     assert!(!p.exists(".agents/skills/plain"));
     p.ok(&["status"]);
 }
+
+#[test]
+fn bad_names_outside_the_selected_skill_are_skipped() {
+    let s = Server::start();
+    let sha = "a".repeat(40);
+    let serve = |extra: &[(&str, &str)]| {
+        let mut files = vec![("skills/two/SKILL.md", skill_md("two")), ("skills/two/ref/x.md", "x".into())];
+        files.extend(extra.iter().map(|(p, c)| (*p, c.to_string())));
+        let files: Vec<(&str, &str)> = files.iter().map(|(p, c)| (*p, c.as_str())).collect();
+        s.put(&format!("/repos/acme/tools/zipball/{sha}"), zipball(&files));
+    };
+    s.put("/repos/acme/tools/tags", "[]");
+    s.put("/repos/acme/tools/commits/HEAD", gh_commit(&sha, 240).to_string());
+    serve(&[("docs/aux.md", "a"), ("src/README.md", "r"), ("src/readme.md", "r"), ("bad/AUX/SKILL.md", &skill_md("bad"))]);
+    let p = with_github(Project::new(&s), &s);
+    p.manifest(&s, "");
+    p.ok(&["add", "github:acme/tools/two"]);
+    assert!(p.exists(".agents/skills/two/ref/x.md") && p.exists(".claude/skills/two"));
+    assert!(!p.exists(".agents/skills/bad"), "a skipped SKILL.md is not discovered");
+
+    for (bad, err) in [
+        (("skills/two/aux.md", "a"), r#""acme-pkg-1234abc/skills/two/aux.md": "aux.md" is not a valid file name on every OS"#),
+        (("skills/two/ref/X.md", "x"), r#""skills/two/ref/X.md" and "skills/two/ref/x.md" are one name on case-insensitive file systems"#),
+    ] {
+        serve(&[bad]);
+        let q = with_github(Project::new(&s), &s);
+        q.manifest(&s, "");
+        let out = q.expect(&["add", "github:acme/tools/two"], 5);
+        assert!(out.contains(&format!("acme/tools: archive: {err}")), "{out}");
+        assert!(!q.exists("skills.lock"));
+    }
+}
