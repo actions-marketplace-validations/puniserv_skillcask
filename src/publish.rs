@@ -13,6 +13,9 @@ use crate::manifest::valid_package_name;
 use crate::skill::{FileEntry, SKILL_MD, frontmatter, tree_hash, valid_name};
 use crate::version::{Stability, Version};
 
+/// Tree hash of the published files, so a version stays verifiable without its zip.
+const TREE: &str = "ai-agent-skill-tree";
+
 pub struct PublishArgs {
     pub vendor: String,
     pub base_url: Option<String>,
@@ -140,24 +143,37 @@ pub fn publish(args: &PublishArgs) -> Result<()> {
         for f in versions {
             let shasum = hex::encode(Sha1::digest(&f.zip));
             let normalized = f.normalized.to_string();
-            let existing = meta.iter().find(|m| m.get("version_normalized").and_then(Value::as_str) == Some(normalized.as_str()));
+            let tree = tree_hash(&f.files);
+            let existing = meta.iter_mut().find(|m| m.get("version_normalized").and_then(Value::as_str) == Some(normalized.as_str()));
             let zip_path = out.join("dist").join(&package).join(format!("{}.zip", f.version));
-            let (state, zip) = match existing.map(|m| m["dist"]["shasum"].as_str().unwrap_or_default()) {
-                Some(s) if s == shasum => ("unchanged", f.zip),
-                Some(s) => match published_zip_with_tree(&zip_path, s, &f.files)? {
-                    Some(old) => ("unchanged", old),
-                    None => match zip_0_1_2(&zip_path, s, &f.dir) {
-                        Some(old) => ("unchanged", old),
-                        None => bail!(MANIFEST, "{package} {} is already published with different content; bump the version", f.version),
-                    },
-                },
+            let (state, zip) = match existing {
+                Some(m) => {
+                    let s = m["dist"]["shasum"].as_str().unwrap_or_default().to_string();
+                    let zip = if s == shasum {
+                        Some(f.zip)
+                    } else if let Some(old) = published_zip_with_tree(&zip_path, &s, &f.files)? {
+                        Some(old)
+                    } else if let Some(old) = zip_0_1_2(&zip_path, &s, &f.dir) {
+                        Some(old)
+                    } else if zip_path.symlink_metadata().is_err() && m["extra"][TREE].as_str() == Some(tree.as_str()) {
+                        // `dist/` is not kept (CI): the published zip stays where it was uploaded.
+                        None
+                    } else {
+                        bail!(MANIFEST, "{package} {} is already published with different content; bump the version", f.version)
+                    };
+                    // Versions published before the tree was recorded get it while their zip still matches.
+                    if let Some(extra) = m.get_mut("extra").and_then(Value::as_object_mut) {
+                        extra.entry(TREE).or_insert_with(|| tree.into());
+                    }
+                    ("unchanged", zip)
+                }
                 None => {
                     let mut m = json!({
                         "name": package,
                         "version": f.version,
                         "version_normalized": normalized,
                         "type": "ai-agent-skill",
-                        "extra": { "ai-agent-skill": SKILL_MD },
+                        "extra": { "ai-agent-skill": SKILL_MD, TREE: tree },
                         "dist": {
                             "type": "zip",
                             "url": dist_url.replace("{vendor}", vendor).replace("{name}", name).replace("{version}", &f.version),
@@ -174,10 +190,12 @@ pub fn publish(args: &PublishArgs) -> Result<()> {
                         m["description"] = d.into();
                     }
                     meta.push(m);
-                    ("published", f.zip)
+                    ("published", Some(f.zip))
                 }
             };
-            writes.push((zip_path, zip));
+            if let Some(zip) = zip {
+                writes.push((zip_path, zip));
+            }
             report.push(format!("{state} {package} {}", f.version));
         }
         let key = |m: &Value| m.get("version_normalized").and_then(Value::as_str).and_then(Version::parse);
@@ -383,6 +401,35 @@ mod tests {
         let before = snapshot(out.path());
         publish(&args(src.path(), out.path())).unwrap();
         assert_eq!(snapshot(out.path()), before);
+        skill(src.path(), "a", "alpha", "1.0.0", "changed");
+        assert!(publish(&args(src.path(), out.path())).unwrap_err().msg.contains("different content"));
+    }
+
+    #[test]
+    fn compares_the_recorded_tree_when_dist_is_gone() {
+        let src = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        skill(src.path(), "a", "alpha", "1.0.0", "a");
+        publish(&args(src.path(), out.path())).unwrap();
+        let p2 = out.path().join("p2/acme/alpha.json");
+        let mut meta: Value = serde_json::from_slice(&std::fs::read(&p2).unwrap()).unwrap();
+        let v = &mut meta["packages"]["acme/alpha"][0];
+        let tree = v["extra"][TREE].as_str().unwrap().to_string();
+        // Published before the tree was recorded: the first run with a matching zip backfills it.
+        v["extra"].as_object_mut().unwrap().remove(TREE);
+        std::fs::write(&p2, pretty(&meta)).unwrap();
+        publish(&args(src.path(), out.path())).unwrap();
+        let meta: Value = serde_json::from_slice(&std::fs::read(&p2).unwrap()).unwrap();
+        assert_eq!(meta["packages"]["acme/alpha"][0]["extra"][TREE], tree.as_str());
+
+        // CI without `dist/`, and a zip crate that now writes other bytes for the same tree.
+        let mut meta = meta;
+        meta["packages"]["acme/alpha"][0]["dist"]["shasum"] = "0".repeat(40).into();
+        std::fs::write(&p2, pretty(&meta)).unwrap();
+        std::fs::remove_dir_all(out.path().join("dist")).unwrap();
+        let before = snapshot(out.path());
+        publish(&args(src.path(), out.path())).unwrap();
+        assert_eq!(snapshot(out.path()), before, "no zip is written for a version published elsewhere");
         skill(src.path(), "a", "alpha", "1.0.0", "changed");
         assert!(publish(&args(src.path(), out.path())).unwrap_err().msg.contains("different content"));
     }

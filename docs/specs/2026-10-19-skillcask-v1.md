@@ -62,6 +62,7 @@ byte-identical skills to the ones committed in the lock, or a non-zero exit.
 | D11 | GitHub repositories are a second source (`github = true`), resolved through the GitHub REST API; the lock format is unchanged. | Most public skills (the ones skills.sh lists) live in GitHub repositories without Composer metadata. Pinning the commit sha plus both hashes keeps D6. skills.sh itself is not used: its API needs a Vercel OIDC token. |
 | D12 | Repositories may carry every package inline in `packages.json` (Composer v1/Satis format) instead of `metadata-url`; `publish --inline` writes it, `--dist-url` places the zips. | Private monorepos can then be hosted on GitLab with no new infrastructure: `packages.json` lives in git and is read through the raw files API, zips go to the Generic Package Registry, whose file names cannot contain `/`. One file stays small for a few hundred skills. |
 | D13 | `--global` manages personal skills: store `~/.agents/skills`, links in `~/.claude/skills` etc., manifest and lock in `~/.config/skillcask`; a skill name clash inside one scope is solved with `rename`, a clash across scopes is a warning. | Agents read personal skills from home and skills have no namespaces. The design is in `docs/specs/2026-10-20-global-and-aliases.md`. |
+| D14 | `publish` records the tree hash of each new version in `extra.ai-agent-skill-tree`; without the published zip in `--out`, a version whose `shasum` differs counts as unchanged when its tree matches, and no zip is written for it. | CI that does not keep `dist/` must not fail on every published version when a `zip` or deflate update changes the bytes of the same tree. Downloading every old zip first would cost a request per version on each run. |
 
 ## Project files
 
@@ -293,7 +294,9 @@ every `SKILL.md` with frontmatter `name` and `version`, and writes a static Comp
 - Zips are deterministic (sorted entries, fixed mtime, fixed permissions), so the same tree gives
   the same `shasum`, which `publish` writes into the metadata.
 - Versions are immutable: `--out` may hold a previous run; an existing version with a different
-  hash is an error, an identical one is kept.
+  hash is an error, an identical one is kept. Without its zip in `--out`, a version is identical
+  when its tree matches `extra.ai-agent-skill-tree` (D14); versions published by an older skillcask get
+  that key on the first run whose zip still matches.
 - `time` is the publish time of the version, set once, truncated to the second.
 - `--dist-url <template>` sets the zip URL of new versions with `{vendor}`, `{name}` and
   `{version}`; default `<base-url>/dist/{vendor}/{name}/{version}.zip`. Zips are written to
