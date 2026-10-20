@@ -478,24 +478,34 @@ pub fn write_block(s: &Scope, lines: &[String]) -> Result<bool> {
     Ok(true)
 }
 
+/// Git for the project's own repository: inherited GIT_DIR and the like would point it at another,
+/// and paths are literal, not globs.
+fn git(s: &Scope) -> Command {
+    let mut c = Command::new("git");
+    c.arg("-C").arg(&s.root).arg("--literal-pathspecs");
+    c.env_remove("GIT_DIR").env_remove("GIT_INDEX_FILE").env_remove("GIT_WORK_TREE");
+    c
+}
+
 /// Tracked paths among `paths` (relative, `/`-separated). Empty outside a git work tree.
 pub fn git_tracked(s: &Scope, paths: &[String]) -> Vec<String> {
     if s.global || paths.is_empty() {
         return Vec::new();
     }
-    let out = Command::new("git").arg("-C").arg(&s.root).args(["ls-files", "-z", "--"]).args(paths).output();
+    let out = git(s).args(["ls-files", "-z", "--"]).args(paths).output();
     match out {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).split('\0').filter(|s| !s.is_empty()).map(String::from).collect(),
         _ => Vec::new(),
     }
 }
 
-/// `git rm --cached`: drops paths from the index, never from the working tree.
+/// `git rm --cached`: drops paths from the index, never from the working tree. `-f` because
+/// staged changes would otherwise stop it; with `--cached` it still keeps the files.
 pub fn git_untrack(s: &Scope, paths: &[String]) -> Result<()> {
     if s.global || paths.is_empty() {
         return Ok(());
     }
-    let st = Command::new("git").arg("-C").arg(&s.root).args(["rm", "--cached", "-r", "-q", "--"]).args(paths).status()?;
+    let st = git(s).args(["rm", "--cached", "-f", "-r", "-q", "--"]).args(paths).status()?;
     if !st.success() {
         bail!(IO, "git rm --cached failed for {}", paths.join(", "));
     }

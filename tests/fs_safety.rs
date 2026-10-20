@@ -223,3 +223,16 @@ fn deleted_hand_written_skill_loses_its_links() {
     p.ok(&["install"]);
     assert!(!p.exists(".claude/skills/h") && !p.exists(".junie/skills/h"));
 }
+
+#[test]
+fn untracking_works_with_staged_changes() {
+    let s = Server::start();
+    let mut p = one(&s);
+    p.ok(&["install"]);
+    p.env.push(("GIT_DIR".into(), "/nonexistent".into()));
+    p.write(".agents/skills/one/SKILL.md", "staged");
+    git(p.path(), &["add", "-f", ".agents/skills/one/SKILL.md"]);
+    let out = p.ok(&["install"]);
+    assert!(out.contains("removed managed paths from the git index"), "{out}");
+    assert!(git(p.path(), &["ls-files"]).is_empty());
+}
