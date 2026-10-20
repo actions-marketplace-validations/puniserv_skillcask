@@ -81,8 +81,16 @@ fn enforced_config_beats_the_project_and_the_environment_beats_both() {
     let mut env = two_repos(&s, "allow-sources = [\"pub\"]");
     config(&env, &format!("[policy]\nallow-sources = [\"{}\"]\nenforce = [\"allow-sources\"]\n", s.url("/packages.json")));
     env.env.push(("SKILLCASK_ALLOW_SOURCES".into(), s.url("/pub/")));
-    env.ok(&["add", "acme/public"]);
+    let out = env.ok(&["add", "acme/public"]);
+    assert_eq!(out.matches("warning: SKILLCASK_ALLOW_SOURCES overrides policy.allow-sources").count(), 1, "{out}");
+    assert!(out.contains("enforced by") && out.contains("config.toml"), "{out}");
     assert!(env.ok(&["status"]).contains("(environment)"));
+
+    // The same value as the enforced one changes nothing, so it is not worth a warning.
+    let mut same = two_repos(&s, "");
+    config(&same, &format!("[policy]\nallow-sources = [\"{}\"]\nenforce = [\"allow-sources\"]\n", s.url("/packages.json")));
+    same.env.push(("SKILLCASK_ALLOW_SOURCES".into(), s.url("/packages.json")));
+    assert!(!same.ok(&["add", "acme/private"]).contains("warning: SKILLCASK_ALLOW_SOURCES"));
 }
 
 #[test]

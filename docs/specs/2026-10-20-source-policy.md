@@ -33,7 +33,9 @@ first layer that sets a key wins:
 2. User config `config.toml` in the config dir of D13 (`$SKILLCASK_HOME`,
    `$XDG_CONFIG_HOME/skillcask`, `~/.config/skillcask`), keys listed in `enforce`. A project that
    sets an enforced key to another value is exit 1 naming the key and the file, unless the
-   environment sets the key: then the project's value is unused.
+   environment sets the key: then the project's value is unused. An environment value that
+   differs from an enforced one wins, with one warning per run on stderr naming the variable,
+   both values and the file.
 3. `[policy]` of the project (or global) `skills.toml`.
 4. User config, keys not in `enforce`.
 5. Built-in defaults.

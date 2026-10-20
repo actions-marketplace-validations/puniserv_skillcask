@@ -25,7 +25,11 @@ impl std::fmt::Display for Value {
         match self {
             Value::Age(a) => write!(f, "\"{a:#}\""),
             Value::Bool(b) => write!(f, "{b}"),
-            Value::List(l) => write!(f, "[{}]", l.iter().map(|s| format!("{s:?}")).collect::<Vec<_>>().join(", ")),
+            Value::List(l) => {
+                // Shown in `status` and warnings; a URL prefix may carry a token.
+                let shown = |s: &String| url::Url::parse(s).map_or_else(|_| s.clone(), |u| crate::http::redact(&u));
+                write!(f, "[{}]", l.iter().map(|s| format!("{:?}", shown(s))).collect::<Vec<_>>().join(", "))
+            }
         }
     }
 }
@@ -167,11 +171,21 @@ fn read_config(path: &Path) -> Result<(Layer, String)> {
     Ok((layer(doc.get("policy").and_then(Item::as_table_like), &shown, true)?, shown))
 }
 
+/// Set once the environment-over-`enforce` warnings are printed: a run loads the manifest more than once.
+static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Merges the layers; a manifest value that differs from an enforced one is an error.
 pub fn resolve(project: &Layer, o: &Outer) -> Result<Effective> {
     let mut out = Effective::new();
+    let mut overrides = Vec::new();
     for k in KEYS {
         let enforced = o.config.enforce.contains(k).then(|| o.config.values.get(k)).flatten();
+        if let (Some(e), Some(v)) = (enforced, o.env.values.get(k))
+            && e != v
+        {
+            let var = format!("SKILLCASK_{}", k.to_uppercase().replace('-', "_"));
+            overrides.push(format!("warning: {var} overrides policy.{k} = {e} enforced by {}; using {v}", o.config_path));
+        }
         // With the key in the environment the project's value is unused, so it cannot clash.
         if let (Some(e), Some(p), None) = (enforced, project.values.get(k), o.env.values.get(k))
             && e != p
@@ -194,6 +208,11 @@ pub fn resolve(project: &Layer, o: &Outer) -> Result<Effective> {
         };
         if let Some((v, from)) = pick {
             out.insert(k, (v.clone(), from));
+        }
+    }
+    if !overrides.is_empty() && !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        for w in overrides {
+            eprintln!("{w}");
         }
     }
     Ok(out)
@@ -254,6 +273,14 @@ mod tests {
         std::fs::write(dir.path().join(CONFIG), "[repositories]\nx = 1\n").unwrap();
         assert!(read_config(&dir.path().join(CONFIG)).unwrap_err().msg.contains("only [policy]"));
         assert_eq!(read_config(&dir.path().join("missing.toml")).unwrap().0, Layer::default());
+    }
+
+    #[test]
+    fn shown_values_hide_credentials() {
+        let v = Value::List(vec!["github".into(), "https://user:s3cret@git.example.com/x?private_token=t0k".into()]);
+        let shown = v.to_string();
+        assert!(!shown.contains("s3cret") && !shown.contains("t0k") && !shown.contains("user"), "{shown}");
+        assert!(shown.contains("\"github\"") && shown.contains("git.example.com/x"), "{shown}");
     }
 
     #[test]

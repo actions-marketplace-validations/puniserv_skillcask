@@ -135,7 +135,8 @@ Policy can also come from `config.toml` next to the global manifest (`~/.config/
 from the environment. The first layer that sets a key wins:
 
 1. `SKILLCASK_ALLOW_SOURCES`, `SKILLCASK_MIN_RELEASE_AGE`, `SKILLCASK_ALLOW_RANGES`,
-   `SKILLCASK_PACKAGIST`, `SKILLCASK_GITHUB_REQUIRES`;
+   `SKILLCASK_PACKAGIST`, `SKILLCASK_GITHUB_REQUIRES` (overriding an enforced key prints a
+   warning);
 2. keys `config.toml` lists in `enforce`: a project that sets them otherwise fails;
 3. `[policy]` in `skills.toml`;
 4. the other keys of `config.toml`, as defaults.
