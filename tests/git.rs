@@ -155,6 +155,22 @@ fn allow_sources_applies_by_url_prefix_and_drift_fails_frozen() {
 }
 
 #[test]
+fn dot_segments_do_not_escape_an_enforced_prefix() {
+    let s = Server::start();
+    let r = repo();
+    commit(r.path(), &[("SKILL.md", &skill_md("tool"))], 300, Some("v1.0.0"));
+    served(&s, r.path());
+    let p = Project::new(&s);
+    p.config(&format!("[policy]\nallow-sources = [\"{}\"]\nenforce = [\"allow-sources\"]\n", s.url("/trusted/")));
+    manifest(&p, "", "");
+    // The request would go to /acme/skills.git, outside the prefix the string starts with.
+    let out = p.expect(&["add", &format!("git:{}", s.url("/trusted/../acme/skills.git"))], 1);
+    assert!(out.contains("not in policy.allow-sources"), "{out}");
+    assert!(s.log().is_empty(), "{:?}", s.log());
+    assert!(!p.exists("skills.lock"));
+}
+
+#[test]
 fn credentials_come_from_auth_json() {
     let s = Server::start();
     let r = repo();
