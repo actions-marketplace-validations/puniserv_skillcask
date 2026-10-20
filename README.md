@@ -229,9 +229,10 @@ what you picked.
   and paths that collide by case or Unicode form fail a skill that contains them, and are
   skipped outside the selected skills.
 - No package code runs, ever. No telemetry.
-- `min-release-age` for GitHub sources reads commit dates, which the committer sets. A
-  backdated commit passes the cooldown; reviewing what `add`/`update` change in `skills.lock` is
-  the real check there.
+- `min-release-age` for GitHub sources uses times GitHub sets: release publication for tags,
+  push times from the Activity API for branches. A tag without a release, or a ref GitHub lists no
+  pushes for, falls back to commit dates, which the committer sets; reviewing what `add`/`update`
+  change in `skills.lock` is the real check there.
 - Credentials come from Composer's `auth.json` / `COMPOSER_AUTH` (`http-basic`, `bearer`,
   `gitlab-token`, `gitlab-oauth`) and are never printed. In GitLab CI use `http-basic` with the
   user `gitlab-ci-token` and the password `$CI_JOB_TOKEN`.

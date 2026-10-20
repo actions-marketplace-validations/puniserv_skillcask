@@ -186,10 +186,15 @@ is the frontmatter `name`; it must match `[a-z0-9][a-z0-9-]*` and is the directo
 ### GitHub sources
 
 1. `version`: list tags (`GET /repos/{o}/{r}/tags`, up to 1,000), keep those that parse as
-   versions, apply the constraint. Release time is the tag's commit date, fetched newest first
-   until one passes the cooldown.
-2. `ref`: `GET /repos/{o}/{r}/commits/{ref}`. If that commit is newer than the cooldown and the
-   ref is not a sha, take the newest commit on the ref before the cutoff
+   versions, apply the constraint. Release time is the tag's commit date, or the publication
+   time of its GitHub release when that is later (`GET /repos/{o}/{r}/releases`, first 100),
+   fetched newest first until one passes the cooldown. Tags are read once per run.
+2. `ref`: `GET /repos/{o}/{r}/commits/{ref}`. For a branch (`HEAD` is the default branch), the
+   Activity API (`GET /repos/{o}/{r}/activity?ref={branch}`, first 100) gives push times: the
+   eligible commit is the head after the newest push before the cutoff, or the head before the
+   oldest listed push when all of them are newer and fewer than 100 are listed. A tag, or a
+   branch without listed activity, falls back to commit dates: if the commit is newer than the
+   cooldown and the ref is not a sha, take the newest commit on the ref before the cutoff
    (`commits?sha={ref}&until={cutoff}`) and say so.
 3. Lock: `repository` = `<api>/repos/{o}/{r}`, `dist.url` = `<api>/repos/{o}/{r}/zipball/{sha}`,
    `reference` = the sha, `version` = the tag, or the first 12 characters of the sha for a ref.
@@ -197,7 +202,8 @@ is the frontmatter `name`; it must match `[a-z0-9][a-z0-9-]*` and is the directo
    `name` if valid, else the directory name (the repository name for a root `SKILL.md`); neither
    valid skips it with a warning.
 
-Commit dates are set by the committer, so the cooldown is weaker than with registry release times;
+Commit dates are set by the committer, so where they are the only time (a tag without a release, a
+ref without listed pushes, a pinned sha) the cooldown is weaker than with registry release times;
 the pinned sha and hashes still make `install` reproduce exactly what was reviewed. GitHub
 zipballs are not guaranteed byte-stable; if GitHub regenerates one, `install` stops with a hash
 mismatch (exit 4) rather than installing unverified content.

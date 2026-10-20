@@ -15,6 +15,8 @@ use crate::version::{Constraint, Version};
 
 const API: &str = "https://api.github.com";
 const TAG_PAGES: usize = 10;
+/// Pushes read from the Activity API, one page.
+const ACTIVITY: usize = 100;
 
 /// `SKILLCASK_GITHUB_API` points at GitHub Enterprise (`https://ghe.example.com/api/v3`) or a test server.
 pub fn api() -> String {
@@ -64,8 +66,19 @@ fn candidate(name: &str, version: String, parsed: Version, sha: &str, time: Opti
     }
 }
 
-/// Tags that parse as versions, newest first, without release times.
+/// Tags that parse as versions, newest first, without release times. Read once per process:
+/// `add` asks before resolving, and the anonymous API allows 60 requests an hour.
 pub fn tags(http: &Http, name: &str) -> Result<Vec<Candidate>> {
+    static SEEN: std::sync::Mutex<Vec<(String, Vec<Candidate>)>> = std::sync::Mutex::new(Vec::new());
+    if let Some((_, c)) = SEEN.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(n, _)| n == name) {
+        return Ok(c.clone());
+    }
+    let out = read_tags(http, name)?;
+    SEEN.lock().unwrap_or_else(|e| e.into_inner()).push((name.to_string(), out.clone()));
+    Ok(out)
+}
+
+fn read_tags(http: &Http, name: &str) -> Result<Vec<Candidate>> {
     let mut out = Vec::new();
     let mut full = false;
     for page in 1..=TAG_PAGES {
@@ -92,6 +105,43 @@ pub fn tags(http: &Http, name: &str) -> Result<Vec<Candidate>> {
     Ok(out)
 }
 
+/// Publication times of releases by tag. Unlike commit dates, which the author sets, GitHub sets
+/// them, so a backdated commit cannot skip the cooldown. Missing endpoint: none.
+fn releases(http: &Http, name: &str) -> Result<Vec<(String, Timestamp)>> {
+    let url = format!("{}/releases?per_page=100", repository(name).url);
+    let list = http.get_json(&url)?.and_then(|v| v.as_array().cloned()).unwrap_or_default();
+    Ok(list
+        .iter()
+        .filter_map(|r| Some((r.get("tag_name")?.as_str()?.to_string(), r.get("published_at")?.as_str()?.parse().ok()?)))
+        .collect())
+}
+
+/// Pushes to branch `r`, newest first, as (before, after, time), with times GitHub sets. `None`
+/// when the API has nothing (no such endpoint, a tag, or no activity kept).
+fn pushes(http: &Http, name: &str, r: &str) -> Result<Option<Vec<(String, String, Timestamp)>>> {
+    // The API knows branches, not `HEAD`.
+    let branch = match r {
+        "HEAD" => match http.get_json(&repository(name).url)?.as_ref().and_then(|v| v.get("default_branch")?.as_str()) {
+            Some(b) => b.to_string(),
+            None => return Ok(None),
+        },
+        _ => r.to_string(),
+    };
+    let per_page = ACTIVITY.to_string();
+    let url =
+        url::Url::parse_with_params(&format!("{}/activity", repository(name).url), [("ref", branch.as_str()), ("per_page", &per_page)])
+            .map_err(|e| Error::new(MANIFEST, format!("GitHub: {name}: {e}")))?;
+    let list = http.get_json(url.as_str())?.and_then(|v| v.as_array().cloned()).unwrap_or_default();
+    let out: Vec<_> = list
+        .iter()
+        .filter_map(|a| {
+            let sha = |k: &str| a.get(k).and_then(Value::as_str).filter(|s| is_sha(s)).map(str::to_ascii_lowercase);
+            Some((sha("before")?, sha("after")?, a.get("timestamp")?.as_str()?.parse().ok()?))
+        })
+        .collect();
+    Ok((!out.is_empty()).then_some(out))
+}
+
 pub fn resolve(http: &Http, req: &SkillReq, min_age: SignedDuration, now: Timestamp) -> Result<Candidate> {
     let name = &req.name;
     let cutoff = now.checked_sub(min_age).unwrap_or(Timestamp::MIN);
@@ -104,8 +154,10 @@ pub fn resolve(http: &Http, req: &SkillReq, min_age: SignedDuration, now: Timest
             let c = Constraint::parse(&req.constraint).map_err(|e| Error::new(MANIFEST, format!("{name}: {e}")))?;
             // Release time is one request per tag: newest first, stop at the first one past the cooldown.
             // Older matching tags keep no time, but `select` never reaches them.
+            let published = releases(http, name)?;
             for x in cands.iter_mut().filter(|x| c.allows(&x.parsed)) {
                 let t = commit(http, name, x.dist.reference.as_deref().expect("set by candidate"))?.1;
+                let t = published.iter().find(|(tag, _)| *tag == x.version).map_or(t, |(_, p)| t.max(*p));
                 x.time = Some(t);
                 if t <= cutoff {
                     break;
@@ -116,7 +168,28 @@ pub fn resolve(http: &Http, req: &SkillReq, min_age: SignedDuration, now: Timest
         Some(GitHub::Ref) => {
             let r = &req.constraint;
             let (mut sha, mut time) = commit(http, name, r)?;
-            if time > cutoff {
+            let pushed = if is_sha(r) { None } else { pushes(http, name, r)? };
+            if let Some(list) = &pushed {
+                // The head when the cooldown began: after the newest push before it, or before the
+                // oldest push GitHub still lists. Commit dates play no part.
+                let eligible = list.iter().find(|p| p.2 <= cutoff).map(|p| (p.1.clone(), Some(p.2)));
+                let eligible = eligible.or_else(|| (list.len() < ACTIVITY).then(|| (list[list.len() - 1].0.clone(), None)));
+                let Some((at, pushed_at)) = eligible.filter(|(sha, _)| sha.bytes().any(|b| b != b'0')) else {
+                    let newest = list[0].2.checked_add(min_age).unwrap_or(Timestamp::MAX).round(jiff::Unit::Second).unwrap_or(list[0].2);
+                    bail!(
+                        MANIFEST,
+                        "{name}: every push to {r:?} is newer than policy.min-release-age ({min_age:#}); the newest becomes eligible at {newest}"
+                    );
+                };
+                if at != sha {
+                    let t = commit(http, name, &at)?.1;
+                    eprintln!("note: {name}: newer pushes to {r:?} are within policy.min-release-age; using {}", &at[..12]);
+                    (sha, time) = (at, t);
+                }
+                // Before the oldest listed push only the commit date is known, at most that push.
+                time = pushed_at.unwrap_or_else(|| time.min(list[list.len() - 1].2));
+            }
+            if time > cutoff && pushed.is_none() {
                 let eligible = time.checked_add(min_age).unwrap_or(Timestamp::MAX).round(jiff::Unit::Second).unwrap_or(time);
                 if is_sha(r) {
                     bail!(
