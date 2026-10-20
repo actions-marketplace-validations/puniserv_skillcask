@@ -296,18 +296,18 @@ pub fn parse_age(s: &str) -> Result<SignedDuration> {
     Ok(SignedDuration::from_secs(n * secs))
 }
 
-fn edit(root: &Path, f: impl FnOnce(&mut DocumentMut)) -> Result<()> {
+fn edit(root: &Path, global: bool, f: impl FnOnce(&mut DocumentMut)) -> Result<()> {
     let path = root.join(FILE);
     let text = std::fs::read_to_string(&path).ctx(FILE)?;
     let mut doc: DocumentMut = text.parse().map_err(bad)?;
     f(&mut doc);
-    parse(&doc.to_string(), false)?;
+    parse(&doc.to_string(), global)?;
     std::fs::write(&path, doc.to_string())?;
     Ok(())
 }
 
-pub fn write_skill(root: &Path, req: &SkillReq) -> Result<()> {
-    edit(root, |doc| {
+pub fn write_skill(root: &Path, global: bool, req: &SkillReq) -> Result<()> {
+    edit(root, global, |doc| {
         let skills = doc.entry("skills").or_insert(toml_edit::table());
         let item = if req.repository.is_none() && req.skills.is_none() && req.github.is_none() {
             toml_edit::value(req.constraint.as_str())
@@ -338,8 +338,8 @@ pub fn write_skill(root: &Path, req: &SkillReq) -> Result<()> {
     })
 }
 
-pub fn remove_skills(root: &Path, names: &[String]) -> Result<()> {
-    edit(root, |doc| {
+pub fn remove_skills(root: &Path, global: bool, names: &[String]) -> Result<()> {
+    edit(root, global, |doc| {
         if let Some(t) = doc.get_mut("skills").and_then(Item::as_table_like_mut) {
             for n in names {
                 t.remove(n);
@@ -415,7 +415,7 @@ min-release-age = "12h"
         std::fs::write(dir.path().join(FILE), TEMPLATE).unwrap();
         let req =
             SkillReq { name: "a/b".into(), constraint: "^1.0".into(), repository: None, skills: Some(vec!["x".into()]), github: None };
-        write_skill(dir.path(), &req).unwrap();
+        write_skill(dir.path(), false, &req).unwrap();
         let text = std::fs::read_to_string(dir.path().join(FILE)).unwrap();
         assert!(text.contains("# skillcask manifest"));
         assert_eq!(parse(&text, false).unwrap().skills, std::slice::from_ref(&req));
@@ -425,12 +425,12 @@ min-release-age = "12h"
             ("^1.3", GitHub::Tags, r#""a/b" = { github = true, version = "^1.3" }"#),
         ] {
             let gh = SkillReq { constraint: constraint.into(), skills: None, github: Some(github), ..req.clone() };
-            write_skill(dir.path(), &gh).unwrap();
+            write_skill(dir.path(), false, &gh).unwrap();
             let text = std::fs::read_to_string(dir.path().join(FILE)).unwrap();
             assert!(text.contains(line), "{text}");
             assert_eq!(parse(&text, false).unwrap().skills, [gh]);
         }
-        remove_skills(dir.path(), &["a/b".into()]).unwrap();
+        remove_skills(dir.path(), false, &["a/b".into()]).unwrap();
         assert!(parse(&std::fs::read_to_string(dir.path().join(FILE)).unwrap(), false).unwrap().skills.is_empty());
     }
 }

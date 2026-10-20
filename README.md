@@ -130,7 +130,8 @@ skillcask -g install --frozen    # e.g. from a dotfiles repository
   `~/.junie/skills` (`[agents] targets`, relative to home). Links are absolute, so a symlinked
   `~/.claude` works. `[agents] local` does not apply.
 - Personal skills you wrote by hand stay where they are and are not linked anywhere.
-- The list of managed paths is `~/.config/skillcask/installed`; nothing touches git.
+- The list of managed paths is `~/.agents/skills/.skillcask-installed`, local to the machine;
+  nothing touches git.
 
 ### Commands
 

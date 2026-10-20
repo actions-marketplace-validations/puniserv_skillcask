@@ -49,7 +49,11 @@ a global mode takes its own flag after the command name.
 | `skills.toml` | manifest, same format; created by the first `add -g` or by `init -g` |
 | `skills.lock` | lock, same format |
 | `auth.json` | read in place of the project's `./auth.json`; global Composer `auth.json` still applies |
-| `installed` | managed paths, one per line, the lines the project writes into its `.gitignore` block |
+
+The list of managed paths (the lines the project writes into its `.gitignore` block) is
+`~/.agents/skills/.skillcask-installed`, not a file in the config directory: that directory is
+meant to be synced through dotfiles, and a synced list would make `install -g` on another machine
+replace a hand-written `~/.agents/skills/<name>` that the first machine had installed.
 
 **Install root** is the home directory:
 
@@ -61,10 +65,10 @@ a global mode takes its own flag after the command name.
 
 | | project | global |
 |---|---|---|
-| managed list | `.gitignore` block | `<config>/installed` |
+| managed list | `.gitignore` block | `~/.agents/skills/.skillcask-installed` |
 | git index | managed paths untracked | not touched |
 | link targets | relative (`../../.agents/skills/x`) | absolute (`/home/u/.agents/skills/x`) |
-| link is OK when | its target equals the relative path | it resolves to the store directory (absolute or relative link) |
+| link is OK when | its target equals the relative path | it resolves to the store directory (absolute or relative link, or a target directory that is itself a symlink to the store) |
 | symlinked parents (`.claude -> dotfiles/claude`) | refused | allowed |
 | hand-written skills in the store | linked into every target | left alone, not linked |
 
@@ -78,7 +82,8 @@ A store directory in `~/.agents/skills` that skillcask does not manage and that 
 is a conflict (section B), as it is in a project.
 
 `find_root` is not used with `--global`; running skillcask without `--global` under the home
-directory never picks up the global manifest, because it is not named `~/skills.toml`.
+directory never picks up the global manifest, because it is not named `~/skills.toml`. Run inside
+the config directory itself, a project command stops with an error that points to `--global`.
 
 ## B. Install aliases
 
@@ -162,7 +167,7 @@ The Claude Code wording is used for `.claude/skills`, the generic one for every 
 
 Integration tests in `tests/cli.rs` run with `HOME` and `SKILLCASK_HOME` pointed at temp dirs:
 
-- `add -g`, `install -g --frozen`, `remove -g`: store, absolute links, `installed` file, no
+- `add -g`, `install -g --frozen`, `remove -g`: store, absolute links, `.skillcask-installed` file, no
   `.gitignore` written;
 - `~/.claude` as a symlink to another directory: links work;
 - a relative link from another tool pointing at the store counts as OK;

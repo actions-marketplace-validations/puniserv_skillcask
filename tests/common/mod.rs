@@ -208,12 +208,19 @@ pub struct Project {
     home: tempfile::TempDir,
     ca: PathBuf,
     pub env: Vec<(String, String)>,
+    /// Working directory in place of the project dir.
+    pub cwd: Option<PathBuf>,
 }
 
 impl Project {
     pub fn new(server: &Server) -> Project {
-        let p =
-            Project { dir: tempfile::tempdir().unwrap(), home: tempfile::tempdir().unwrap(), ca: server.ca_file.clone(), env: Vec::new() };
+        let p = Project {
+            dir: tempfile::tempdir().unwrap(),
+            home: tempfile::tempdir().unwrap(),
+            ca: server.ca_file.clone(),
+            env: Vec::new(),
+            cwd: None,
+        };
         git(p.path(), &["init", "-q"]);
         p
     }
@@ -273,7 +280,7 @@ impl Project {
     pub fn run(&self, args: &[&str]) -> Output {
         let mut c = Command::new(env!("CARGO_BIN_EXE_skillcask"));
         c.args(args)
-            .current_dir(self.path())
+            .current_dir(self.cwd.as_deref().unwrap_or(self.path()))
             .env("SKILLCASK_CA_FILE", &self.ca)
             .env("HOME", self.home.path())
             .env("USERPROFILE", self.home.path())

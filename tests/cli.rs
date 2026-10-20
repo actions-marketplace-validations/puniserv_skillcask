@@ -715,14 +715,16 @@ fn global_add_install_remove() {
     if cfg!(unix) {
         assert_eq!(std::fs::read_link(h.join(".claude/skills/one")).unwrap(), h.join(".agents/skills/one"));
     }
-    assert!(std::fs::read_to_string(cfg.join("installed")).unwrap().contains("/.claude/skills/one"));
+    assert!(std::fs::read_to_string(h.join(".agents/skills/.skillcask-installed")).unwrap().contains("/.claude/skills/one"));
+    assert!(!cfg.join("installed").exists());
     assert!(
         !h.join(".gitignore").exists() && !p.exists("skills.toml") && !p.exists(".agents"),
         "nothing written to the project or ~/.gitignore"
     );
     assert!(!h.join(".claude/skills/mine").exists(), "hand-written personal skills are not linked");
 
-    p.global(&["status"], 0);
+    let out = p.global(&["status"], 0);
+    assert!(out.lines().any(|l| l.starts_with("acme/one") && l.contains(" one ") && l.trim_end().ends_with("ok")), "{out}");
     p.global(&["doctor"], 0);
     std::fs::remove_dir_all(h.join(".agents/skills/one")).unwrap();
     let mut ci = p;
@@ -754,13 +756,12 @@ fn global_refuses_to_replace_foreign_symlinks() {
 
     std::fs::remove_file(&link).unwrap();
     p.global(&["add", "acme/one"], 0);
-    let installed = p.home().join(".config/skillcask/installed");
-    std::fs::remove_file(&installed).unwrap();
+    std::fs::remove_file(p.home().join(".agents/skills/.skillcask-installed")).unwrap();
     std::fs::remove_file(&link).unwrap();
     std::os::unix::fs::symlink(other.path(), &link).unwrap();
     let out = p.global(&["doctor"], 1);
-    assert!(out.contains(&format!("{}: stale managed block", installed.display())), "{out}");
-    assert!(out.contains(&format!("repairs links and {}", installed.display())), "{out}");
+    assert!(out.contains("~/.agents/skills/.skillcask-installed: stale managed block"), "{out}");
+    assert!(out.contains("repairs links and ~/.agents/skills/.skillcask-installed"), "{out}");
     let out = p.global(&["doctor", "--fix"], 1);
     assert!(out.contains("~/.claude/skills/one exists and was not created by skillcask; move it away"), "{out}");
     assert_eq!(std::fs::read_link(&link).unwrap(), other.path());
@@ -796,4 +797,133 @@ fn global_flag_rules() {
     custom.env.push(("SKILLCASK_HOME".into(), dir.path().display().to_string()));
     custom.global(&["init"], 0);
     assert!(dir.path().join("skills.toml").is_file());
+}
+
+#[test]
+fn global_synced_config_does_not_claim_hand_written_skills() {
+    let s = Server::start();
+    s.simple("acme/one", "1.0.0", "one");
+    let a = Project::new(&s);
+    a.global_manifest(&s, "");
+    a.global(&["add", "acme/one"], 0);
+
+    let b = Project::new(&s);
+    let (from, to) = (a.home().join(".config/skillcask"), b.home().join(".config/skillcask"));
+    std::fs::create_dir_all(&to).unwrap();
+    for e in std::fs::read_dir(&from).unwrap() {
+        let e = e.unwrap();
+        std::fs::copy(e.path(), to.join(e.file_name())).unwrap();
+    }
+    let mine = b.home().join(".agents/skills/one");
+    std::fs::create_dir_all(&mine).unwrap();
+    std::fs::write(mine.join("SKILL.md"), "mine").unwrap();
+    let out = b.global(&["install"], 1);
+    assert!(out.contains("~/.agents/skills/one exists and is not managed by skillcask"), "{out}");
+    assert_eq!(std::fs::read_to_string(mine.join("SKILL.md")).unwrap(), "mine");
+}
+
+#[cfg(unix)]
+#[test]
+fn global_target_dir_symlinked_to_the_store() {
+    let s = Server::start();
+    s.simple("acme/one", "1.0.0", "one");
+    let p = Project::new(&s);
+    p.global_manifest(&s, "");
+    let h = p.home().to_path_buf();
+    std::fs::create_dir_all(h.join(".agents/skills")).unwrap();
+    std::fs::create_dir_all(h.join(".claude")).unwrap();
+    std::os::unix::fs::symlink("../.agents/skills", h.join(".claude/skills")).unwrap();
+
+    p.global(&["add", "acme/one"], 0);
+    assert_eq!(std::fs::read_to_string(h.join(".claude/skills/one/SKILL.md")).unwrap(), skill_md("one"));
+    p.global(&["status"], 0);
+    p.global(&["doctor"], 0);
+    p.global(&["remove", "acme/one"], 0);
+    assert!(!h.join(".agents/skills/one").exists());
+    assert!(std::fs::symlink_metadata(h.join(".claude/skills")).unwrap().file_type().is_symlink());
+}
+
+#[test]
+fn global_targets_may_be_named_like_the_project_local_dir() {
+    let s = Server::start();
+    s.simple("acme/one", "1.0.0", "one");
+    let p = Project::new(&s);
+    p.global_manifest(&s, "");
+    let cfg = p.home().join(".config/skillcask/skills.toml");
+    let text = std::fs::read_to_string(&cfg).unwrap();
+    std::fs::write(&cfg, format!("{text}\n[agents]\ntargets = [\".skills\"]\n")).unwrap();
+    p.global(&["add", "acme/one"], 0);
+    assert!(p.home().join(".skills/one/SKILL.md").is_file());
+    p.global(&["remove", "acme/one"], 0);
+}
+
+#[test]
+fn global_init_names_the_config_path() {
+    let s = Server::start();
+    let p = Project::new(&s);
+    let path = p.home().join(".config/skillcask/skills.toml");
+    assert!(p.global(&["init"], 0).contains(&format!("created {}", path.display())));
+    assert!(p.global(&["init"], 1).contains(&format!("{} already exists", path.display())));
+    assert!(p.ok(&["init"]).contains("created skills.toml\n"));
+    assert!(p.expect(&["init"], 1).contains("error: skills.toml already exists\n"));
+}
+
+#[test]
+fn project_commands_do_not_treat_the_global_config_dir_as_a_project() {
+    let s = Server::start();
+    s.simple("acme/one", "1.0.0", "one");
+    let mut p = Project::new(&s);
+    p.global_manifest(&s, "\"acme/one\" = \"^1.0\"\n");
+    let cfg = p.home().join(".config/skillcask");
+    p.cwd = Some(cfg.clone());
+    let out = p.expect(&["install"], 1);
+    assert!(out.contains("--global"), "{out}");
+    assert!(!cfg.join(".agents").exists());
+}
+
+#[test]
+fn global_reads_auth_json_from_the_config_dir() {
+    let s = Server::start();
+    s.simple("acme/one", "1.0.0", "one");
+    s.require_auth(Some("Bearer t0ken"));
+    let p = Project::new(&s);
+    p.global_manifest(&s, "\"acme/one\" = \"^1.0\"\n");
+    p.global(&["install"], 2);
+    let host = s.base.trim_start_matches("https://").to_string();
+    p.write("auth.json", &json!({ "bearer": { host.clone(): "wrong" } }).to_string());
+    std::fs::write(p.home().join(".config/skillcask/auth.json"), json!({ "bearer": { host: "t0ken" } }).to_string()).unwrap();
+    p.global(&["install"], 0);
+}
+
+#[test]
+fn global_needs_a_home() {
+    let s = Server::start();
+    let mut p = Project::new(&s);
+    p.env.push(("HOME".into(), String::new()));
+    p.env.push(("USERPROFILE".into(), String::new()));
+    assert!(p.global(&["status"], 1).contains("--global needs HOME"));
+}
+
+#[test]
+fn global_uses_xdg_config_home() {
+    let s = Server::start();
+    s.simple("acme/one", "1.0.0", "one");
+    let mut p = Project::new(&s);
+    let xdg = tempfile::tempdir().unwrap();
+    p.env.push(("XDG_CONFIG_HOME".into(), xdg.path().display().to_string()));
+    p.global(&["init"], 0);
+    let cfg = xdg.path().join("skillcask/skills.toml");
+    std::fs::write(
+        &cfg,
+        format!("[repositories]\nfix = {{ type = \"composer\", url = \"{}\" }}\n[policy]\npackagist = false\n", s.url("/packages.json")),
+    )
+    .unwrap();
+    p.global(&["add", "acme/one"], 0);
+    assert!(std::fs::read_to_string(&cfg).unwrap().contains("\"acme/one\""));
+    assert!(xdg.path().join("skillcask/skills.lock").is_file());
+    assert!(!p.home().join(".config").exists());
+    assert!(p.home().join(".agents/skills/one/SKILL.md").is_file());
+    p.global(&["status"], 0);
+    p.global(&["remove", "acme/one"], 0);
+    assert!(!p.home().join(".agents/skills/one").exists());
 }

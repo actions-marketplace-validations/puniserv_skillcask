@@ -20,7 +20,12 @@ const MODES: &str = ".skillcask-modes";
 /// Nearest ancestor holding `skills.toml`, else the current directory.
 pub fn find_root() -> Result<PathBuf> {
     let cwd = std::env::current_dir()?;
-    Ok(cwd.ancestors().find(|d| d.join(crate::manifest::FILE).is_file()).unwrap_or(&cwd).to_path_buf())
+    let root = cwd.ancestors().find(|d| d.join(crate::manifest::FILE).is_file()).unwrap_or(&cwd);
+    let config = Scope::global().ok().and_then(|g| std::fs::canonicalize(g.config).ok());
+    if config.is_some() && std::fs::canonicalize(root).ok() == config {
+        bail!(MANIFEST, "{} is the global config directory; use --global", root.display());
+    }
+    Ok(root.to_path_buf())
 }
 
 pub fn store_dir(s: &Scope, name: &str) -> PathBuf {
@@ -140,9 +145,20 @@ pub enum LinkState {
     Foreign,
 }
 
+/// In home, `~/.claude/skills -> ~/.agents/skills` is common: the entry then is the store dir itself.
+fn is_store_itself(s: &Scope, at: &str, name: &str) -> bool {
+    let path = s.root.join(at).join(name);
+    s.global
+        && path.symlink_metadata().is_ok_and(|m| !m.file_type().is_symlink())
+        && matches!((std::fs::canonicalize(&path), std::fs::canonicalize(store_dir(s, name))), (Ok(a), Ok(b)) if a == b)
+}
+
 pub fn link_state(s: &Scope, at: &str, source: &str, name: &str) -> LinkState {
     let path = s.root.join(at).join(name);
     let Ok(meta) = path.symlink_metadata() else { return LinkState::Missing };
+    if at != STORE && is_store_itself(s, at, name) {
+        return LinkState::Ok;
+    }
     if meta.file_type().is_symlink() {
         let to_store = if s.global {
             matches!((std::fs::canonicalize(&path), std::fs::canonicalize(s.root.join(source).join(name))), (Ok(a), Ok(b)) if a == b)
@@ -174,8 +190,8 @@ fn force_copy() -> bool {
 pub fn link(s: &Scope, at: &str, source: &str, name: &str) -> Result<bool> {
     let path = s.root.join(at).join(name);
     match link_state(s, at, source, name) {
-        LinkState::Ok => return Ok(path.symlink_metadata().is_ok_and(|m| !m.file_type().is_symlink())),
-        LinkState::Foreign => bail!(MANIFEST, "{} exists and was not created by skillcask; move it away", rel(&s.root, &path)),
+        LinkState::Ok => return Ok(!is_store_itself(s, at, name) && path.symlink_metadata().is_ok_and(|m| !m.file_type().is_symlink())),
+        LinkState::Foreign => bail!(MANIFEST, "{} exists and was not created by skillcask; move it away", s.show(&format!("{at}/{name}"))),
         LinkState::Wrong => unlink(s, at, name)?,
         LinkState::Missing => {}
     }
@@ -243,6 +259,9 @@ fn symlink(target: &Path, at: &Path) -> std::io::Result<()> {
 pub fn unlink(s: &Scope, at: &str, name: &str) -> Result<()> {
     let path = s.root.join(at).join(name);
     let Ok(meta) = path.symlink_metadata() else { return Ok(()) };
+    if at != STORE && is_store_itself(s, at, name) {
+        return Ok(());
+    }
     if meta.file_type().is_symlink() {
         std::fs::remove_file(&path).or_else(|_| std::fs::remove_dir(&path))?;
     } else if meta.is_dir() && path.join(COPY_MARKER).is_file() {
@@ -302,8 +321,17 @@ struct Gitignore {
     block: Vec<String>,
 }
 
+const INSTALLED: &str = ".skillcask-installed";
+
+/// In global it sits next to the store, not in the config dir: that one may be synced between
+/// machines, and a synced list would claim hand-written skills on another one.
 fn ignore_file(s: &Scope) -> PathBuf {
-    if s.global { s.config.join("installed") } else { s.root.join(".gitignore") }
+    if s.global { s.root.join(STORE).join(INSTALLED) } else { s.root.join(".gitignore") }
+}
+
+/// The file holding the managed block, as messages name it.
+pub fn block_file(s: &Scope) -> String {
+    if s.global { s.show(&format!("{STORE}/{INSTALLED}")) } else { ".gitignore".into() }
 }
 
 fn read_gitignore(s: &Scope) -> Result<Gitignore> {
@@ -328,7 +356,7 @@ fn read_gitignore(s: &Scope) -> Result<Gitignore> {
     }
     // Without END every user line after BEGIN would count as managed and be dropped on rewrite.
     if inside {
-        bail!(MANIFEST, ".gitignore: the skillcask block has no end line {END:?}; restore it by hand");
+        bail!(MANIFEST, "{}: the skillcask block has no end line {END:?}; restore it by hand", block_file(s));
     }
     Ok(Gitignore { text, kept, at, block })
 }
@@ -378,7 +406,7 @@ pub fn write_block(s: &Scope, lines: &[String]) -> Result<bool> {
         return Ok(false);
     }
     if s.global {
-        std::fs::create_dir_all(&s.config)?;
+        std::fs::create_dir_all(s.root.join(STORE))?;
     }
     std::fs::write(&path, new)?;
     Ok(true)
@@ -493,15 +521,39 @@ mod tests {
         assert_eq!(link_state(&s, ".junie/skills", STORE, "x"), LinkState::Ok);
     }
 
+    #[cfg(unix)]
     #[test]
-    fn global_block_lives_in_the_config_dir() {
+    fn global_target_symlinked_to_the_store_is_the_store() {
+        let home = tempfile::tempdir().unwrap();
+        let s = global_scope(home.path());
+        std::fs::create_dir_all(store_dir(&s, "x")).unwrap();
+        std::fs::write(store_dir(&s, "x").join(SKILL_MD), "s").unwrap();
+        std::fs::create_dir_all(home.path().join(".claude")).unwrap();
+        std::os::unix::fs::symlink("../.agents/skills", home.path().join(".claude/skills")).unwrap();
+        assert_eq!(link_state(&s, ".claude/skills", STORE, "x"), LinkState::Ok);
+        assert!(!link(&s, ".claude/skills", STORE, "x").unwrap());
+        unlink(&s, ".claude/skills", "x").unwrap();
+        assert!(store_dir(&s, "x").join(SKILL_MD).is_file());
+        // A package may ship the copy marker; the store must still not be taken for a copy.
+        std::fs::write(store_dir(&s, "x").join(COPY_MARKER), "").unwrap();
+        unlink(&s, ".claude/skills", "x").unwrap();
+        assert!(store_dir(&s, "x").join(SKILL_MD).is_file());
+    }
+
+    #[test]
+    fn global_block_lives_in_the_store() {
         let home = tempfile::tempdir().unwrap();
         let s = global_scope(home.path());
         let managed: BTreeSet<String> = ["a".to_string()].into();
         assert!(write_block(&s, &block_lines(&managed, &[".claude/skills".into()], &BTreeSet::new())).unwrap());
         assert!(!home.path().join(".gitignore").exists());
-        assert!(std::fs::read_to_string(home.path().join(".config/skillcask/installed")).unwrap().contains("/.agents/skills/a/"));
+        assert!(!s.config.exists(), "the config dir may be synced between machines; the managed list is machine-local");
+        assert!(std::fs::read_to_string(home.path().join(".agents/skills/.skillcask-installed")).unwrap().contains("/.agents/skills/a/"));
         assert_eq!(block_managed(&s).unwrap(), managed);
+        assert_eq!(store_names(&s).unwrap(), Vec::<String>::new());
+        std::fs::write(ignore_file(&s), format!("{BEGIN}\n/.agents/skills/a/\n")).unwrap();
+        let e = block_managed(&s).unwrap_err().to_string();
+        assert!(e.contains("~/.agents/skills/.skillcask-installed: the skillcask block has no end line"), "{e}");
         assert!(git_tracked(&s, &["x".into()]).is_empty());
         std::fs::create_dir_all(home.path().join("p")).unwrap();
         std::fs::write(home.path().join("p/SKILL.md"), "").unwrap();

@@ -405,12 +405,13 @@ fn source_changed(m: &Manifest, req: &SkillReq, p: &Package) -> bool {
 
 pub fn init(ctx: &Ctx) -> Result<()> {
     let path = ctx.s.config.join(manifest::FILE);
+    let shown = if ctx.s.global { path.display().to_string() } else { manifest::FILE.into() };
     if path.exists() {
-        bail!(MANIFEST, "{} already exists", manifest::FILE);
+        bail!(MANIFEST, "{shown} already exists");
     }
     std::fs::create_dir_all(&ctx.s.config)?;
     std::fs::write(&path, manifest::template(ctx.s.global))?;
-    println!("created {}", manifest::FILE);
+    println!("created {shown}");
     Ok(())
 }
 
@@ -526,7 +527,7 @@ fn finish_add(ctx: &Ctx, existed: bool, m: &Manifest, req: &SkillReq, repo: &Rep
         std::fs::create_dir_all(&ctx.s.config)?;
         std::fs::write(ctx.s.config.join(manifest::FILE), manifest::template(ctx.s.global))?;
     }
-    manifest::write_skill(&ctx.s.config, req)?;
+    manifest::write_skill(&ctx.s.config, ctx.s.global, req)?;
     lock.save(&ctx.s.config)?;
     println!("added {} = {:?} ({})", req.name, req.constraint, c.version);
     ctx.materialize(&Manifest::load(&ctx.s.config, ctx.s.global)?, &lock, prepared)
@@ -540,7 +541,7 @@ pub fn remove(ctx: &Ctx, names: &[String]) -> Result<()> {
             bail!(MANIFEST, "{n} is not in {} or {}", manifest::FILE, crate::lock::FILE);
         }
     }
-    manifest::remove_skills(&ctx.s.config, names)?;
+    manifest::remove_skills(&ctx.s.config, ctx.s.global, names)?;
     lock.packages.retain(|p| !names.contains(&p.name));
     lock.save(&ctx.s.config)?;
     ctx.materialize(&Manifest::load(&ctx.s.config, ctx.s.global)?, &lock, HashMap::new())
@@ -715,7 +716,7 @@ pub fn doctor(ctx: &Ctx, fix: bool) -> Result<()> {
         }
     }
 
-    let block_file = if s.global { s.config.join("installed").display().to_string() } else { ".gitignore".into() };
+    let block_file = project::block_file(s);
     let lines = project::block_lines(&managed, &m.targets, &copies);
     if project::read_block(s)? != lines {
         let what = format!("{block_file}: stale managed block");
