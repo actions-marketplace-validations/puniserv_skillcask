@@ -201,33 +201,81 @@ impl Ctx {
 
     /// Conflicts that would stop `materialize`, checked before `add` writes skills.toml and skills.lock.
     fn preflight(&self, m: &Manifest, lock: &Lock) -> Result<()> {
-        let s = &self.s;
         for p in m.targets.iter().map(String::as_str).chain([STORE, ".gitignore"]) {
-            project::no_symlink(s, p)?;
+            project::no_symlink(&self.s, p)?;
+        }
+        if let Some(c) = self.conflicts(m, lock, &BTreeSet::new())?.first() {
+            bail!(MANIFEST, "{}", hint(c, &self.taken_names(m, lock)?));
+        }
+        Ok(())
+    }
+
+    /// Skills that cannot be installed under their name. In a clash between packages the one in
+    /// `newcomers` is reported, so it is the one offered a rename.
+    fn conflicts(&self, m: &Manifest, lock: &Lock, newcomers: &BTreeSet<String>) -> Result<Vec<Conflict>> {
+        let s = &self.s;
+        let mut out = Vec::new();
+        let conflict = |p: &Package, sk: &LockedSkill, msg: String| Conflict {
+            package: p.name.clone(),
+            upstream: sk.from.clone().unwrap_or_else(|| sk.name.clone()),
+            msg,
+        };
+        let mut all: Vec<(&Package, &LockedSkill)> = lock.skills().collect();
+        all.sort_by_key(|(p, _)| newcomers.contains(&p.name));
+        let mut locked: BTreeMap<&str, (&Package, &LockedSkill)> = BTreeMap::new();
+        for (p, sk) in all {
+            match locked.get(sk.name.as_str()) {
+                Some((first, _)) => {
+                    out.push(conflict(p, sk, format!("skill {:?} is provided by both {} and {}", sk.name, first.name, p.name)))
+                }
+                None => {
+                    locked.insert(&sk.name, (p, sk));
+                }
+            }
+        }
+        let locals = project::local_names(s, &m.local)?;
+        for (n, (p, sk)) in &locked {
+            if locals.contains(*n) {
+                out.push(conflict(p, sk, format!("skill {n:?} is both a project skill in {} and provided by {}", m.local, p.name)));
+            }
         }
         let old_managed = project::block_managed(s)?;
-        let locked = locked_names(lock)?;
-        let locals = project::local_names(s, &m.local)?;
-        if let Some(n) = locals.iter().find(|n| locked.contains_key(*n)) {
-            bail!(MANIFEST, "skill {n:?} is both a project skill in {} and provided by {}", m.local, locked[n].0.name);
-        }
         for (n, (p, sk)) in &locked {
-            let dir = project::store_dir(s, n);
-            if dir.exists() && !old_managed.contains(n) && !installed_ok(s, sk) {
-                bail!(
-                    MANIFEST,
+            if project::store_dir(s, n).exists() && !old_managed.contains(*n) && !installed_ok(s, sk) {
+                let msg = format!(
                     "{} exists and is not managed by skillcask, but {} provides a skill with that name",
                     s.show(&format!("{STORE}/{n}")),
                     p.name
                 );
+                out.push(conflict(p, sk, msg));
             }
+        }
+        for (n, (p, sk)) in &locked {
             for t in &m.targets {
                 if not_ours(s, t, n, &project::link_state(s, t, STORE, n), &old_managed) {
-                    bail!(MANIFEST, "{} exists and was not created by skillcask; move it away", s.show(&format!("{t}/{n}")));
+                    out.push(conflict(
+                        p,
+                        sk,
+                        format!("{} exists and was not created by skillcask; move it away", s.show(&format!("{t}/{n}"))),
+                    ));
                 }
             }
         }
-        Ok(())
+        Ok(out)
+    }
+
+    /// Names a rename must avoid: locked, project, in the store, or present in any target.
+    fn taken_names(&self, m: &Manifest, lock: &Lock) -> Result<BTreeSet<String>> {
+        let s = &self.s;
+        let mut out: BTreeSet<String> = lock.skills().map(|(_, sk)| sk.name.clone()).collect();
+        out.extend(project::local_names(s, &m.local)?);
+        out.extend(project::store_names(s)?);
+        for t in &m.targets {
+            if let Ok(rd) = std::fs::read_dir(s.root.join(t)) {
+                out.extend(rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()));
+            }
+        }
+        Ok(out)
     }
 
     /// Makes disk match the lock: store, links, gitignore block, git index.
@@ -314,6 +362,31 @@ impl Ctx {
         }
         Ok(())
     }
+}
+
+/// A skill that cannot be installed under its name.
+struct Conflict {
+    package: String,
+    /// Name inside the package (`from`, else the install name): the key for `rename`.
+    upstream: String,
+    msg: String,
+}
+
+/// `<vendor>-<skill>`, unless taken or not a valid name.
+fn suggest(package: &str, upstream: &str, taken: &BTreeSet<String>) -> Option<String> {
+    let vendor: String = package.split('/').next().unwrap_or("").chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+    let name = format!("{vendor}-{upstream}");
+    (skill::valid_name(&name) && !taken.contains(&name)).then_some(name)
+}
+
+fn hint(c: &Conflict, taken: &BTreeSet<String>) -> String {
+    let to = suggest(&c.package, &c.upstream, taken).unwrap_or_else(|| "<new-name>".into());
+    format!(
+        "{}\n  to install it under another name, add to its entry in {}:\n  rename = {{ {} = \"{to}\" }}",
+        c.msg,
+        manifest::FILE,
+        c.upstream
+    )
 }
 
 /// Personal skills with the same name as project ones. Claude Code runs the personal one;
@@ -635,7 +708,7 @@ pub fn install(ctx: &Ctx, frozen: bool) -> Result<()> {
             lock.upsert(ctx.resolve(&m, req, &mut prepared)?);
         }
         lock.packages.retain(|p| !stale.contains(&p.name));
-        locked_names(&lock)?;
+        ctx.preflight(&m, &lock)?;
         lock.save(&ctx.s.config)?;
     }
     ctx.materialize(&m, &lock, prepared)
@@ -661,7 +734,7 @@ pub fn update(ctx: &Ctx, names: &[String]) -> Result<()> {
     }
     let (_, stale, _) = reconcile(&m, &lock);
     lock.packages.retain(|p| !stale.contains(&p.name));
-    locked_names(&lock)?;
+    ctx.preflight(&m, &lock)?;
     lock.save(&ctx.s.config)?;
     ctx.materialize(&m, &lock, prepared)
 }

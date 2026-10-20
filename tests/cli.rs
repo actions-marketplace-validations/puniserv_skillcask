@@ -250,6 +250,7 @@ fn collisions_are_errors() {
     p.manifest(&s, "\"acme/a\" = \"^1.0\"\n\"other/b\" = \"^1.0\"\n");
     let out = p.expect(&["install"], 1);
     assert!(out.contains("acme/a") && out.contains("other/b"), "{out}");
+    assert!(out.contains("rename = { same = \"other-same\" }"), "{out}");
 
     p.manifest(&s, "");
     p.write(".agents/skills/mine/SKILL.md", &skill_md("mine-by-hand"));
@@ -552,7 +553,8 @@ fn project_skills_in_dot_skills_are_linked_and_committable() {
     assert!(p.exists(".agents/skills/one/SKILL.md"));
 
     p.write(".skills/one/SKILL.md", &skill_md("one"));
-    assert!(p.expect(&["install"], 1).contains("both a project skill"));
+    let out = p.expect(&["install"], 1);
+    assert!(out.contains("both a project skill") && out.contains("rename = { one = \"acme-one\" }"), "{out}");
 }
 
 fn gh_commit(sha: &str, hours: i64) -> serde_json::Value {
