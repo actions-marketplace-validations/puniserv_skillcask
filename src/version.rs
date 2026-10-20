@@ -35,12 +35,13 @@ impl Stability {
 pub struct Version {
     pub parts: [u64; 4],
     pub stability: Stability,
-    pub n: u64,
+    /// Numbers after the stability word: `beta.1.2` is `[1, 2]`, `beta` is `[0]`.
+    pub n: Vec<u64>,
 }
 
 impl Ord for Version {
     fn cmp(&self, o: &Self) -> Ordering {
-        (self.parts, self.stability, self.n).cmp(&(o.parts, o.stability, o.n))
+        (self.parts, self.stability, &self.n).cmp(&(o.parts, o.stability, &o.n))
     }
 }
 
@@ -57,7 +58,10 @@ impl fmt::Display for Version {
         match self.stability {
             Stability::Stable => Ok(()),
             Stability::Dev => write!(f, "-dev"),
-            s => write!(f, "-{s:?}{}", self.n),
+            s => {
+                let n: Vec<String> = self.n.iter().map(u64::to_string).collect();
+                write!(f, "-{s:?}{}", n.join("."))
+            }
         }
     }
 }
@@ -69,13 +73,16 @@ impl Version {
         parse_partial(s).map(|p| p.0).filter(|v| v.stability != Stability::Dev)
     }
 
+    /// Default constraint written by `add`; `^0.0` would also take later `0.0.x` patches,
+    /// which Composer treats as breaking.
     pub fn major_minor(&self) -> String {
-        format!("^{}.{}", self.parts[0], self.parts[1])
+        let [a, b, c, _] = self.parts;
+        if a == 0 && b == 0 { format!("^0.0.{c}") } else { format!("^{a}.{b}") }
     }
 
     fn floor(mut self) -> Version {
         self.stability = Stability::Dev;
-        self.n = 0;
+        self.n = vec![0];
         self
     }
 
@@ -92,6 +99,8 @@ impl Version {
 /// was written.
 fn parse_partial(s: &str) -> Option<(Version, usize, bool)> {
     let s = s.trim();
+    // Build metadata does not take part in comparison, as in Composer.
+    let s = s.split_once('+').map_or(s, |(v, _)| v);
     let s = s.strip_prefix(['v', 'V']).unwrap_or(s);
     if s.starts_with("dev-") {
         return None;
@@ -117,7 +126,7 @@ fn parse_partial(s: &str) -> Option<(Version, usize, bool)> {
     }
     let rest = rest.trim_start_matches(['.', '_', '-']);
     if rest.is_empty() {
-        return Some((Version { parts, stability: Stability::Stable, n: 0 }, count, false));
+        return Some((Version { parts, stability: Stability::Stable, n: vec![0] }, count, false));
     }
     let lower = rest.to_ascii_lowercase();
     let (body, dev) = match lower.strip_suffix("dev") {
@@ -125,16 +134,18 @@ fn parse_partial(s: &str) -> Option<(Version, usize, bool)> {
         None => (lower.as_str(), false),
     };
     if body.is_empty() {
-        return dev.then_some((Version { parts, stability: Stability::Dev, n: 0 }, count, true));
+        return dev.then_some((Version { parts, stability: Stability::Dev, n: vec![0] }, count, true));
     }
     let word = body.bytes().take_while(u8::is_ascii_alphabetic).count();
     let stability = Stability::parse(&body[..word])?;
     let tail = body[word..].trim_start_matches(['.', '-']);
-    let num = tail.split(['.', '-']).next().unwrap_or("");
     if !tail.chars().all(|c| c.is_ascii_digit() || c == '.' || c == '-') {
         return None;
     }
-    let n = if num.is_empty() { 0 } else { num.parse().ok()? };
+    let mut n: Vec<u64> = tail.split(['.', '-']).filter(|x| !x.is_empty()).map(|x| x.parse().ok()).collect::<Option<_>>()?;
+    if n.is_empty() {
+        n.push(0);
+    }
     let stability = if dev { Stability::Dev } else { stability };
     Some((Version { parts, stability, n }, count, true))
 }
@@ -322,6 +333,11 @@ mod tests {
         assert!(v("1.0.0-beta1") < v("1.0.0-RC1"));
         assert!(v("1.0.0-RC1") < v("1.0.0"));
         assert!(v("1.0.0") < v("1.0.0-patch1"));
+        assert_eq!(Version::parse("1.2.3+build.5"), Version::parse("1.2.3"));
+        assert_eq!(Version::parse("v2.0.0-beta1+sha.abc"), Version::parse("2.0.0-beta1"));
+        assert!(v("1.0.0-beta.1.1") < v("1.0.0-beta.1.2"));
+        assert!(v("1.0.0-beta1") < v("1.0.0-beta1.1"));
+        assert_eq!(v("1.0.0-beta"), v("1.0.0-beta0"));
     }
 
     // Cases follow Composer's VersionParserTest (parseConstraints) and the spec's examples.
@@ -378,5 +394,7 @@ mod tests {
         assert!(!is_exact("1.4"));
         assert!(!is_exact("1.4.*"));
         assert_eq!(v("1.4.2").major_minor(), "^1.4");
+        assert_eq!(v("0.3.1").major_minor(), "^0.3");
+        assert_eq!(v("0.0.5").major_minor(), "^0.0.5");
     }
 }
