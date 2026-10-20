@@ -296,7 +296,15 @@ pub fn subtree(entries: &[FileEntry], dir: &str) -> Vec<FileEntry> {
 /// Same tree, same bytes: files only, sorted, fixed mtime and permissions. Also returns the
 /// zipped files.
 pub fn zip_dir(dir: &Path) -> Result<(Vec<u8>, Vec<FileEntry>)> {
-    let mut entries = scan_publish(dir)?;
+    zip_entries(dir, scan_publish(dir)?)
+}
+
+/// The zip skillcask 0.1.2 published: hidden files included, symlinks refused.
+pub fn zip_dir_0_1_2(dir: &Path) -> Result<Vec<u8>> {
+    Ok(zip_entries(dir, scan_dir(dir)?)?.0)
+}
+
+fn zip_entries(dir: &Path, mut entries: Vec<FileEntry>) -> Result<(Vec<u8>, Vec<FileEntry>)> {
     entries.sort_by(|a, b| a.path.cmp(&b.path));
     let mut w = ZipWriter::new(Cursor::new(Vec::new()));
     for e in &entries {

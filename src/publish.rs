@@ -25,6 +25,7 @@ pub struct PublishArgs {
 }
 
 struct Found {
+    dir: PathBuf,
     version: String,
     normalized: Version,
     description: Option<String>,
@@ -81,7 +82,14 @@ pub fn publish(args: &PublishArgs) -> Result<()> {
         }
         let versions = found.entry(package.clone()).or_default();
         let (zip, files) = crate::archive::zip_dir(&dir).ctx(&at)?;
-        versions.push(Found { zip, files, version: version.clone(), normalized, description: fm.get("description").cloned() });
+        versions.push(Found {
+            dir: dir.clone(),
+            zip,
+            files,
+            version: version.clone(),
+            normalized,
+            description: fm.get("description").cloned(),
+        });
     }
 
     let index_path = out.join("packages.json");
@@ -138,7 +146,10 @@ pub fn publish(args: &PublishArgs) -> Result<()> {
                 Some(s) if s == shasum => ("unchanged", f.zip),
                 Some(s) => match published_zip_with_tree(&zip_path, s, &f.files)? {
                     Some(old) => ("unchanged", old),
-                    None => bail!(MANIFEST, "{package} {} is already published with different content; bump the version", f.version),
+                    None => match zip_0_1_2(&zip_path, s, &f.dir) {
+                        Some(old) => ("unchanged", old),
+                        None => bail!(MANIFEST, "{package} {} is already published with different content; bump the version", f.version),
+                    },
                 },
                 None => {
                     let mut m = json!({
@@ -219,6 +230,16 @@ fn published_zip_with_tree(path: &Path, shasum: &str, files: &[FileEntry]) -> Re
         old.iter_mut().chain(new.iter_mut()).for_each(|f| f.exec = false);
     }
     Ok((tree_hash(&old) == tree_hash(&new)).then_some(zip))
+}
+
+/// Without the published zip at `path`, the zip 0.1.2 builds from `dir` if it is the published one
+/// (`shasum`): 0.1.2 zipped hidden files, so a fresh zip of a skill with `.gitkeep` differs.
+fn zip_0_1_2(path: &Path, shasum: &str, dir: &Path) -> Option<Vec<u8>> {
+    if path.symlink_metadata().is_ok() {
+        return None;
+    }
+    let zip = crate::archive::zip_dir_0_1_2(dir).ok()?;
+    hex::encode(Sha1::digest(&zip)).eq_ignore_ascii_case(shasum).then_some(zip)
 }
 
 fn find(dir: &Path, out: &Path, found: &mut Vec<PathBuf>) -> Result<()> {
@@ -364,6 +385,29 @@ mod tests {
         assert_eq!(snapshot(out.path()), before);
         skill(src.path(), "a", "alpha", "1.0.0", "changed");
         assert!(publish(&args(src.path(), out.path())).unwrap_err().msg.contains("different content"));
+    }
+
+    #[test]
+    fn republishes_a_0_1_2_zip_with_hidden_files_after_dist_is_gone() {
+        let src = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        skill(src.path(), "a", "alpha", "1.0.0", "a");
+        std::fs::write(src.path().join("a/.gitkeep"), "").unwrap();
+        publish(&args(src.path(), out.path())).unwrap();
+        let legacy = crate::archive::zip_dir_0_1_2(&src.path().join("a")).unwrap();
+        let p2 = out.path().join("p2/acme/alpha.json");
+        let mut meta: Value = serde_json::from_slice(&std::fs::read(&p2).unwrap()).unwrap();
+        let dist = &mut meta["packages"]["acme/alpha"][0]["dist"];
+        dist["shasum"] = hex::encode(Sha1::digest(&legacy)).into();
+        dist["reference"] = hex::encode(Sha256::digest(&legacy)).into();
+        std::fs::write(&p2, pretty(&meta)).unwrap();
+        std::fs::remove_dir_all(out.path().join("dist")).unwrap();
+
+        let before = snapshot(out.path());
+        publish(&args(src.path(), out.path())).unwrap();
+        let mut after = snapshot(out.path());
+        assert_eq!(after.remove(&out.path().join("dist/acme/alpha/1.0.0.zip")).unwrap().0, legacy, "the published zip is restored");
+        assert_eq!(after, before);
     }
 
     #[test]
