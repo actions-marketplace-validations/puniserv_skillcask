@@ -181,7 +181,12 @@ fn leftover_temp_dirs_are_cleaned_and_ignored() {
     p.write(".agents/skills/.skillcask-tmp-fresh/x", "x");
     let two_hours_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
     for d in [".skillcask-tmp-abc", ".skillcask-old-one-1"] {
-        std::fs::File::open(p.path().join(".agents/skills").join(d)).unwrap().set_modified(two_hours_ago).unwrap();
+        let mut o = std::fs::OpenOptions::new();
+        o.read(true);
+        // Windows opens a directory handle only with FILE_FLAG_BACKUP_SEMANTICS, and needs write access to set times.
+        #[cfg(windows)]
+        std::os::windows::fs::OpenOptionsExt::custom_flags(o.write(true), 0x0200_0000);
+        o.open(p.path().join(".agents/skills").join(d)).unwrap().set_modified(two_hours_ago).unwrap();
     }
     p.ok(&["install"]);
     assert!(!p.exists(".agents/skills/.skillcask-tmp-abc") && !p.exists(".agents/skills/.skillcask-old-one-1"));
