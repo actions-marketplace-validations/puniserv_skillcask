@@ -283,7 +283,7 @@ fn a_clone_does_not_restore_a_hand_written_dir_the_block_lists() {
     b.write(".agents/skills/one/notes.md", "keep");
     let out = b.expect(&["install"], 1);
     assert!(out.contains(".agents/skills/one exists and was not installed by skillcask on this machine; move it away"), "{out}");
-    assert!(out.contains("rename = { one = \"acme-one\" }"), "{out}");
+    assert!(!out.contains("rename ="), "a rename does not save a local edit: {out}");
     assert_eq!(b.read(".agents/skills/one/notes.md"), "keep");
 }
 
@@ -320,5 +320,59 @@ fn update_over_a_modified_skill_names_the_edit() {
     let out = p.expect(&["update"], 1);
     assert!(out.contains(".agents/skills/one was modified after skillcask installed it"), "{out}");
     assert!(!out.contains("not managed"), "{out}");
+    assert_eq!(p.read(".agents/skills/one/SKILL.md"), "edited");
+}
+
+fn commit(p: &Project, msg: &str) {
+    git(p.path(), &["add", "-f", "skills.toml", "skills.lock", ".gitignore"]);
+    git(p.path(), &["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q", "-m", msg]);
+}
+
+/// A checkout installed by 0.1.2 (no record, its block), whose committed lock then moved from
+/// 1.0.0 to 1.1.0.
+fn upgraded_from_0_1_2(s: &Server) -> Project {
+    let p = one(s);
+    p.ok(&["install"]);
+    std::fs::remove_file(p.path().join(RECORD)).unwrap();
+    p.write(".gitignore", &format!("{BEGIN}\n/.agents/skills/.skillcask-modes\n/.agents/skills/one/\n/.claude/skills/one\n{END}\n"));
+    commit(&p, "1.0.0");
+    s.package(
+        "acme/one",
+        vec![
+            Ver { version: "1.1.0", time: Some(ago(240)), zip: zipball(&[("SKILL.md", &(skill_md("one") + "v2"))]), extra: None },
+            Ver { version: "1.0.0", time: Some(ago(300)), zip: zipball(&[("SKILL.md", &skill_md("one"))]), extra: None },
+        ],
+    );
+    let other = clone_of(&p, s);
+    other.ok(&["update"]);
+    p.write("skills.lock", &other.read("skills.lock"));
+    commit(&p, "1.1.0");
+    p
+}
+
+#[test]
+fn first_install_after_upgrading_from_0_1_2_takes_the_bumped_lock() {
+    for args in [&["install"][..], &["install", "--frozen"]] {
+        let s = Server::start();
+        let p = upgraded_from_0_1_2(&s);
+        p.ok(args);
+        assert!(p.read(".agents/skills/one/SKILL.md").ends_with("v2"), "{args:?}");
+        assert!(p.read(RECORD).contains("/.agents/skills/one/"), "{args:?}");
+    }
+}
+
+#[test]
+fn a_dir_in_no_lock_history_is_still_a_conflict_after_upgrading() {
+    let s = Server::start();
+    let p = upgraded_from_0_1_2(&s);
+    p.write(".agents/skills/one/SKILL.md", "edited");
+    let out = p.expect(&["install"], 1);
+    assert!(
+        out.contains(
+            ".agents/skills/one exists and was not installed by skillcask on this machine; move it away (or delete it), then run `skillcask install`"
+        ),
+        "{out}"
+    );
+    assert!(!out.contains("rename ="), "{out}");
     assert_eq!(p.read(".agents/skills/one/SKILL.md"), "edited");
 }

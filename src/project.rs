@@ -483,12 +483,30 @@ fn store_lines(block: &[String]) -> BTreeSet<String> {
 }
 
 /// Skills that skillcask installed on this machine. In global that is the managed list itself.
-pub fn installed_here(s: &Scope) -> Result<BTreeSet<String>> {
+/// `None` in a project that 0.1.2 installed: it wrote no record.
+pub fn installed_here(s: &Scope) -> Result<Option<BTreeSet<String>>> {
     if s.global {
-        return block_managed(s);
+        return block_managed(s).map(Some);
     }
     let (path, shown) = record_file(s);
-    Ok(store_lines(&read_block_file(&path, &shown)?.block))
+    if path.symlink_metadata().is_err() {
+        return Ok(None);
+    }
+    Ok(Some(store_lines(&read_block_file(&path, &shown)?.block)))
+}
+
+/// Every `tree-sha256` that skills.lock had in the git history; empty outside a repository.
+pub fn lock_history_hashes(s: &Scope) -> BTreeSet<String> {
+    let o = match git(s).args(["log", "-p", "--format=", "--", crate::lock::FILE]).output() {
+        Ok(o) if o.status.success() => o,
+        _ => return BTreeSet::new(),
+    };
+    String::from_utf8_lossy(&o.stdout)
+        .split("tree-sha256 = \"")
+        .skip(1)
+        .filter_map(|r| r.get(..64).filter(|h| h.bytes().all(|b| b.is_ascii_hexdigit()) && r[64..].starts_with('"')))
+        .map(String::from)
+        .collect()
 }
 
 /// Records `names` as installed on this machine; in global `write_block` already does.

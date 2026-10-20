@@ -292,6 +292,7 @@ impl Ctx {
             package: p.name.clone(),
             upstream: sk.from.clone().unwrap_or_else(|| sk.name.clone()),
             msg,
+            rename: true,
         };
         let mut all: Vec<(&Package, &LockedSkill)> = lock.skills().collect();
         all.sort_by_key(|(p, _)| newcomers.contains(&p.name));
@@ -314,14 +315,21 @@ impl Ctx {
         }
         let old_managed = project::block_managed(s)?;
         let stale = project::stale_local_links(s, &m.local, &locals)?;
-        let here = project::installed_here(s)?;
+        let owned = match project::installed_here(s)? {
+            Some(names) => Owned::Names(names),
+            None => {
+                let mut hashes = project::lock_history_hashes(s);
+                hashes.extend(lock.skills().chain(old.skills()).map(|(_, sk)| sk.tree_sha256.clone()));
+                Owned::Hashes(hashes)
+            }
+        };
         for (n, (p, sk)) in &locked {
             let present = project::store_dir(s, n).symlink_metadata().is_ok();
             if present
                 && !stale.iter().any(|x| x == n)
-                && let Some(msg) = store_conflict(s, p, sk, old, &here)
+                && let Some((msg, rename)) = store_conflict(s, p, sk, old, &owned)
             {
-                out.push(conflict(p, sk, msg));
+                out.push(Conflict { rename, ..conflict(p, sk, msg) });
             }
         }
         for (n, (p, sk)) in &locked {
@@ -389,7 +397,9 @@ impl Ctx {
         let mut last: Option<(String, String)> = None;
         loop {
             let taken = self.taken_names(m, lock)?;
-            let Some(c) = self.conflicts(m, lock, old, newcomers)?.into_iter().find(|c| newcomers.contains(&c.package)) else { break };
+            let Some(c) = self.conflicts(m, lock, old, newcomers)?.into_iter().find(|c| c.rename && newcomers.contains(&c.package)) else {
+                break;
+            };
             // A rename to an untaken name clears the conflict; if it did not, asking again would loop.
             if last.as_ref().is_some_and(|(p, u)| *p == c.package && *u == c.upstream) {
                 break;
@@ -535,6 +545,8 @@ struct Conflict {
     /// Name inside the package (`from`, else the install name): the key for `rename`.
     upstream: String,
     msg: String,
+    /// Whether installing under another name solves it; not when the dir is a local edit.
+    rename: bool,
 }
 
 /// `<vendor>-<skill>`, unless taken or not a valid name.
@@ -546,6 +558,9 @@ fn suggest(package: &str, upstream: &str, taken: &BTreeSet<String>) -> Option<St
 
 /// `renames`: the entry's current `rename`, shown merged so the line can replace it.
 fn hint(c: &Conflict, taken: &BTreeSet<String>, renames: &BTreeMap<String, String>) -> String {
+    if !c.rename {
+        return c.msg.clone();
+    }
     let to = suggest(&c.package, &c.upstream, taken).unwrap_or_else(|| "<new-name>".into());
     let mut all = renames.clone();
     all.insert(c.upstream.clone(), to);
@@ -676,27 +691,36 @@ fn locked_skill<'a>(lock: &'a Lock, name: &str) -> Option<(&'a Package, &'a Lock
     lock.skills().find(|(_, sk)| sk.name == name)
 }
 
-/// Why installing `sk` over its existing store dir would lose something skillcask did not install.
-/// A dir matching the new or the old lock entry is skillcask's. Any other dir is a local edit,
-/// restored only when skillcask installed it on this machine (`here`; the block is committed, so
-/// a clone has it too) and its lock entry is unchanged.
-fn store_conflict(s: &Scope, p: &Package, sk: &LockedSkill, old: &Lock, here: &BTreeSet<String>) -> Option<String> {
+/// What proves a store dir is skillcask's.
+enum Owned {
+    /// Names in the machine-local record (the block is committed, so a clone has it too).
+    Names(BTreeSet<String>),
+    /// No record yet (0.1.2 wrote none): a tree skills.lock ever locked, so nothing is lost.
+    Hashes(BTreeSet<String>),
+}
+
+/// Why installing `sk` over its existing store dir would lose something skillcask did not install,
+/// and whether a rename helps. A dir matching the new or the old lock entry is skillcask's. Any
+/// other dir is a local edit, restored only when skillcask installed it on this machine and its
+/// lock entry is unchanged.
+fn store_conflict(s: &Scope, p: &Package, sk: &LockedSkill, old: &Lock, owned: &Owned) -> Option<(String, bool)> {
     let shown = s.show(&format!("{STORE}/{}", sk.name));
     let h = tree_on_disk(s, &sk.name);
-    if h.as_ref() == Some(&sk.tree_sha256) {
+    if h.as_ref().is_some_and(|h| *h == sk.tree_sha256 || matches!(owned, Owned::Hashes(hs) if hs.contains(h))) {
         return None;
     }
     let (Some(h), Some((op, os))) = (h, locked_skill(old, &sk.name)) else {
-        return Some(format!("{shown} exists and is not managed by skillcask, but {} provides a skill with that name", p.name));
+        return Some((format!("{shown} exists and is not managed by skillcask, but {} provides a skill with that name", p.name), true));
     };
+    let away = "move it away (or delete it), then run `skillcask install`";
     if h == os.tree_sha256 {
         None
-    } else if !here.contains(&sk.name) {
-        Some(format!("{shown} exists and was not installed by skillcask on this machine; move it away"))
+    } else if !matches!(owned, Owned::Names(n) if n.contains(&sk.name)) {
+        Some((format!("{shown} exists and was not installed by skillcask on this machine; {away}"), false))
     } else if op.version == p.version && os.tree_sha256 == sk.tree_sha256 {
         None
     } else {
-        Some(format!("{shown} was modified after skillcask installed it; move your changes away, then `skillcask install` restores it"))
+        Some((format!("{shown} was modified after skillcask installed it; {away}"), false))
     }
 }
 
@@ -1338,7 +1362,12 @@ mod tests {
         assert!(matches!(answer("Bad Name", s, &taken), Answer::Retry(_)));
         assert!(matches!(answer("code-review", s, &taken), Answer::Retry(_)));
 
-        let c = Conflict { package: "acme/a".into(), upstream: "one".into(), msg: "skill \"one\" is provided by both x and acme/a".into() };
+        let c = Conflict {
+            package: "acme/a".into(),
+            upstream: "one".into(),
+            msg: "skill \"one\" is provided by both x and acme/a".into(),
+            rename: true,
+        };
         assert_eq!(question(&c.msg, &c.package), c.msg);
         assert_eq!(question("one: ~/.claude/skills/one shadows", "acme/a"), "one: ~/.claude/skills/one shadows (acme/a)");
         let renames = BTreeMap::from([("a".to_string(), "x".to_string())]);
