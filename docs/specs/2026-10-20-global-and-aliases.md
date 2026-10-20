@@ -83,7 +83,10 @@ is a conflict (section B), as it is in a project.
 
 `find_root` is not used with `--global`; running skillcask without `--global` under the home
 directory never picks up the global manifest, because it is not named `~/skills.toml`. Run inside
-the config directory itself, a project command stops with an error that points to `--global`.
+the config directory itself, a project command stops with an error that points to `--global`. So does a
+project rooted at home (a `~/skills.toml`): it would write `~/.gitignore`, often the global
+excludes file, and share `~/.agents/skills` with the global scope. `init` without `--global`
+refuses both directories.
 
 ## B. Install aliases
 

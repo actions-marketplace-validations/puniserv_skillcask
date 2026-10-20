@@ -23,11 +23,22 @@ const OLD: &str = ".skillcask-old-";
 pub fn find_root() -> Result<PathBuf> {
     let cwd = std::env::current_dir()?;
     let root = cwd.ancestors().find(|d| d.join(crate::manifest::FILE).is_file()).unwrap_or(&cwd);
-    let config = Scope::global().ok().and_then(|g| std::fs::canonicalize(g.config).ok());
-    if config.is_some() && std::fs::canonicalize(root).ok() == config {
+    check_root(root)?;
+    Ok(root.to_path_buf())
+}
+
+/// Refuses home and the global config dir as a project root: both belong to `--global`, and
+/// `~/.gitignore` is often the user's global excludes file.
+pub fn check_root(root: &Path) -> Result<()> {
+    let canon = |p: &Path| std::fs::canonicalize(p).ok();
+    let Some(r) = canon(root) else { return Ok(()) };
+    if crate::scope::home().and_then(|h| canon(&h)).as_ref() == Some(&r) {
+        bail!(MANIFEST, "the home directory is the global scope; use --global");
+    }
+    if Scope::global().ok().and_then(|g| canon(&g.config)).as_ref() == Some(&r) {
         bail!(MANIFEST, "{} is the global config directory; use --global", root.display());
     }
-    Ok(root.to_path_buf())
+    Ok(())
 }
 
 pub fn store_dir(s: &Scope, name: &str) -> PathBuf {

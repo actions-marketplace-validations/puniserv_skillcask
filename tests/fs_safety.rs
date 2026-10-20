@@ -184,6 +184,34 @@ fn leftover_temp_dirs_are_cleaned_and_ignored() {
 }
 
 #[test]
+fn a_project_rooted_at_home_is_refused() {
+    let s = Server::start();
+    let mut p = one(&s);
+    let root = p.path().display().to_string();
+    p.env.push(("HOME".into(), root.clone()));
+    p.env.push(("USERPROFILE".into(), root));
+    let out = p.expect(&["install"], 1);
+    assert!(out.contains("the home directory is the global scope; use --global"), "{out}");
+    assert!(!p.exists(".agents") && !p.exists(".gitignore"));
+}
+
+#[test]
+fn init_refuses_home_and_the_global_config_dir() {
+    let s = Server::start();
+    let mut p = Project::new(&s);
+    p.cwd = Some(p.home().to_path_buf());
+    let out = p.expect(&["init"], 1);
+    assert!(out.contains("the home directory is the global scope; use --global"), "{out}");
+    assert!(!p.home().join("skills.toml").exists());
+
+    let cfg = p.home().join(".config/skillcask");
+    std::fs::create_dir_all(&cfg).unwrap();
+    p.cwd = Some(cfg.clone());
+    assert!(p.expect(&["init"], 1).contains("--global"));
+    assert!(!cfg.join("skills.toml").exists());
+}
+
+#[test]
 fn deleted_hand_written_skill_loses_its_links() {
     let s = Server::start();
     let p = Project::new(&s);

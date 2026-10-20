@@ -139,7 +139,12 @@ fn run(cli: Cli) -> Result<(), Error> {
         Scope::global()?
     } else {
         Scope::project(match cli.cmd {
-            Cmd::Init | Cmd::Publish { .. } => std::env::current_dir()?,
+            Cmd::Init => {
+                let cwd = std::env::current_dir()?;
+                project::check_root(&cwd)?;
+                cwd
+            }
+            Cmd::Publish { .. } => std::env::current_dir()?,
             _ => project::find_root()?,
         })
     };

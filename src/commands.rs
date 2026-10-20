@@ -546,12 +546,9 @@ fn ask(question: &str, suggestion: Option<&str>, taken: &BTreeSet<String>) -> Re
 }
 
 /// Personal skills with the same name as project ones. Claude Code runs the personal one;
-/// Codex lists both. Empty for the global scope and for a project rooted at home.
+/// Codex lists both. Empty for the global scope.
 fn shadows<'a>(s: &Scope, m: &Manifest, names: impl IntoIterator<Item = &'a String>) -> Vec<String> {
-    let Some(home) = crate::scope::home().filter(|h| !s.global && std::fs::canonicalize(h).ok() != std::fs::canonicalize(&s.root).ok())
-    else {
-        return Vec::new();
-    };
+    let Some(home) = crate::scope::home().filter(|_| !s.global) else { return Vec::new() };
     let mut out = Vec::new();
     for n in names {
         for d in std::iter::once(STORE).chain(m.targets.iter().map(String::as_str)) {

@@ -959,19 +959,6 @@ fn personal_skills_shadowing_project_ones_are_warned_about() {
 }
 
 #[test]
-fn a_project_in_home_does_not_warn_about_its_own_skills() {
-    let s = Server::start();
-    s.simple("acme/one", "1.0.0", "one");
-    let mut p = Project::new(&s);
-    p.manifest(&s, "\"acme/one\" = \"^1.0\"\n");
-    let root = p.path().display().to_string();
-    p.env.push(("HOME".into(), root.clone()));
-    p.env.push(("USERPROFILE".into(), root));
-    let out = p.ok(&["install"]);
-    assert!(p.exists(".claude/skills/one") && !out.contains("warning"), "{out}");
-}
-
-#[test]
 fn renamed_skill_installs_under_its_new_name() {
     let s = Server::start();
     s.simple("acme/one", "1.0.0", "one");
