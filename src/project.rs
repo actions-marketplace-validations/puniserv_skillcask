@@ -1,7 +1,7 @@
 //! On-disk layout: the store, agent links, the managed `.gitignore` block, the git index.
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 use crate::bail;
@@ -180,6 +180,28 @@ pub fn link_state(s: &Scope, at: &str, source: &str, name: &str) -> LinkState {
         return if fresh.is_some() && fresh == hash(&path) { LinkState::Ok } else { LinkState::Wrong };
     }
     LinkState::Foreign
+}
+
+/// Whether the symlink at `path` leads under `<root>/<dir>`, also when it dangles.
+pub fn points_into(s: &Scope, path: &Path, dir: &str) -> bool {
+    let base = s.root.join(dir);
+    if let (Ok(a), Ok(b)) = (std::fs::canonicalize(path), std::fs::canonicalize(&base))
+        && a.starts_with(b)
+    {
+        return true;
+    }
+    let Ok(target) = std::fs::read_link(path) else { return false };
+    let mut p = path.parent().map(Path::to_path_buf).unwrap_or_default();
+    for c in target.components() {
+        match c {
+            Component::ParentDir => {
+                p.pop();
+            }
+            Component::CurDir => {}
+            c => p.push(c),
+        }
+    }
+    p.starts_with(base)
 }
 
 fn force_copy() -> bool {

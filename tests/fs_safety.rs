@@ -13,6 +13,12 @@ fn one(s: &Server) -> Project {
     p
 }
 
+#[cfg(unix)]
+fn symlink(target: &str, at: &std::path::Path) {
+    std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(target, at).unwrap();
+}
+
 fn mtime(p: &Project, rel: &str) -> std::time::SystemTime {
     std::fs::metadata(p.path().join(rel)).unwrap().modified().unwrap()
 }
@@ -100,6 +106,54 @@ fn copy_marker_alone_does_not_make_a_stale_project_copy() {
     p.write(".agents/skills/mine/work.md", "keep");
     p.ok(&["install"]);
     assert_eq!(p.read(".agents/skills/mine/work.md"), "keep");
+}
+
+#[cfg(unix)]
+#[test]
+fn foreign_symlinks_in_targets_are_conflicts() {
+    let s = Server::start();
+    let p = one(&s);
+    p.write("vendor/one/SKILL.md", &skill_md("one"));
+    let link = p.path().join(".claude/skills/one");
+    symlink("../../vendor/one", &link);
+    let out = p.expect(&["install"], 1);
+    assert!(out.contains(".claude/skills/one exists and was not created by skillcask; move it away"), "{out}");
+    assert_eq!(std::fs::read_link(&link).unwrap(), std::path::Path::new("../../vendor/one"));
+
+    // A dangling link of the shape skillcask makes is still repaired.
+    std::fs::remove_file(&link).unwrap();
+    symlink("../../.agents/skills/one", &link);
+    p.ok(&["install"]);
+    assert_eq!(p.read(".claude/skills/one/SKILL.md"), skill_md("one"));
+
+    p.write(".agents/skills/h/SKILL.md", &skill_md("h"));
+    p.write("vendor/h/SKILL.md", &skill_md("h"));
+    symlink("../../vendor/h", &p.path().join(".junie/skills/h"));
+    let out = p.expect(&["doctor", "--fix"], 1);
+    assert!(out.contains(".junie/skills/h exists and was not created by skillcask; move it away"), "{out}");
+    assert_eq!(std::fs::read_link(p.path().join(".junie/skills/h")).unwrap(), std::path::Path::new("../../vendor/h"));
+}
+
+#[test]
+fn doctor_does_not_list_real_dirs_as_copies() {
+    let s = Server::start();
+    let p = Project::new(&s);
+    p.manifest(&s, "");
+    p.write(".agents/skills/h/SKILL.md", &skill_md("h"));
+    p.write(".claude/skills/h/SKILL.md", "mine");
+    p.expect(&["doctor", "--fix"], 1);
+    assert!(!p.read(".gitignore").contains("/.claude/skills/h"), "{}", p.read(".gitignore"));
+}
+
+#[test]
+fn conflicts_of_project_skills_fail_before_anything_is_placed() {
+    let s = Server::start();
+    let p = one(&s);
+    p.write(".skills/proj/SKILL.md", &skill_md("proj"));
+    p.write(".junie/skills/proj/SKILL.md", "mine");
+    let out = p.expect(&["install"], 1);
+    assert!(out.contains(".junie/skills/proj exists and was not created by skillcask"), "{out}");
+    assert!(!p.exists(".agents/skills/one"));
 }
 
 #[cfg(unix)]

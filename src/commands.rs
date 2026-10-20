@@ -212,6 +212,20 @@ impl Ctx {
             let renames = m.skill(&c.package).map(|r| r.rename.clone()).unwrap_or_default();
             bail!(MANIFEST, "{}", hint(c, &self.taken_names(m, lock)?, &renames));
         }
+        // Hand-written and project skills have no package to rename; without this check they
+        // would fail in the middle of `materialize`.
+        let s = &self.s;
+        let old_managed = project::block_managed(s)?;
+        let locked = locked_names(lock)?;
+        let locals = project::local_names(s, &m.local)?;
+        let kept = kept(s, lock, old, &old_managed);
+        let hand = hand_written(s, lock, &old_managed.difference(&kept).cloned().collect(), &locals)?;
+        for (at, source, n) in link_plan(m, &locked, &hand, &locals) {
+            let removed = old_managed.contains(&n) && !kept.contains(&n) && !locked.contains_key(&n);
+            if !(at == STORE && removed) && not_ours(s, m, &at, &n, &project::link_state(s, &at, source, &n), &old_managed) {
+                bail!(MANIFEST, "{} exists and was not created by skillcask; move it away", s.show(&format!("{at}/{n}")));
+            }
+        }
         Ok(())
     }
 
@@ -259,7 +273,7 @@ impl Ctx {
         }
         for (n, (p, sk)) in &locked {
             for t in &m.targets {
-                if not_ours(s, t, n, &project::link_state(s, t, STORE, n), &old_managed) {
+                if not_ours(s, m, t, n, &project::link_state(s, t, STORE, n), &old_managed) {
                     out.push(conflict(
                         p,
                         sk,
@@ -562,13 +576,18 @@ fn locked_names(lock: &Lock) -> Result<BTreeMap<String, (&Package, &LockedSkill)
     Ok(out)
 }
 
-/// A target entry skillcask must neither replace nor repair.
-fn not_ours(s: &Scope, at: &str, n: &str, state: &LinkState, old_managed: &BTreeSet<String>) -> bool {
+/// A target entry skillcask must neither replace nor repair. A symlink pointing elsewhere is the
+/// user's or another tool's, unless the block manages the name or it leads into the store or the
+/// project skills.
+fn not_ours(s: &Scope, m: &Manifest, at: &str, n: &str, state: &LinkState, old_managed: &BTreeSet<String>) -> bool {
     match state {
         LinkState::Foreign => true,
-        // In home a symlink skillcask did not make belongs to the user or another tool.
         LinkState::Wrong => {
-            s.global && !old_managed.contains(n) && s.root.join(at).join(n).symlink_metadata().is_ok_and(|m| m.file_type().is_symlink())
+            let path = s.root.join(at).join(n);
+            path.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink())
+                && !old_managed.contains(n)
+                && !project::points_into(s, &path, STORE)
+                && (s.global || !project::points_into(s, &path, &m.local))
         }
         _ => false,
     }
@@ -1030,7 +1049,7 @@ pub fn doctor(ctx: &Ctx, fix: bool) -> Result<()> {
     for (at, source, n) in link_plan(&m, &locked, &hand, &locals) {
         let state = project::link_state(s, &at, source, &n);
         let what = format!("{}: link {}", s.show(&format!("{at}/{n}")), format!("{state:?}").to_lowercase());
-        if state != LinkState::Foreign && not_ours(s, &at, &n, &state, &old_managed) {
+        if state != LinkState::Foreign && not_ours(s, &m, &at, &n, &state, &old_managed) {
             open.push(format!("{} exists and was not created by skillcask; move it away", s.show(&format!("{at}/{n}"))));
         } else if state != LinkState::Ok {
             if fix && s.root.join(source).join(&n).is_dir() && state != LinkState::Foreign {
@@ -1041,7 +1060,8 @@ pub fn doctor(ctx: &Ctx, fix: bool) -> Result<()> {
             }
         }
         let p = s.root.join(&at).join(&n);
-        if !locked.contains_key(&n) && p.symlink_metadata().is_ok_and(|m| m.is_dir()) {
+        let is_copy = p.symlink_metadata().is_ok_and(|m| m.is_dir()) && p.join(project::COPY_MARKER).is_file();
+        if !locked.contains_key(&n) && project::link_state(s, &at, source, &n) == LinkState::Ok && is_copy {
             copies.insert(format!("/{at}/{n}"));
         }
     }
