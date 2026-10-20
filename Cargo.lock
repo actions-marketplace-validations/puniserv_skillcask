@@ -1184,6 +1184,7 @@ dependencies = [
  "base64",
  "clap",
  "hex",
+ "icu_normalizer",
  "jiff",
  "rcgen",
  "rustls",

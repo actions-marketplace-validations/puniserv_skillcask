@@ -1,6 +1,6 @@
 //! Safe zip extraction for installs and deterministic zips for `publish`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::io::{Cursor, Read, Write};
 use std::path::Path;
 
@@ -52,6 +52,9 @@ pub struct Link {
 /// Extracts into `dest` (an existing empty directory); paths are relative to the stripped root.
 pub fn extract(zip: &[u8], dest: &Path, limits: &Limits) -> Result<Extracted> {
     let mut archive = ZipArchive::new(Cursor::new(zip))?;
+    // Duplicate names (the last one wins) and local names that differ from the central
+    // directory make other tools show other files than the ones installed.
+    archive.validate_header_consistency()?;
     let mut entries = Vec::new();
     let (mut files, mut declared) = (0usize, 0u64);
     for index in 0..archive.len() {
@@ -63,6 +66,9 @@ pub fn extract(zip: &[u8], dest: &Path, limits: &Limits) -> Result<Extracted> {
         let parts: Vec<String> = raw.split('/').filter(|p| !p.is_empty() && *p != ".").map(String::from).collect();
         if parts.iter().any(|p| p == "..") {
             bail!(IO, "archive: unsafe entry name {raw:?}");
+        }
+        if let Some(p) = parts.iter().find(|p| !portable(p)) {
+            bail!(IO, "archive: {raw:?}: {p:?} is not a valid file name on every OS");
         }
         let mode = f.unix_mode().unwrap_or(0);
         let kind = mode & S_IFMT;
@@ -95,6 +101,7 @@ pub fn extract(zip: &[u8], dest: &Path, limits: &Limits) -> Result<Extracted> {
         }
         entries.retain(|e| !e.parts.is_empty());
     }
+    check_collisions(&entries)?;
 
     let mut ancestors = BTreeSet::new();
     for e in entries.iter().filter(|e| !e.dir) {
@@ -111,48 +118,107 @@ pub fn extract(zip: &[u8], dest: &Path, limits: &Limits) -> Result<Extracted> {
     for e in entries.iter().filter(|e| !e.dir && !e.link) {
         let rel = e.parts.join("/");
         let mut content = Vec::new();
-        let budget = limits.unpacked - written;
-        archive.by_index(e.index)?.take(budget + 1).read_to_end(&mut content)?;
-        written += content.len() as u64;
-        if written > limits.unpacked {
-            bail!(IO, "archive: unpacked size exceeds {} bytes", limits.unpacked);
-        }
-        let path = dest.join(&rel);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let mut file = std::fs::File::create_new(&path).map_err(|err| crate::error::Error::new(IO, format!("archive: {rel}: {err}")))?;
-        file.write_all(&content)?;
-        set_mode(&path, e.exec)?;
+        archive.by_index(e.index)?.take(limits.unpacked - written + 1).read_to_end(&mut content)?;
+        charge(&mut written, content.len(), limits)?;
+        write_new(dest, &rel, &content, e.exec)?;
         out.push(FileEntry::new(rel, e.exec, &content));
     }
 
-    let mut links = Vec::new();
+    let mut pending = Vec::new();
     for e in entries.iter().filter(|e| e.link) {
-        let rel = e.parts.join("/");
         let mut raw = String::new();
         archive.by_index(e.index)?.take(4096).read_to_string(&mut raw)?;
-        let target = resolve(&e.parts[..e.parts.len() - 1], &raw).filter(|t| out.iter().any(|f| &f.path == t));
-        if let Some(t) = &target {
-            let src = out.iter().find(|f| &f.path == t).cloned().expect("checked above");
-            let content = std::fs::read(dest.join(t))?;
-            written += content.len() as u64;
-            if written > limits.unpacked {
-                bail!(IO, "archive: unpacked size exceeds {} bytes", limits.unpacked);
-            }
-            let path = dest.join(&rel);
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::File::create_new(&path)
-                .and_then(|mut f| f.write_all(&content))
-                .map_err(|err| crate::error::Error::new(IO, format!("archive: {rel}: {err}")))?;
-            set_mode(&path, src.exec)?;
-            out.push(FileEntry { path: rel.clone(), exec: src.exec, sha256: src.sha256 });
+        pending.push((e.parts.join("/"), resolve(&e.parts[..e.parts.len() - 1], &raw)));
+    }
+    // A link may point to another link, in any entry order: copy whatever resolves until a
+    // round makes no progress.
+    let mut index: HashMap<String, usize> = out.iter().enumerate().map(|(i, f)| (f.path.clone(), i)).collect();
+    let mut links = Vec::new();
+    loop {
+        let before = pending.len();
+        let mut rest = Vec::new();
+        for (rel, target) in pending {
+            let Some(&i) = target.as_ref().and_then(|t| index.get(t)) else {
+                rest.push((rel, target));
+                continue;
+            };
+            let src = out[i].clone();
+            let content = std::fs::read(dest.join(&src.path))?;
+            charge(&mut written, content.len(), limits)?;
+            write_new(dest, &rel, &content, src.exec)?;
+            index.insert(rel.clone(), out.len());
+            out.push(FileEntry { path: rel.clone(), ..src });
+            links.push(Link { path: rel, target });
         }
-        links.push(Link { path: rel, target });
+        pending = rest;
+        if pending.len() == before {
+            break;
+        }
+    }
+    links.extend(pending.into_iter().map(|(path, _)| Link { path, target: None }));
+
+    // Whatever the name checks miss (a file system folding names in some other way) shows up
+    // here as fewer or different paths than the hashes cover.
+    let on_disk: BTreeSet<String> = scan_dir(dest)?.into_iter().map(|f| f.path).collect();
+    if on_disk != out.iter().map(|f| f.path.clone()).collect() {
+        bail!(IO, "archive: the extracted files differ from the archive entries");
     }
     Ok(Extracted { files: out, links })
+}
+
+fn charge(written: &mut u64, n: usize, limits: &Limits) -> Result<()> {
+    *written += n as u64;
+    if *written > limits.unpacked {
+        bail!(IO, "archive: unpacked size exceeds {} bytes", limits.unpacked);
+    }
+    Ok(())
+}
+
+fn write_new(dest: &Path, rel: &str, content: &[u8], exec: bool) -> Result<()> {
+    let path = dest.join(rel);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::File::create_new(&path)
+        .and_then(|mut f| f.write_all(content))
+        .map_err(|err| crate::error::Error::new(IO, format!("archive: {rel:?}: {err}")))?;
+    set_mode(&path, exec)
+}
+
+/// Not a name Windows refuses or rewrites: reserved device names, a trailing dot or space,
+/// `<>:"|?*\` and control characters.
+fn portable(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or(name).trim_end_matches(' ').to_ascii_uppercase();
+    let port = stem.strip_prefix("COM").or_else(|| stem.strip_prefix("LPT"));
+    let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || port.is_some_and(|n| matches!(n, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "\u{b9}" | "\u{b2}" | "\u{b3}"));
+    !(reserved || name.ends_with(['.', ' ']) || name.contains(|c: char| c.is_control() || "<>:\"|?*\\".contains(c)))
+}
+
+/// Rejects two entries that are distinct here but one file on a case-insensitive or
+/// normalising file system (macOS, Windows), so an archive fails the same way on every OS.
+fn check_collisions(entries: &[Entry]) -> Result<()> {
+    let nfc = icu_normalizer::ComposingNormalizerBorrowed::new_nfc();
+    // Upper then lower also folds letters whose lowercase alone stays distinct (`ſ`, `K`).
+    let fold = |p: &String| nfc.normalize(&p.to_uppercase().to_lowercase()).into_owned();
+    let mut seen: HashMap<String, (String, bool)> = HashMap::new();
+    for e in entries.iter().filter(|e| !e.dir) {
+        let folded: Vec<String> = e.parts.iter().map(fold).collect();
+        for n in 1..=e.parts.len() {
+            let (path, file) = (e.parts[..n].join("/"), n == e.parts.len());
+            match seen.get(&folded[..n].join("/")) {
+                Some((other, _)) if *other != path => {
+                    bail!(IO, "archive: {:?} and {other:?} are one name on case-insensitive file systems", e.parts.join("/"))
+                }
+                Some((_, true)) if file => bail!(IO, "archive: duplicate entry {path:?}"),
+                Some(_) => {}
+                None => {
+                    seen.insert(folded[..n].join("/"), (path, file));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Resolves a relative link target against the link's directory; `None` if it leaves the archive.
@@ -283,6 +349,123 @@ mod tests {
         assert!(try_extract(&[Item::File("a", 0o644, b"x"), Item::File("./a", 0o644, b"y")], Limits::default()).is_err());
     }
 
+    fn err(items: &[Item]) -> String {
+        match try_extract(items, Limits::default()) {
+            Ok(_) => panic!("accepted"),
+            Err(e) => e.msg,
+        }
+    }
+
+    /// Patches every occurrence (`all`) or only the first one (the local header) of `from`.
+    fn patch(mut zip: Vec<u8>, from: &[u8], to: &[u8], all: bool) -> Vec<u8> {
+        assert_eq!(from.len(), to.len());
+        let mut i = 0;
+        while let Some(at) = zip[i..].windows(from.len()).position(|w| w == from) {
+            zip[i + at..i + at + to.len()].copy_from_slice(to);
+            i += at + to.len();
+            if !all {
+                break;
+            }
+        }
+        zip
+    }
+
+    fn central(zip: &mut [u8], n: usize) -> &mut [u8] {
+        let at = zip.windows(4).enumerate().filter(|(_, w)| *w == b"PK\x01\x02").nth(n).unwrap().0;
+        &mut zip[at..]
+    }
+
+    #[test]
+    fn rejects_duplicate_and_mismatched_names() {
+        let zip = build(&[Item::File("s/SKILL.md", 0o644, b"shown"), Item::File("s/SKILL.mX", 0o644, b"installed")]);
+        let dir = tempfile::tempdir().unwrap();
+        assert!(extract(&patch(zip.clone(), b"SKILL.mX", b"SKILL.md", true), dir.path(), &Limits::default()).is_err());
+        let dir = tempfile::tempdir().unwrap();
+        assert!(extract(&patch(zip, b"SKILL.mX", b"SKILL.md", false), dir.path(), &Limits::default()).is_err());
+    }
+
+    #[test]
+    fn rejects_names_that_fold_together() {
+        let e = err(&[Item::File("skills/a/SKILL.md", 0o644, b"s"), Item::File("Skills/a/evil.sh", 0o755, b"x")]);
+        assert!(e.contains("\"Skills/a/evil.sh\" and \"skills\""), "{e}");
+        err(&[Item::File("caf\u{e9}/SKILL.md", 0o644, b"s"), Item::File("cafe\u{301}/x", 0o644, b"x")]);
+        err(&[Item::File("a/SKILL.md", 0o644, b"s"), Item::File("A/SKILL.md", 0o644, b"x")]);
+        err(&[Item::File("a/x", 0o644, b"s"), Item::File("a/x.", 0o644, b"x")]);
+        err(&[Item::File("a/x", 0o644, b"s"), Item::Link("a/X", "x")]);
+        let ok = [Item::File("a/b", 0o644, b"1"), Item::File("a/c", 0o644, b"2"), Item::File("caf\u{e9}", 0o644, b"3")];
+        assert_eq!(try_extract(&ok, Limits::default()).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn rejects_names_windows_cannot_hold() {
+        for name in
+            ["CON", "con.txt", "a/Nul", "LPT1.md", "com9", "aux.tar.gz", "x ", "x.", "a<b", "a>b", "a|b", "a?b", "a*b", "a\"b", "a\tb"]
+        {
+            let e = err(&[Item::File("ok", 0o644, b"1"), Item::File(name, 0o644, b"x")]);
+            assert!(e.contains(&format!("{name:?}")), "{name:?}: {e}");
+        }
+        let e = err(&[Item::File("ok", 0o644, b"1"), Item::File("\x1b[31mred", 0o644, b"x")]);
+        assert!(!e.contains('\x1b'), "{e}");
+        let ok = [Item::File("console.md", 0o644, b"1"), Item::File("com10", 0o644, b"2"), Item::File("a.b/c", 0o644, b"3")];
+        assert!(try_extract(&ok, Limits::default()).is_ok());
+    }
+
+    #[test]
+    fn rejects_special_modes_and_size_lies() {
+        for mode in [0o060644u32, 0o010644, 0o020644] {
+            let mut zip = build(&[Item::File("a", 0o644, b"x")]);
+            central(&mut zip, 0)[38..42].copy_from_slice(&(mode << 16).to_le_bytes());
+            let dir = tempfile::tempdir().unwrap();
+            assert!(extract(&zip, dir.path(), &Limits::default()).is_err(), "{mode:o}");
+        }
+        let mut zip = build(&[Item::File("a", 0o644, &[0u8; 2000])]);
+        central(&mut zip, 0)[24..28].copy_from_slice(&1u32.to_le_bytes());
+        zip[22..26].copy_from_slice(&1u32.to_le_bytes());
+        let dir = tempfile::tempdir().unwrap();
+        // The zip crate stops at the declared size, so the lie is an error before our own budget check.
+        assert!(extract(&zip, dir.path(), &Limits { unpacked: 1000, ..Limits::default() }).is_err());
+        assert!(!dir.path().join("a").exists());
+    }
+
+    #[test]
+    fn links_count_toward_limits() {
+        let items = [Item::File("a", 0o644, &[0u8; 600]), Item::Link("b", "a")];
+        assert!(try_extract(&items, Limits::default()).is_ok());
+        assert!(try_extract(&items, Limits { files: 1, ..Limits::default() }).is_err());
+        let e = try_extract(&items, Limits { unpacked: 1000, ..Limits::default() }).err().unwrap().msg;
+        assert!(e.contains("unpacked size exceeds"), "{e}");
+    }
+
+    #[test]
+    fn resolves_links_to_links_in_any_order() {
+        for reverse in [false, true] {
+            let mut items = vec![Item::Link("CLAUDE.md", "GEMINI.md"), Item::Link("GEMINI.md", "AGENTS.md")];
+            if reverse {
+                items.reverse();
+            }
+            items.insert(1, Item::File("AGENTS.md", 0o644, b"agents"));
+            let dir = tempfile::tempdir().unwrap();
+            let x = extract(&build(&items), dir.path(), &Limits::default()).unwrap();
+            assert_eq!(std::fs::read(dir.path().join("CLAUDE.md")).unwrap(), b"agents", "{reverse}");
+            assert!(bad_link_in(&x.links, "").is_none(), "{reverse}");
+            assert_eq!(x.files.len(), 3);
+        }
+        let cycle = [Item::File("x", 0o644, b"x"), Item::Link("a", "b"), Item::Link("b", "a")];
+        let dir = tempfile::tempdir().unwrap();
+        let x = extract(&build(&cycle), dir.path(), &Limits::default()).unwrap();
+        assert!(bad_link_in(&x.links, "").is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn owner_exec_only_installs_as_755() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let x = extract(&build(&[Item::File("run", 0o100100, b"x")]), dir.path(), &Limits::default()).unwrap();
+        assert!(x.files[0].exec);
+        assert_eq!(std::fs::metadata(dir.path().join("run")).unwrap().permissions().mode() & 0o777, 0o755);
+    }
+
     #[test]
     fn strips_single_top_dir_only() {
         let e = try_extract(
@@ -322,5 +505,7 @@ mod tests {
         let entries = extract(&za, out.path(), &Limits::default()).unwrap().files;
         assert_eq!(tree_hash(&entries), tree_hash(&scan_dir(a.path()).unwrap()));
         assert_eq!(tree_hash(&scan_dir(out.path()).unwrap()), tree_hash(&entries));
+        #[cfg(unix)]
+        assert!(entries.iter().any(|e| e.path == "scripts/run.sh" && e.exec));
     }
 }
