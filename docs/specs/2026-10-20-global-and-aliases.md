@@ -1,6 +1,6 @@
 # Spec: global scope, install aliases, shadow warnings
 
-Date: 2026-10-20. Status: approved, not implemented.
+Date: 2026-10-20. Status: implemented.
 
 ## Problem
 

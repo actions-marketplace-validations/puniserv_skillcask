@@ -61,6 +61,7 @@ byte-identical skills to the ones committed in the lock, or a non-zero exit.
 | D10 | MIT OR Apache-2.0, no telemetry. | Usual Rust dual licence; nothing leaves the machine except registry requests. |
 | D11 | GitHub repositories are a second source (`github = true`), resolved through the GitHub REST API; the lock format is unchanged. | Most public skills (the ones skills.sh lists) live in GitHub repositories without Composer metadata. Pinning the commit sha plus both hashes keeps D6. skills.sh itself is not used: its API needs a Vercel OIDC token. |
 | D12 | Repositories may carry every package inline in `packages.json` (Composer v1/Satis format) instead of `metadata-url`; `publish --inline` writes it, `--dist-url` places the zips. | Private monorepos can then be hosted on GitLab with no new infrastructure: `packages.json` lives in git and is read through the raw files API, zips go to the Generic Package Registry, whose file names cannot contain `/`. One file stays small for a few hundred skills. |
+| D13 | `--global` manages personal skills: store `~/.agents/skills`, links in `~/.claude/skills` etc., manifest and lock in `~/.config/skillcask`; a skill name clash inside one scope is solved with `rename`, a clash across scopes is a warning. | Agents read personal skills from home and skills have no namespaces. The design is in `docs/specs/2026-10-20-global-and-aliases.md`. |
 
 ## Project files
 
@@ -221,6 +222,9 @@ Exit codes: 0 ok; 1 manifest/lock/status problems or drift under `--frozen`; 2 a
   `.agents/skills/<name>` → `../../<local>/<name>`, then the usual target links. All of them are
   committed. When the project skill is deleted, its links are removed on the next `install`. A
   name that is both a project skill and locked is an error.
+- A name clash inside the project (two packages, a project skill, a foreign directory) is an
+  error that names the `rename = { … }` fix; in a terminal `add`, `install` and `update` offer it.
+  A personal skill with the same name (`~/.claude/skills/<name>`) is a warning. See D13.
 - Windows without symlink permission: copy instead of link, and list the copies in the managed
   block.
 
