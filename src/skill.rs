@@ -88,8 +88,20 @@ fn fields<'a>(lines: &[&'a str]) -> Option<Vec<Field<'a>>> {
             let sep = if v.starts_with('|') { "\n" } else { " " };
             value = Some((body..i).filter_map(line).map(str::trim).collect::<Vec<_>>().join(sep));
         } else if !v.starts_with(['"', '\'']) {
-            let cut = v.char_indices().find(|&(n, c)| c == '#' && v[..n].chars().next_back().is_none_or(char::is_whitespace));
-            value = Some(v[..cut.map_or(v.len(), |(n, _)| n)].trim().to_string());
+            let plain = |v: &'a str| {
+                let cut = v.char_indices().find(|&(n, c)| c == '#' && v[..n].chars().next_back().is_none_or(char::is_whitespace));
+                v[..cut.map_or(v.len(), |(n, _)| n)].trim()
+            };
+            // Indented lines continue a plain scalar, folded with spaces, unless they hold a mapping,
+            // a sequence or a comment: then the value is nested.
+            let more: Vec<&str> = (body..i).filter_map(line).map(str::trim).filter(|l| !l.is_empty()).collect();
+            let nested =
+                more.iter().any(|l| l.starts_with('#') || l.starts_with("- ") || *l == "-" || l.contains(": ") || l.ends_with(':'));
+            if !nested {
+                value = Some(
+                    std::iter::once(plain(v)).chain(more.into_iter().map(plain)).filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" "),
+                );
+            }
         }
         out.push(Field { key: key.trim(), value: value.filter(|v| !v.is_empty()), lines: start..i });
     }
@@ -266,6 +278,11 @@ mod tests {
         let f = frontmatter("---\nd1: >-\n  folded\n  text\nd2: |+\n  lit\n  eral\n\nd3: >\nname: n\n---\n");
         assert_eq!((f["d1"].as_str(), f["d2"].as_str(), f["name"].as_str()), ("folded text", "lit\neral", "n"));
         assert!(!f.contains_key("d3"));
+
+        let f =
+            frontmatter("---\ndescription: Reviews code\n  for bugs # c\n\n  and style\nname:\n  one\nmeta:\n  a: b\nlist:\n  - x\n---\n");
+        assert_eq!((f["description"].as_str(), f["name"].as_str()), ("Reviews code for bugs and style", "one"));
+        assert!(!f.contains_key("meta") && !f.contains_key("list"));
     }
 
     #[test]
