@@ -1,6 +1,6 @@
 use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path};
 
 use jiff::Timestamp;
 use sha1::Sha1;
@@ -15,11 +15,12 @@ use crate::lock::{Dist, Lock, LockedSkill, Package};
 use crate::manifest::{self, GitHub, Manifest, Repository, SkillReq};
 use crate::project::{self, LinkState, STORE};
 use crate::registry::{self, Candidate, Registry};
+use crate::scope::Scope;
 use crate::skill::{self, FileEntry};
 use crate::version::{self, Constraint};
 
 pub struct Ctx {
-    pub root: PathBuf,
+    pub s: Scope,
     pub verbose: bool,
     pub limits: Limits,
     http: OnceCell<Http>,
@@ -46,20 +47,20 @@ impl Fetched {
 }
 
 impl Ctx {
-    pub fn new(root: PathBuf, verbose: bool, limits: Limits) -> Ctx {
-        Ctx { root, verbose, limits, http: OnceCell::new() }
+    pub fn new(s: Scope, verbose: bool, limits: Limits) -> Ctx {
+        Ctx { s, verbose, limits, http: OnceCell::new() }
     }
 
     fn http(&self) -> Result<&Http> {
         if let Some(h) = self.http.get() {
             return Ok(h);
         }
-        let h = Http::new(&self.root, self.verbose)?;
+        let h = Http::new(&self.s.config, self.verbose)?;
         Ok(self.http.get_or_init(|| h))
     }
 
     fn manifest_or_default(&self) -> Result<Manifest> {
-        if self.root.join(manifest::FILE).exists() { Manifest::load(&self.root) } else { manifest::parse(manifest::TEMPLATE) }
+        if self.s.config.join(manifest::FILE).exists() { Manifest::load(&self.s.config) } else { manifest::parse(manifest::TEMPLATE) }
     }
 
     fn fetch(&self, name: &str, dist: &Dist, expected: Option<&str>, shasum: Option<&str>) -> Result<(String, Fetched)> {
@@ -82,7 +83,7 @@ impl Ctx {
                 bail!(HASH, "{name}: downloaded archive has sha1 {sha1}, the repository metadata says {s}");
             }
         }
-        let dir = project::temp_dir(&self.root)?;
+        let dir = project::temp_dir(&self.s)?;
         let x = archive::extract(&bytes, dir.path(), &self.limits).ctx(name)?;
         Ok((sha, Fetched { dir, entries: x.files, links: x.links }))
     }
@@ -171,23 +172,23 @@ impl Ctx {
 
     /// Conflicts that would stop `materialize`, checked before `add` writes skills.toml and skills.lock.
     fn preflight(&self, m: &Manifest, lock: &Lock) -> Result<()> {
-        let root = &self.root;
+        let s = &self.s;
         for p in m.targets.iter().map(String::as_str).chain([STORE, ".gitignore"]) {
-            project::no_symlink(root, p)?;
+            project::no_symlink(s, p)?;
         }
-        let old_managed = project::block_managed(root)?;
+        let old_managed = project::block_managed(s)?;
         let locked = locked_names(lock)?;
-        let locals = project::local_names(root, &m.local)?;
+        let locals = project::local_names(s, &m.local)?;
         if let Some(n) = locals.iter().find(|n| locked.contains_key(*n)) {
             bail!(MANIFEST, "skill {n:?} is both a project skill in {} and provided by {}", m.local, locked[n].0.name);
         }
-        for (n, (p, s)) in &locked {
-            let dir = project::store_dir(root, n);
-            if dir.exists() && !old_managed.contains(n) && !installed_ok(root, s) {
+        for (n, (p, sk)) in &locked {
+            let dir = project::store_dir(s, n);
+            if dir.exists() && !old_managed.contains(n) && !installed_ok(s, sk) {
                 bail!(MANIFEST, "{STORE}/{n} exists and is not managed by skillcask, but {} provides a skill with that name", p.name);
             }
             for t in &m.targets {
-                if project::link_state(root, t, STORE, n) == LinkState::Foreign {
+                if project::link_state(s, t, STORE, n) == LinkState::Foreign {
                     bail!(MANIFEST, "{t}/{n} exists and was not created by skillcask; move it away");
                 }
             }
@@ -198,24 +199,24 @@ impl Ctx {
     /// Makes disk match the lock: store, links, gitignore block, git index.
     fn materialize(&self, m: &Manifest, lock: &Lock, mut prepared: HashMap<String, Fetched>) -> Result<()> {
         self.preflight(m, lock)?;
-        let root = &self.root;
-        let old_managed = project::block_managed(root)?;
+        let s = &self.s;
+        let old_managed = project::block_managed(s)?;
         let locked = locked_names(lock)?;
-        let locals = project::local_names(root, &m.local)?;
-        for n in project::stale_local_links(root, &m.local, &locals) {
+        let locals = project::local_names(s, &m.local)?;
+        for n in project::stale_local_links(s, &m.local, &locals) {
             if locked.contains_key(&n) || old_managed.contains(&n) {
                 continue;
             }
             for t in &m.targets {
-                project::unlink(root, t, &n)?;
+                project::unlink(s, t, &n)?;
             }
-            project::unlink(root, STORE, &n)?;
+            project::unlink(s, STORE, &n)?;
         }
-        let hand = hand_written(root, lock, &old_managed, &locals)?;
+        let hand = hand_written(s, lock, &old_managed, &locals)?;
 
-        let mut modes = project::read_modes(root);
+        let mut modes = project::read_modes(s);
         for p in &lock.packages {
-            let need: Vec<&LockedSkill> = p.skills.iter().filter(|s| !installed_ok(root, s)).collect();
+            let need: Vec<&LockedSkill> = p.skills.iter().filter(|sk| !installed_ok(s, sk)).collect();
             if need.is_empty() {
                 continue;
             }
@@ -223,23 +224,30 @@ impl Ctx {
                 Some(f) => f,
                 None => self.fetch(&p.name, &p.dist, Some(&p.dist_sha256), None)?.1,
             };
-            for s in need {
-                let files = f.skill_files(&p.name, &s.name, &s.path)?;
+            for sk in need {
+                let files = f.skill_files(&p.name, &sk.name, &sk.path)?;
                 let got = skill::tree_hash(&files);
-                if got != s.tree_sha256 {
-                    bail!(HASH, "{} {}: skill {} has tree-sha256 {got}, skills.lock expects {}", p.name, p.version, s.name, s.tree_sha256);
+                if got != sk.tree_sha256 {
+                    bail!(
+                        HASH,
+                        "{} {}: skill {} has tree-sha256 {got}, skills.lock expects {}",
+                        p.name,
+                        p.version,
+                        sk.name,
+                        sk.tree_sha256
+                    );
                 }
-                project::place(root, &s.name, &f.dir.path().join(&s.path))?;
-                set_modes(&mut modes, &s.name, &files);
-                println!("installed {} ({} {})", s.name, p.name, p.version);
+                project::place(s, &sk.name, &f.dir.path().join(&sk.path))?;
+                set_modes(&mut modes, &sk.name, &files);
+                println!("installed {} ({} {})", sk.name, p.name, p.version);
             }
         }
 
         for n in old_managed.iter().filter(|n| !locked.contains_key(*n)) {
             for t in &m.targets {
-                project::unlink(root, t, n)?;
+                project::unlink(s, t, n)?;
             }
-            let dir = project::store_dir(root, n);
+            let dir = project::store_dir(s, n);
             if dir.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
                 std::fs::remove_file(&dir)?;
             } else if dir.is_dir() {
@@ -248,20 +256,20 @@ impl Ctx {
             set_modes(&mut modes, n, &[]);
             println!("removed {n}");
         }
-        project::write_modes(root, &modes)?;
+        project::write_modes(s, &modes)?;
 
         let mut copies = BTreeSet::new();
         for (at, source, n) in link_plan(m, &locked, &hand, &locals) {
-            if project::link(root, &at, source, &n)? && !locked.contains_key(&n) {
+            if project::link(s, &at, source, &n)? && !locked.contains_key(&n) {
                 copies.insert(format!("/{at}/{n}"));
             }
         }
         let managed: BTreeSet<String> = locked.keys().cloned().collect();
-        project::write_block(root, &project::block_lines(&managed, &m.targets, &copies))?;
+        project::write_block(s, &project::block_lines(&managed, &m.targets, &copies))?;
 
-        let tracked = project::git_tracked(root, &managed_paths(&managed, &m.targets));
+        let tracked = project::git_tracked(s, &managed_paths(&managed, &m.targets));
         if !tracked.is_empty() {
-            project::git_untrack(root, &tracked)?;
+            project::git_untrack(s, &tracked)?;
             eprintln!("warning: removed managed paths from the git index (files kept): {}", tracked.join(", "));
         }
         Ok(())
@@ -278,9 +286,9 @@ fn locked_names(lock: &Lock) -> Result<BTreeMap<String, (&Package, &LockedSkill)
     Ok(out)
 }
 
-fn hand_written(root: &Path, lock: &Lock, old_managed: &BTreeSet<String>, locals: &BTreeSet<String>) -> Result<BTreeSet<String>> {
+fn hand_written(s: &Scope, lock: &Lock, old_managed: &BTreeSet<String>, locals: &BTreeSet<String>) -> Result<BTreeSet<String>> {
     let locked: BTreeSet<&str> = lock.skills().map(|(_, s)| s.name.as_str()).collect();
-    Ok(project::store_names(root)?
+    Ok(project::store_names(s)?
         .into_iter()
         .filter(|n| !locked.contains(n.as_str()) && !old_managed.contains(n) && !locals.contains(n))
         .collect())
@@ -301,15 +309,15 @@ fn link_plan<'a>(
     plan
 }
 
-fn installed_ok(root: &Path, s: &LockedSkill) -> bool {
-    tree_on_disk(root, &s.name).is_some_and(|h| h == s.tree_sha256)
+fn installed_ok(s: &Scope, sk: &LockedSkill) -> bool {
+    tree_on_disk(s, &sk.name).is_some_and(|h| h == sk.tree_sha256)
 }
 
-fn tree_on_disk(root: &Path, name: &str) -> Option<String> {
-    let dir = project::store_dir(root, name);
+fn tree_on_disk(s: &Scope, name: &str) -> Option<String> {
+    let dir = project::store_dir(s, name);
     let mut entries = skill::scan_dir(&dir).ok().filter(|_| dir.is_dir())?;
     if !cfg!(unix) {
-        let modes = project::read_modes(root);
+        let modes = project::read_modes(s);
         for e in &mut entries {
             e.exec = modes.contains(&format!("{name}/{}", e.path));
         }
@@ -372,7 +380,7 @@ fn source_changed(m: &Manifest, req: &SkillReq, p: &Package) -> bool {
 }
 
 pub fn init(ctx: &Ctx) -> Result<()> {
-    let path = ctx.root.join(manifest::FILE);
+    let path = ctx.s.config.join(manifest::FILE);
     if path.exists() {
         bail!(MANIFEST, "{} already exists", manifest::FILE);
     }
@@ -395,7 +403,7 @@ pub fn add(ctx: &Ctx, spec: &str, repository: Option<String>) -> Result<()> {
     if !manifest::valid_package_name(&name) {
         bail!(MANIFEST, "{name:?} is not a valid package name (vendor/name, lowercase)");
     }
-    let existed = ctx.root.join(manifest::FILE).exists();
+    let existed = ctx.s.config.join(manifest::FILE).exists();
     let m = ctx.manifest_or_default()?;
     if let Some(r) = &repository
         && m.repository(r).is_none()
@@ -441,7 +449,7 @@ fn add_github(ctx: &Ctx, spec: &str) -> Result<()> {
     {
         bail!(MANIFEST, "{s:?} is not a valid skill name ([a-z0-9][a-z0-9-]*)");
     }
-    let existed = ctx.root.join(manifest::FILE).exists();
+    let existed = ctx.s.config.join(manifest::FILE).exists();
     let m = ctx.manifest_or_default()?;
     let existing = m.skill(&name).filter(|e| e.github.is_some()).cloned();
     let skills = match (skill, existing.as_ref().map(|e| e.skills.clone())) {
@@ -485,36 +493,36 @@ fn add_github(ctx: &Ctx, spec: &str) -> Result<()> {
 fn finish_add(ctx: &Ctx, existed: bool, m: &Manifest, req: &SkillReq, repo: &Repository, c: &Candidate) -> Result<()> {
     let mut prepared = HashMap::new();
     let pkg = ctx.lock_candidate(req, repo, c, &mut prepared)?;
-    let mut lock = Lock::load(&ctx.root)?;
+    let mut lock = Lock::load(&ctx.s.config)?;
     lock.upsert(pkg);
     ctx.preflight(m, &lock)?;
 
     if !existed {
-        std::fs::write(ctx.root.join(manifest::FILE), manifest::TEMPLATE)?;
+        std::fs::write(ctx.s.config.join(manifest::FILE), manifest::TEMPLATE)?;
     }
-    manifest::write_skill(&ctx.root, req)?;
-    lock.save(&ctx.root)?;
+    manifest::write_skill(&ctx.s.config, req)?;
+    lock.save(&ctx.s.config)?;
     println!("added {} = {:?} ({})", req.name, req.constraint, c.version);
-    ctx.materialize(&Manifest::load(&ctx.root)?, &lock, prepared)
+    ctx.materialize(&Manifest::load(&ctx.s.config)?, &lock, prepared)
 }
 
 pub fn remove(ctx: &Ctx, names: &[String]) -> Result<()> {
-    let m = Manifest::load(&ctx.root)?;
-    let mut lock = Lock::load(&ctx.root)?;
+    let m = Manifest::load(&ctx.s.config)?;
+    let mut lock = Lock::load(&ctx.s.config)?;
     for n in names {
         if m.skill(n).is_none() && lock.get(n).is_none() {
             bail!(MANIFEST, "{n} is not in {} or {}", manifest::FILE, crate::lock::FILE);
         }
     }
-    manifest::remove_skills(&ctx.root, names)?;
+    manifest::remove_skills(&ctx.s.config, names)?;
     lock.packages.retain(|p| !names.contains(&p.name));
-    lock.save(&ctx.root)?;
-    ctx.materialize(&Manifest::load(&ctx.root)?, &lock, HashMap::new())
+    lock.save(&ctx.s.config)?;
+    ctx.materialize(&Manifest::load(&ctx.s.config)?, &lock, HashMap::new())
 }
 
 pub fn install(ctx: &Ctx, frozen: bool) -> Result<()> {
-    let m = Manifest::load(&ctx.root)?;
-    let mut lock = Lock::load(&ctx.root)?;
+    let m = Manifest::load(&ctx.s.config)?;
+    let mut lock = Lock::load(&ctx.s.config)?;
     let (needs, stale, why) = reconcile(&m, &lock);
     let mut prepared = HashMap::new();
     if !why.is_empty() {
@@ -530,14 +538,14 @@ pub fn install(ctx: &Ctx, frozen: bool) -> Result<()> {
         }
         lock.packages.retain(|p| !stale.contains(&p.name));
         locked_names(&lock)?;
-        lock.save(&ctx.root)?;
+        lock.save(&ctx.s.config)?;
     }
     ctx.materialize(&m, &lock, prepared)
 }
 
 pub fn update(ctx: &Ctx, names: &[String]) -> Result<()> {
-    let m = Manifest::load(&ctx.root)?;
-    let mut lock = Lock::load(&ctx.root)?;
+    let m = Manifest::load(&ctx.s.config)?;
+    let mut lock = Lock::load(&ctx.s.config)?;
     for n in names {
         if m.skill(n).is_none() {
             bail!(MANIFEST, "{n} is not in {}", manifest::FILE);
@@ -556,13 +564,13 @@ pub fn update(ctx: &Ctx, names: &[String]) -> Result<()> {
     let (_, stale, _) = reconcile(&m, &lock);
     lock.packages.retain(|p| !stale.contains(&p.name));
     locked_names(&lock)?;
-    lock.save(&ctx.root)?;
+    lock.save(&ctx.s.config)?;
     ctx.materialize(&m, &lock, prepared)
 }
 
 pub fn outdated(ctx: &Ctx) -> Result<()> {
-    let m = Manifest::load(&ctx.root)?;
-    let lock = Lock::load(&ctx.root)?;
+    let m = Manifest::load(&ctx.s.config)?;
+    let lock = Lock::load(&ctx.s.config)?;
     let reg = Registry::new(ctx.http()?);
     let now = Timestamp::now();
     let mut rows = vec![["package", "locked", "within constraint", "latest", "note"].map(String::from)];
@@ -591,8 +599,8 @@ pub fn outdated(ctx: &Ctx) -> Result<()> {
 }
 
 pub fn status(ctx: &Ctx) -> Result<()> {
-    let m = Manifest::load(&ctx.root)?;
-    let lock = Lock::load(&ctx.root)?;
+    let m = Manifest::load(&ctx.s.config)?;
+    let lock = Lock::load(&ctx.s.config)?;
     let mut rows = vec![["package", "version", "skill", "state"].map(String::from)];
     let mut bad = 0;
     let mut row = |rows: &mut Vec<[String; 4]>, p: &str, v: &str, s: &str, state: &str| {
@@ -607,7 +615,7 @@ pub fn status(ctx: &Ctx) -> Result<()> {
             Some(p) if p.constraint != req.constraint => row(&mut rows, &req.name, &p.version, "-", "constraint changed"),
             Some(p) => {
                 for s in &p.skills {
-                    let state = match tree_on_disk(&ctx.root, &s.name) {
+                    let state = match tree_on_disk(&ctx.s, &s.name) {
                         None => "not installed",
                         Some(h) if h != s.tree_sha256 => "modified",
                         Some(_) => "ok",
@@ -620,12 +628,12 @@ pub fn status(ctx: &Ctx) -> Result<()> {
     for p in lock.packages.iter().filter(|p| m.skill(&p.name).is_none()) {
         row(&mut rows, &p.name, &p.version, "-", "not in skills.toml");
     }
-    let locals = project::local_names(&ctx.root, &m.local)?;
-    for h in hand_written(&ctx.root, &lock, &project::block_managed(&ctx.root)?, &locals)? {
+    let locals = project::local_names(&ctx.s, &m.local)?;
+    for h in hand_written(&ctx.s, &lock, &project::block_managed(&ctx.s)?, &locals)? {
         row(&mut rows, "-", "-", &h, "hand-written");
     }
     for l in &locals {
-        let state = if project::link_state(&ctx.root, STORE, &m.local, l) == LinkState::Ok { "project" } else { "not linked" };
+        let state = if project::link_state(&ctx.s, STORE, &m.local, l) == LinkState::Ok { "project" } else { "not linked" };
         row(&mut rows, "-", "-", l, state);
     }
     print_table(&rows);
@@ -636,42 +644,42 @@ pub fn status(ctx: &Ctx) -> Result<()> {
 }
 
 pub fn doctor(ctx: &Ctx, fix: bool) -> Result<()> {
-    let root = &ctx.root;
-    let m = Manifest::load(root)?;
-    let lock = Lock::load(root)?;
+    let s = &ctx.s;
+    let m = Manifest::load(&s.config)?;
+    let lock = Lock::load(&s.config)?;
     for p in m.targets.iter().map(String::as_str).chain([STORE, ".gitignore"]) {
-        project::no_symlink(root, p)?;
+        project::no_symlink(s, p)?;
     }
     let locked = locked_names(&lock)?;
-    let locals = project::local_names(root, &m.local)?;
-    let hand = hand_written(root, &lock, &project::block_managed(root)?, &locals)?;
+    let locals = project::local_names(s, &m.local)?;
+    let hand = hand_written(s, &lock, &project::block_managed(s)?, &locals)?;
     let mut open = Vec::new();
     let mut fixed = Vec::new();
 
     let mut copies = BTreeSet::new();
     for (at, source, n) in link_plan(&m, &locked, &hand, &locals) {
-        let state = project::link_state(root, &at, source, &n);
+        let state = project::link_state(s, &at, source, &n);
         let what = format!("{at}/{n}: link {}", format!("{state:?}").to_lowercase());
         if state != LinkState::Ok {
-            if fix && root.join(source).join(&n).is_dir() && state != LinkState::Foreign {
-                project::link(root, &at, source, &n)?;
+            if fix && s.root.join(source).join(&n).is_dir() && state != LinkState::Foreign {
+                project::link(s, &at, source, &n)?;
                 fixed.push(what);
             } else {
                 open.push(what);
             }
         }
-        let p = root.join(&at).join(&n);
+        let p = s.root.join(&at).join(&n);
         if !locked.contains_key(&n) && p.symlink_metadata().is_ok_and(|m| m.is_dir()) {
             copies.insert(format!("/{at}/{n}"));
         }
     }
 
     let managed: BTreeSet<String> = locked.keys().cloned().collect();
-    let tracked = project::git_tracked(root, &managed_paths(&managed, &m.targets));
+    let tracked = project::git_tracked(s, &managed_paths(&managed, &m.targets));
     if !tracked.is_empty() {
         let what = format!("managed paths committed to git: {}", tracked.join(", "));
         if fix {
-            project::git_untrack(root, &tracked)?;
+            project::git_untrack(s, &tracked)?;
             fixed.push(what);
         } else {
             open.push(what);
@@ -679,19 +687,19 @@ pub fn doctor(ctx: &Ctx, fix: bool) -> Result<()> {
     }
 
     let lines = project::block_lines(&managed, &m.targets, &copies);
-    if project::read_block(root)? != lines {
+    if project::read_block(s)? != lines {
         if fix {
-            project::write_block(root, &lines)?;
+            project::write_block(s, &lines)?;
             fixed.push(".gitignore: stale managed block".into());
         } else {
             open.push(".gitignore: stale managed block".into());
         }
     }
 
-    for (n, (p, s)) in &locked {
-        match tree_on_disk(root, n) {
+    for (n, (p, sk)) in &locked {
+        match tree_on_disk(s, n) {
             None => open.push(format!("{STORE}/{n}: not installed ({}); run `skillcask install`", p.name)),
-            Some(h) if h != s.tree_sha256 => open.push(format!("{STORE}/{n}: modified ({}); run `skillcask install` to restore", p.name)),
+            Some(h) if h != sk.tree_sha256 => open.push(format!("{STORE}/{n}: modified ({}); run `skillcask install` to restore", p.name)),
             Some(_) => {}
         }
     }

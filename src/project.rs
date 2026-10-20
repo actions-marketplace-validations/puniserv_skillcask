@@ -6,6 +6,7 @@ use std::process::Command;
 
 use crate::bail;
 use crate::error::{IO, MANIFEST, Result};
+use crate::scope::Scope;
 use crate::skill::SKILL_MD;
 
 pub const STORE: &str = ".agents/skills";
@@ -22,14 +23,14 @@ pub fn find_root() -> Result<PathBuf> {
     Ok(cwd.ancestors().find(|d| d.join(crate::manifest::FILE).is_file()).unwrap_or(&cwd).to_path_buf())
 }
 
-pub fn store_dir(root: &Path, name: &str) -> PathBuf {
-    root.join(STORE).join(name)
+pub fn store_dir(s: &Scope, name: &str) -> PathBuf {
+    s.root.join(STORE).join(name)
 }
 
 /// Skill directories in the store, excluding temp dirs.
-pub fn store_names(root: &Path) -> Result<Vec<String>> {
+pub fn store_names(s: &Scope) -> Result<Vec<String>> {
     let mut out = Vec::new();
-    match std::fs::read_dir(root.join(STORE)) {
+    match std::fs::read_dir(s.root.join(STORE)) {
         Ok(rd) => {
             for e in rd {
                 let e = e?;
@@ -48,15 +49,15 @@ pub fn store_names(root: &Path) -> Result<Vec<String>> {
 
 /// Refuses when `sub` or any of its parents below `root` is a symlink. A repository can commit
 /// `.agents/skills -> ~/.config`, and skillcask would then write and delete outside the project.
-pub fn no_symlink(root: &Path, sub: &str) -> Result<()> {
-    let mut p = root.to_path_buf();
+pub fn no_symlink(s: &Scope, sub: &str) -> Result<()> {
+    let mut p = s.root.to_path_buf();
     for c in Path::new(sub).components() {
         p.push(c);
         if p.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
             bail!(
                 MANIFEST,
                 "{} is a symlink; skillcask only writes inside the project, replace it with a real file or directory",
-                rel(root, &p)
+                rel(&s.root, &p)
             );
         }
     }
@@ -64,19 +65,19 @@ pub fn no_symlink(root: &Path, sub: &str) -> Result<()> {
 }
 
 /// A sibling temp dir in the store, so the final rename stays on one filesystem.
-pub fn temp_dir(root: &Path) -> Result<tempfile::TempDir> {
-    no_symlink(root, STORE)?;
-    let store = root.join(STORE);
+pub fn temp_dir(s: &Scope) -> Result<tempfile::TempDir> {
+    no_symlink(s, STORE)?;
+    let store = s.root.join(STORE);
     std::fs::create_dir_all(&store)?;
     Ok(tempfile::Builder::new().prefix(".skillcask-tmp-").tempdir_in(store)?)
 }
 
 /// Copies `src` into a fresh temp dir, then swaps it into the store by rename.
-pub fn place(root: &Path, name: &str, src: &Path) -> Result<()> {
-    let staged = temp_dir(root)?;
+pub fn place(s: &Scope, name: &str, src: &Path) -> Result<()> {
+    let staged = temp_dir(s)?;
     copy_dir(src, staged.path())?;
-    let dest = store_dir(root, name);
-    let old = root.join(STORE).join(format!(".skillcask-old-{name}-{}", std::process::id()));
+    let dest = store_dir(s, name);
+    let old = s.root.join(STORE).join(format!(".skillcask-old-{name}-{}", std::process::id()));
     if dest.exists() {
         std::fs::rename(&dest, &old)?;
     }
@@ -110,7 +111,7 @@ pub fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
 
 /// Relative link from `<at>/<name>` to `<source>/<name>`, e.g. `../../.agents/skills/<name>` for
 /// `.claude/skills`. Built segment by segment: Windows does not resolve `/` in link targets.
-pub fn link_target(at: &str, source: &str, name: &str) -> PathBuf {
+pub fn link_target(_s: &Scope, at: &str, source: &str, name: &str) -> PathBuf {
     let depth = Path::new(at).components().count();
     let mut p: PathBuf = std::iter::repeat_n("..", depth).collect();
     p.extend(source.split('/'));
@@ -128,11 +129,11 @@ pub enum LinkState {
     Foreign,
 }
 
-pub fn link_state(root: &Path, at: &str, source: &str, name: &str) -> LinkState {
-    let path = root.join(at).join(name);
+pub fn link_state(s: &Scope, at: &str, source: &str, name: &str) -> LinkState {
+    let path = s.root.join(at).join(name);
     let Ok(meta) = path.symlink_metadata() else { return LinkState::Missing };
     if meta.file_type().is_symlink() {
-        let ok = std::fs::read_link(&path).is_ok_and(|t| t == link_target(at, source, name)) && path.join(SKILL_MD).is_file();
+        let ok = std::fs::read_link(&path).is_ok_and(|t| t == link_target(s, at, source, name)) && path.join(SKILL_MD).is_file();
         return if ok { LinkState::Ok } else { LinkState::Wrong };
     }
     if meta.is_dir() && path.join(COPY_MARKER).is_file() {
@@ -142,7 +143,7 @@ pub fn link_state(root: &Path, at: &str, source: &str, name: &str) -> LinkState 
                 crate::skill::tree_hash(&e)
             })
         };
-        let fresh = hash(&root.join(source).join(name));
+        let fresh = hash(&s.root.join(source).join(name));
         return if fresh.is_some() && fresh == hash(&path) { LinkState::Ok } else { LinkState::Wrong };
     }
     LinkState::Foreign
@@ -154,31 +155,31 @@ fn force_copy() -> bool {
 
 /// Creates or repairs `<at>/<name>` pointing to `<source>/<name>`. Returns true when a copy was
 /// made instead of a link.
-pub fn link(root: &Path, at: &str, source: &str, name: &str) -> Result<bool> {
-    let path = root.join(at).join(name);
-    match link_state(root, at, source, name) {
+pub fn link(s: &Scope, at: &str, source: &str, name: &str) -> Result<bool> {
+    let path = s.root.join(at).join(name);
+    match link_state(s, at, source, name) {
         LinkState::Ok => return Ok(path.symlink_metadata().is_ok_and(|m| !m.file_type().is_symlink())),
-        LinkState::Foreign => bail!(MANIFEST, "{} exists and was not created by skillcask; move it away", rel(root, &path)),
-        LinkState::Wrong => unlink(root, at, name)?,
+        LinkState::Foreign => bail!(MANIFEST, "{} exists and was not created by skillcask; move it away", rel(&s.root, &path)),
+        LinkState::Wrong => unlink(s, at, name)?,
         LinkState::Missing => {}
     }
-    std::fs::create_dir_all(root.join(at))?;
+    std::fs::create_dir_all(s.root.join(at))?;
     if !force_copy() {
-        match symlink(&link_target(at, source, name), &path) {
+        match symlink(&link_target(s, at, source, name), &path) {
             Ok(()) => return Ok(false),
             Err(e) if !cfg!(windows) => return Err(e.into()),
             Err(_) => {}
         }
     }
-    copy_dir(&root.join(source).join(name), &path)?;
+    copy_dir(&s.root.join(source).join(name), &path)?;
     std::fs::write(path.join(COPY_MARKER), "")?;
     Ok(true)
 }
 
 /// Project skills: directories with a SKILL.md under `local` (default `.skills`).
-pub fn local_names(root: &Path, local: &str) -> Result<BTreeSet<String>> {
+pub fn local_names(s: &Scope, local: &str) -> Result<BTreeSet<String>> {
     let mut out = BTreeSet::new();
-    let Ok(rd) = std::fs::read_dir(root.join(local)) else { return Ok(out) };
+    let Ok(rd) = std::fs::read_dir(s.root.join(local)) else { return Ok(out) };
     for e in rd {
         let e = e?;
         let name = e.file_name().to_string_lossy().into_owned();
@@ -194,13 +195,13 @@ pub fn local_names(root: &Path, local: &str) -> Result<BTreeSet<String>> {
 }
 
 /// Store links (or copies) of project skills that are gone from `local`.
-pub fn stale_local_links(root: &Path, local: &str, live: &BTreeSet<String>) -> Vec<String> {
-    let Ok(rd) = std::fs::read_dir(root.join(STORE)) else { return Vec::new() };
+pub fn stale_local_links(s: &Scope, local: &str, live: &BTreeSet<String>) -> Vec<String> {
+    let Ok(rd) = std::fs::read_dir(s.root.join(STORE)) else { return Vec::new() };
     rd.flatten()
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
-            let is_ours =
-                std::fs::read_link(e.path()).is_ok_and(|t| t == link_target(STORE, local, &name)) || e.path().join(COPY_MARKER).is_file();
+            let is_ours = std::fs::read_link(e.path()).is_ok_and(|t| t == link_target(s, STORE, local, &name))
+                || e.path().join(COPY_MARKER).is_file();
             (is_ours && !live.contains(&name)).then_some(name)
         })
         .collect()
@@ -217,8 +218,8 @@ fn symlink(target: &Path, at: &Path) -> std::io::Result<()> {
 }
 
 /// Removes a link or a copy made by skillcask; leaves anything else alone.
-pub fn unlink(root: &Path, at: &str, name: &str) -> Result<()> {
-    let path = root.join(at).join(name);
+pub fn unlink(s: &Scope, at: &str, name: &str) -> Result<()> {
+    let path = s.root.join(at).join(name);
     let Ok(meta) = path.symlink_metadata() else { return Ok(()) };
     if meta.file_type().is_symlink() {
         std::fs::remove_file(&path).or_else(|_| std::fs::remove_dir(&path))?;
@@ -248,16 +249,16 @@ pub fn block_lines(managed: &BTreeSet<String>, targets: &[String], copies: &BTre
     lines.into_iter().collect()
 }
 
-pub fn read_modes(root: &Path) -> BTreeSet<String> {
-    std::fs::read_to_string(root.join(STORE).join(MODES)).unwrap_or_default().lines().map(String::from).collect()
+pub fn read_modes(s: &Scope) -> BTreeSet<String> {
+    std::fs::read_to_string(s.root.join(STORE).join(MODES)).unwrap_or_default().lines().map(String::from).collect()
 }
 
 /// Only written where the filesystem cannot keep exec bits itself.
-pub fn write_modes(root: &Path, modes: &BTreeSet<String>) -> Result<()> {
+pub fn write_modes(s: &Scope, modes: &BTreeSet<String>) -> Result<()> {
     if cfg!(unix) {
         return Ok(());
     }
-    let path = root.join(STORE).join(MODES);
+    let path = s.root.join(STORE).join(MODES);
     if modes.is_empty() {
         if path.exists() {
             std::fs::remove_file(path)?;
@@ -279,8 +280,8 @@ struct Gitignore {
     block: Vec<String>,
 }
 
-fn read_gitignore(root: &Path) -> Result<Gitignore> {
-    let text = std::fs::read_to_string(root.join(".gitignore")).unwrap_or_default();
+fn read_gitignore(s: &Scope) -> Result<Gitignore> {
+    let text = std::fs::read_to_string(s.root.join(".gitignore")).unwrap_or_default();
     let (mut kept, mut block) = (Vec::new(), Vec::new());
     let mut inside = false;
     let mut at = None;
@@ -306,15 +307,15 @@ fn read_gitignore(root: &Path) -> Result<Gitignore> {
     Ok(Gitignore { text, kept, at, block })
 }
 
-pub fn read_block(root: &Path) -> Result<Vec<String>> {
-    Ok(read_gitignore(root)?.block)
+pub fn read_block(s: &Scope) -> Result<Vec<String>> {
+    Ok(read_gitignore(s)?.block)
 }
 
 /// Skill names that the current block marks as managed.
-pub fn block_managed(root: &Path) -> Result<BTreeSet<String>> {
+pub fn block_managed(s: &Scope) -> Result<BTreeSet<String>> {
     let prefix = format!("/{STORE}/");
     // The block is user-editable; only plain skill names may reach remove_dir_all.
-    Ok(read_block(root)?
+    Ok(read_block(s)?
         .iter()
         .filter_map(|l| l.strip_prefix(&prefix)?.strip_suffix('/'))
         .filter(|n| crate::skill::valid_name(n))
@@ -323,10 +324,10 @@ pub fn block_managed(root: &Path) -> Result<BTreeSet<String>> {
 }
 
 /// Rewrites the block in place (or appends it); drops it when empty. Returns true if the file changed.
-pub fn write_block(root: &Path, lines: &[String]) -> Result<bool> {
-    no_symlink(root, ".gitignore")?;
-    let path = root.join(".gitignore");
-    let Gitignore { text, mut kept, at, .. } = read_gitignore(root)?;
+pub fn write_block(s: &Scope, lines: &[String]) -> Result<bool> {
+    no_symlink(s, ".gitignore")?;
+    let path = s.root.join(".gitignore");
+    let Gitignore { text, mut kept, at, .. } = read_gitignore(s)?;
     let mut block = Vec::new();
     if !lines.is_empty() {
         block.push(BEGIN.to_string());
@@ -355,11 +356,11 @@ pub fn write_block(root: &Path, lines: &[String]) -> Result<bool> {
 }
 
 /// Tracked paths among `paths` (relative, `/`-separated). Empty outside a git work tree.
-pub fn git_tracked(root: &Path, paths: &[String]) -> Vec<String> {
+pub fn git_tracked(s: &Scope, paths: &[String]) -> Vec<String> {
     if paths.is_empty() {
         return Vec::new();
     }
-    let out = Command::new("git").arg("-C").arg(root).args(["ls-files", "-z", "--"]).args(paths).output();
+    let out = Command::new("git").arg("-C").arg(&s.root).args(["ls-files", "-z", "--"]).args(paths).output();
     match out {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).split('\0').filter(|s| !s.is_empty()).map(String::from).collect(),
         _ => Vec::new(),
@@ -367,11 +368,11 @@ pub fn git_tracked(root: &Path, paths: &[String]) -> Vec<String> {
 }
 
 /// `git rm --cached`: drops paths from the index, never from the working tree.
-pub fn git_untrack(root: &Path, paths: &[String]) -> Result<()> {
+pub fn git_untrack(s: &Scope, paths: &[String]) -> Result<()> {
     if paths.is_empty() {
         return Ok(());
     }
-    let st = Command::new("git").arg("-C").arg(root).args(["rm", "--cached", "-r", "-q", "--"]).args(paths).status()?;
+    let st = Command::new("git").arg("-C").arg(&s.root).args(["rm", "--cached", "-r", "-q", "--"]).args(paths).status()?;
     if !st.success() {
         bail!(IO, "git rm --cached failed for {}", paths.join(", "));
     }
@@ -384,19 +385,21 @@ mod tests {
 
     #[test]
     fn relative_link_target() {
-        assert_eq!(link_target(".claude/skills", STORE, "x"), Path::new("../../.agents/skills/x"));
-        assert_eq!(link_target("skills", STORE, "x"), Path::new("../.agents/skills/x"));
-        assert_eq!(link_target(STORE, ".skills", "x"), Path::new("../../.skills/x"));
+        let s = Scope::project(PathBuf::new());
+        assert_eq!(link_target(&s, ".claude/skills", STORE, "x"), Path::new("../../.agents/skills/x"));
+        assert_eq!(link_target(&s, "skills", STORE, "x"), Path::new("../.agents/skills/x"));
+        assert_eq!(link_target(&s, STORE, ".skills", "x"), Path::new("../../.skills/x"));
     }
 
     #[test]
     fn gitignore_block_rewrite() {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
+        let s = Scope::project(dir.path().to_path_buf());
+        let root = &s.root;
         std::fs::write(root.join(".gitignore"), "/target\n").unwrap();
         let managed: BTreeSet<String> = ["b".to_string(), "a".to_string()].into();
         let lines = block_lines(&managed, &[".claude/skills".into()], &BTreeSet::new());
-        assert!(write_block(root, &lines).unwrap());
+        assert!(write_block(&s, &lines).unwrap());
         let text = std::fs::read_to_string(root.join(".gitignore")).unwrap();
         assert_eq!(
             text,
@@ -404,17 +407,17 @@ mod tests {
                 "/target\n\n{BEGIN}\n/.agents/skills/.skillcask-modes\n/.agents/skills/a/\n/.agents/skills/b/\n/.claude/skills/a\n/.claude/skills/b\n{END}\n"
             )
         );
-        assert!(!write_block(root, &lines).unwrap());
-        assert_eq!(block_managed(root).unwrap(), managed);
+        assert!(!write_block(&s, &lines).unwrap());
+        assert_eq!(block_managed(&s).unwrap(), managed);
         std::fs::write(root.join(".gitignore"), format!("{BEGIN}\n/.agents/skills/../../home/\n/.agents/skills/ok/\n{END}\n")).unwrap();
-        assert_eq!(block_managed(root).unwrap(), BTreeSet::from(["ok".to_string()]), "traversal in the editable block is ignored");
+        assert_eq!(block_managed(&s).unwrap(), BTreeSet::from(["ok".to_string()]), "traversal in the editable block is ignored");
         std::fs::write(root.join(".gitignore"), &text).unwrap();
 
         std::fs::write(root.join(".gitignore"), format!("{text}/after\n")).unwrap();
-        write_block(root, &lines[1..2]).unwrap();
+        write_block(&s, &lines[1..2]).unwrap();
         let text = std::fs::read_to_string(root.join(".gitignore")).unwrap();
         assert_eq!(text, format!("/target\n\n{BEGIN}\n/.agents/skills/a/\n{END}\n/after\n"));
-        write_block(root, &[]).unwrap();
+        write_block(&s, &[]).unwrap();
         assert_eq!(std::fs::read_to_string(root.join(".gitignore")).unwrap(), "/target\n\n/after\n");
     }
 
@@ -422,16 +425,17 @@ mod tests {
     #[test]
     fn links_and_refuses_foreign() {
         let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        std::fs::create_dir_all(store_dir(root, "x")).unwrap();
-        std::fs::write(store_dir(root, "x").join(SKILL_MD), "s").unwrap();
-        assert_eq!(link_state(root, ".claude/skills", STORE, "x"), LinkState::Missing);
-        assert!(!link(root, ".claude/skills", STORE, "x").unwrap());
-        assert_eq!(link_state(root, ".claude/skills", STORE, "x"), LinkState::Ok);
+        let s = Scope::project(dir.path().to_path_buf());
+        let root = &s.root;
+        std::fs::create_dir_all(store_dir(&s, "x")).unwrap();
+        std::fs::write(store_dir(&s, "x").join(SKILL_MD), "s").unwrap();
+        assert_eq!(link_state(&s, ".claude/skills", STORE, "x"), LinkState::Missing);
+        assert!(!link(&s, ".claude/skills", STORE, "x").unwrap());
+        assert_eq!(link_state(&s, ".claude/skills", STORE, "x"), LinkState::Ok);
         assert_eq!(std::fs::read_to_string(root.join(".claude/skills/x/SKILL.md")).unwrap(), "s");
         std::fs::create_dir_all(root.join(".junie/skills/x")).unwrap();
-        assert!(link(root, ".junie/skills", STORE, "x").is_err());
-        unlink(root, ".claude/skills", "x").unwrap();
-        assert_eq!(link_state(root, ".claude/skills", STORE, "x"), LinkState::Missing);
+        assert!(link(&s, ".junie/skills", STORE, "x").is_err());
+        unlink(&s, ".claude/skills", "x").unwrap();
+        assert_eq!(link_state(&s, ".claude/skills", STORE, "x"), LinkState::Missing);
     }
 }

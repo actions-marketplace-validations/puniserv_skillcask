@@ -8,6 +8,7 @@ mod manifest;
 mod project;
 mod publish;
 mod registry;
+mod scope;
 mod skill;
 mod version;
 
@@ -19,6 +20,7 @@ use clap::{Parser, Subcommand};
 use crate::archive::Limits;
 use crate::commands::Ctx;
 use crate::error::{Error, MANIFEST};
+use crate::scope::Scope;
 
 const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), " (", env!("SKILLCASK_COMMIT"), ")");
 
@@ -130,7 +132,7 @@ fn run(cli: Cli) -> Result<(), Error> {
         Cmd::Init | Cmd::Publish { .. } => std::env::current_dir()?,
         _ => project::find_root()?,
     };
-    let ctx = Ctx::new(root, cli.verbose, limits);
+    let ctx = Ctx::new(Scope::project(root), cli.verbose, limits);
     match cli.cmd {
         Cmd::Init => commands::init(&ctx),
         Cmd::Add { package, repository } => commands::add(&ctx, &package, repository),

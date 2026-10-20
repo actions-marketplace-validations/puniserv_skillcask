@@ -38,7 +38,7 @@ impl Cred {
 struct Auth(Vec<(String, Cred)>);
 
 impl Auth {
-    fn load(root: &Path) -> Result<Auth> {
+    fn load(config: &Path) -> Result<Auth> {
         let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from);
         let composer_home = std::env::var_os("COMPOSER_HOME").map(PathBuf::from);
         let global = match (composer_home, home) {
@@ -50,7 +50,7 @@ impl Auth {
         if let Ok(env) = std::env::var("COMPOSER_AUTH") {
             auth.add(&env, "COMPOSER_AUTH")?;
         }
-        for path in std::iter::once(root.join("auth.json")).chain(global) {
+        for path in std::iter::once(config.join("auth.json")).chain(global) {
             match std::fs::read_to_string(&path) {
                 Ok(text) => auth.add(&text, &path.display().to_string())?,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -120,7 +120,7 @@ pub struct Http {
 }
 
 impl Http {
-    pub fn new(root: &Path, verbose: bool) -> Result<Http> {
+    pub fn new(config: &Path, verbose: bool) -> Result<Http> {
         let roots = match std::env::var_os("SKILLCASK_CA_FILE") {
             None => RootCerts::PlatformVerifier,
             Some(path) => {
@@ -148,7 +148,7 @@ impl Http {
             .user_agent(concat!("skillcask/", env!("CARGO_PKG_VERSION")))
             .build()
             .into();
-        Ok(Http { agent, auth: Auth::load(root)?, verbose })
+        Ok(Http { agent, auth: Auth::load(config)?, verbose })
     }
 
     /// `Ok(None)` on 404/410.
