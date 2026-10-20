@@ -316,6 +316,7 @@ pub fn write_modes(s: &Scope, modes: &BTreeSet<String>) -> Result<()> {
 /// `.gitignore` split into lines outside the block, the index of the first block, and block lines.
 struct Gitignore {
     text: String,
+    eol: &'static str,
     kept: Vec<String>,
     at: Option<usize>,
     block: Vec<String>,
@@ -335,7 +336,13 @@ pub fn block_file(s: &Scope) -> String {
 }
 
 fn read_gitignore(s: &Scope) -> Result<Gitignore> {
-    let text = std::fs::read_to_string(ignore_file(s)).unwrap_or_default();
+    // Treating an unreadable file as empty would rewrite it with only the block.
+    let text = match std::fs::read_to_string(ignore_file(s)) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => bail!(IO, "{}: {e}; skillcask only rewrites a readable UTF-8 file", block_file(s)),
+    };
+    let eol = if text.split_once('\n').is_some_and(|(l, _)| l.ends_with('\r')) { "\r\n" } else { "\n" };
     let (mut kept, mut block) = (Vec::new(), Vec::new());
     let mut inside = false;
     let mut at = None;
@@ -358,7 +365,7 @@ fn read_gitignore(s: &Scope) -> Result<Gitignore> {
     if inside {
         bail!(MANIFEST, "{}: the skillcask block has no end line {END:?}; restore it by hand", block_file(s));
     }
-    Ok(Gitignore { text, kept, at, block })
+    Ok(Gitignore { text, eol, kept, at, block })
 }
 
 pub fn read_block(s: &Scope) -> Result<Vec<String>> {
@@ -381,7 +388,7 @@ pub fn block_managed(s: &Scope) -> Result<BTreeSet<String>> {
 pub fn write_block(s: &Scope, lines: &[String]) -> Result<bool> {
     no_symlink(s, ".gitignore")?;
     let path = ignore_file(s);
-    let Gitignore { text, mut kept, at, .. } = read_gitignore(s)?;
+    let Gitignore { text, eol, mut kept, at, .. } = read_gitignore(s)?;
     let mut block = Vec::new();
     if !lines.is_empty() {
         block.push(BEGIN.to_string());
@@ -401,7 +408,7 @@ pub fn write_block(s: &Scope, lines: &[String]) -> Result<bool> {
     while kept.last().is_some_and(String::is_empty) {
         kept.pop();
     }
-    let new = if kept.is_empty() { String::new() } else { kept.join("\n") + "\n" };
+    let new = if kept.is_empty() { String::new() } else { kept.join(eol) + eol };
     if new == text || (new.is_empty() && !path.exists()) {
         return Ok(false);
     }
