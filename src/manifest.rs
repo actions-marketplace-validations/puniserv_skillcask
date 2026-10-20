@@ -345,13 +345,15 @@ pub fn write_skill(root: &Path, global: bool, req: &SkillReq) -> Result<()> {
             }
         };
         match skills.get_mut(&req.name) {
-            Some(item) if item.is_table_like() => {
-                set_keys(item.as_table_like_mut().expect("checked"), req);
-                // Spacing around removed and appended keys; the comment after `}` is the value's.
-                if let Some(t) = item.as_inline_table_mut() {
+            Some(item) if item.is_table_like() => match item.as_inline_table_mut() {
+                Some(t) if multiline(t) => edit_lines(t, req),
+                Some(t) => {
+                    set_keys(t, req);
+                    // Spacing around removed and appended keys; the comment after `}` is the value's.
                     t.fmt();
                 }
-            }
+                None => set_keys(item.as_table_like_mut().expect("checked"), req),
+            },
             Some(Item::Value(old)) => {
                 let mut new = fresh();
                 *new.decor_mut() = old.decor().clone();
@@ -379,6 +381,67 @@ fn set_keys(t: &mut dyn TableLike, req: &SkillReq) {
     set(t, "skills", req.skills.as_ref().map(|s| Value::Array(s.iter().map(String::as_str).collect())));
     let rename = (!req.rename.is_empty()).then(|| req.rename.iter().map(|(k, v)| (k.as_str(), Value::from(v.as_str()))).collect());
     set(t, "rename", rename.map(Value::InlineTable));
+}
+
+fn prefix(t: &InlineTable, k: &str) -> String {
+    t.key(k).and_then(|k| k.leaf_decor().prefix()).and_then(|p| p.as_str()).unwrap_or("").to_string()
+}
+
+/// TOML 1.1 inline table over several lines.
+fn multiline(t: &InlineTable) -> bool {
+    t.iter().any(|(k, _)| prefix(t, k).contains('\n')) || t.trailing().as_str().is_some_and(|s| s.contains('\n'))
+}
+
+/// Edits a multi-line inline table line by line. toml_edit keeps each comment in the prefix of
+/// the next key (or the table's trailing text): up to the first newline it ends the line above,
+/// after it it is a line of its own above that key.
+fn edit_lines(t: &mut InlineTable, req: &SkillReq) {
+    let mut want = InlineTable::new();
+    set_keys(&mut want, req);
+    let head = |s: &str| s.find('\n').unwrap_or(s.len());
+    let keys: Vec<String> = t.iter().map(|(k, _)| k.to_string()).collect();
+    let indent = keys.first().map(|k| prefix(t, k)).map(|p| p[p.rfind('\n').map_or(0, |n| n + 1)..].to_string()).unwrap_or_default();
+    // Without a trailing comma the last line's comment is the last value's suffix: move it to
+    // the trailing text, where it is with a comma.
+    if let Some(v) = keys.last().and_then(|k| t.get_mut(k)) {
+        let suffix = v.decor().suffix().and_then(|s| s.as_str()).unwrap_or("").to_string();
+        if suffix.contains('\n') {
+            v.decor_mut().set_suffix("");
+            let trailing = format!("{suffix}{}", t.trailing().as_str().unwrap_or(""));
+            t.set_trailing(trailing);
+        }
+    }
+    for k in keys.iter().filter(|k| !want.contains_key(k)) {
+        // The comment ending the line above stays; the removed key's own lines and comment go.
+        let mine = prefix(t, k);
+        let keep = &mine[..head(&mine)];
+        let next = t.iter().map(|(n, _)| n.to_string()).skip_while(|n| n != k).nth(1);
+        t.remove(k);
+        match next {
+            Some(n) => {
+                let p = prefix(t, &n);
+                t.key_mut(&n).expect("listed").leaf_decor_mut().set_prefix(format!("{keep}{}", &p[head(&p)..]));
+            }
+            None => {
+                let p = t.trailing().as_str().unwrap_or("").to_string();
+                t.set_trailing(format!("{keep}{}", &p[head(&p)..]));
+            }
+        }
+    }
+    for (k, v) in want.iter() {
+        if t.contains_key(k) {
+            set(t, k, Some(v.clone()));
+            continue;
+        }
+        // A new last line: the comment ending the previous last line stays there.
+        let trailing = t.trailing().as_str().unwrap_or("").to_string();
+        let mut v = v.clone();
+        v.decor_mut().set_prefix(" ");
+        v.decor_mut().set_suffix("");
+        t.insert(k, v);
+        t.key_mut(k).expect("inserted").leaf_decor_mut().set_prefix(format!("{}\n{indent}", &trailing[..head(&trailing)]));
+        t.set_trailing(&trailing[head(&trailing)..]);
+    }
 }
 
 /// Sets `k` keeping the old value's comments, or removes it for `None`.
@@ -523,6 +586,23 @@ min-release-age = "12h"
         ] {
             std::fs::write(&path, before).unwrap();
             write_skill(dir.path(), false, &gh).unwrap();
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), after);
+        }
+        // Multi-line inline tables (TOML 1.1): comments stay on their lines, removed keys take
+        // their own comments along.
+        for (before, after) in [
+            (
+                "[skills]\n\"a/b\" = {\n  # source\n  github = true, # gh\n  # tags only\n  version = \"^1.0\", # pinned\n  skills = [\"x\"], # sel\n}\n",
+                "[skills]\n\"a/b\" = {\n  # source\n  github = true, # gh\n  skills = [\"x\"], # sel\n  ref = \"main\",\n}\n",
+            ),
+            (
+                "[skills]\n\"a/b\" = {\n  github = true, # gh\n  version = \"^1.0\" # last\n}\n",
+                "[skills]\n\"a/b\" = {\n  github = true, # gh\n  ref = \"main\"\n}\n",
+            ),
+        ] {
+            let sel = SkillReq { skills: before.contains("skills =").then(|| vec!["x".into()]), ..gh.clone() };
+            std::fs::write(&path, before).unwrap();
+            write_skill(dir.path(), false, &sel).unwrap();
             assert_eq!(std::fs::read_to_string(&path).unwrap(), after);
         }
         std::fs::write(&path, "[skills]\n\"a/b\" = \"^1.0\"   # why\n").unwrap();
