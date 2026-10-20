@@ -102,7 +102,10 @@ version = "1.3.1"
 ```
 
 - `requires`: the union of `requires:` of the package's installed skills, sorted. It lets
-  `install`, `status` and `remove` see the graph without downloading.
+  `install`, `status` and `remove` see the graph without downloading. No hash covers it, so
+  before placing anything `install` compares it with the `SKILL.md` files of the verified
+  archive (or of the intact installed skill) and stops with exit 4 on a difference; otherwise a
+  lock-only edit could add a package that `skills.toml` never asked for.
 - A dependency is a package with no manifest entry. Its `constraint` is the Composer AND of the
   distinct constraints on it (requirers and manifest entry), sorted and distributed over `||`
   (`^1 || ^2` and `^2.1` give `^1, ^2.1 || ^2, ^2.1`); a single constraint stays as written, so

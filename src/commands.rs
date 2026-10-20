@@ -240,15 +240,8 @@ impl Ctx {
         let mut skills: Vec<LockedSkill> = Vec::new();
         let mut requires: BTreeMap<String, String> = BTreeMap::new();
         for (from, dir, md) in found {
-            let bad = |e: String| Error::new(MANIFEST, format!("{} {}: {md}: {e}", c.name, c.version));
-            for (k, v) in skill::requires(&std::fs::read_to_string(f.dir.path().join(&md))?).map_err(bad)? {
-                deps::check(&k, &v).map_err(bad)?;
-                let v = match requires.remove(&k) {
-                    Some(prev) => deps::intersect(&[prev, v]).map_err(bad)?,
-                    None => v,
-                };
-                requires.insert(k, v);
-            }
+            deps::collect(&mut requires, &skill_md_of(&f.dir.path().join(&dir)))
+                .map_err(|e| Error::new(MANIFEST, format!("{} {}: {md}: {e}", c.name, c.version)))?;
             let to = req.rename.get(&from);
             let name = to.unwrap_or(&from).clone();
             if let Some(other) = skills.iter().find(|s| s.name == name) {
@@ -483,6 +476,33 @@ impl Ctx {
         let kept = kept(s, lock, old, &old_managed);
         let hand = hand_written(s, lock, &old_managed.difference(&kept).cloned().collect(), &locals)?;
 
+        // `requires` is not covered by any hash; checked before anything is placed, it cannot make
+        // a lock-only edit install a package skills.toml never asked for.
+        for p in &lock.packages {
+            let mut declared = BTreeMap::new();
+            for sk in &p.skills {
+                let text = if installed_ok(s, sk) {
+                    skill_md_of(&project::store_dir(s, &sk.name))
+                } else {
+                    if !prepared.contains_key(&p.name) {
+                        let f = self.fetch(&p.name, &p.dist, Some(&p.dist_sha256), None)?.1;
+                        prepared.insert(p.name.clone(), f);
+                    }
+                    skill_md_of(&prepared[&p.name].dir.path().join(&sk.path))
+                };
+                deps::collect(&mut declared, &text).map_err(|e| Error::new(MANIFEST, format!("{} {}: {e}", p.name, p.version)))?;
+            }
+            if declared != p.requires {
+                bail!(
+                    HASH,
+                    "{} {}: skills.lock lists requires {:?}, but its SKILL.md files declare {:?}",
+                    p.name,
+                    p.version,
+                    p.requires,
+                    declared
+                );
+            }
+        }
         let mut modes = project::read_modes(s);
         for p in &lock.packages {
             let need: Vec<&LockedSkill> = p.skills.iter().filter(|sk| !installed_ok(s, sk)).collect();
@@ -781,6 +801,12 @@ fn kept(s: &Scope, lock: &Lock, old: &Lock, old_managed: &BTreeSet<String>) -> B
         })
         .cloned()
         .collect()
+}
+
+/// `<dir>/SKILL.md`, where `requires:` is read from both at lock and at install time; empty when
+/// the skill names another file.
+fn skill_md_of(dir: &Path) -> String {
+    std::fs::read_to_string(dir.join(skill::SKILL_MD)).unwrap_or_default()
 }
 
 fn installed_ok(s: &Scope, sk: &LockedSkill) -> bool {

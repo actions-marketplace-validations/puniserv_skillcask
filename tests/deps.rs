@@ -65,6 +65,33 @@ fn add_locks_and_installs_dependencies_and_a_frozen_clone_reproduces_them() {
     assert!(e.contains("acme/pr: not in skills.lock"), "{e}");
 }
 
+/// Regression guard: `requires` in the lock is not covered by a hash, so it must match the
+/// requirer's SKILL.md. Otherwise a lock-only change could add a package that skills.toml never
+/// asked for and `install --frozen` would accept it.
+#[test]
+fn lock_requires_must_match_the_skill() {
+    let s = Server::start();
+    package(&s, "acme/mr", &[("1.0.0", &[])]);
+    package(&s, "acme/evil", &[("1.0.0", &[])]);
+    let p = project(&s, "");
+    p.ok(&["add", "acme/mr"]);
+    let other = project(&s, "");
+    other.ok(&["add", "acme/evil"]);
+    let evil = other.read("skills.lock");
+    let evil = &evil[evil.find("\n[[package]]").unwrap()..];
+    let forged = p
+        .read("skills.lock")
+        .replace("version = 1\n", "version = 2\n")
+        .replace("dist-sha256", "requires = { \"acme/evil\" = \"^1.0\" }\ndist-sha256")
+        + evil;
+    let mut c = clone_of(&p, &s);
+    c.write("skills.lock", &forged);
+    c.env.push(("CI".into(), "true".into()));
+    let e = c.expect(&["install"], 4);
+    assert!(e.contains("acme/mr") && e.contains("requires"), "{e}");
+    assert!(!c.exists(".agents/skills/evil"));
+}
+
 #[test]
 fn requirers_share_one_version_or_fail_naming_each_other() {
     let s = Server::start();

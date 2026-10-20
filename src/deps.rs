@@ -63,6 +63,20 @@ pub fn check(key: &str, value: &str) -> std::result::Result<(Target, Option<GitH
     Ok((t, mode))
 }
 
+/// Adds the `requires:` of one SKILL.md to a package's `acc`; a key two skills share gets both
+/// constraints.
+pub fn collect(acc: &mut BTreeMap<String, String>, skill_md: &str) -> std::result::Result<(), String> {
+    for (k, v) in crate::skill::requires(skill_md)? {
+        check(&k, &v)?;
+        let v = match acc.remove(&k) {
+            Some(prev) => intersect(&[prev, v])?,
+            None => v,
+        };
+        acc.insert(k, v);
+    }
+    Ok(())
+}
+
 /// The Composer AND of `cs`: sorted, deduplicated, distributed over `||` (which binds looser
 /// than `,`). A single constraint is returned as written.
 pub fn intersect(cs: &[String]) -> std::result::Result<String, String> {
