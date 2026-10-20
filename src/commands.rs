@@ -2119,8 +2119,8 @@ pub fn audit(ctx: &Ctx, json: bool, sarif: bool) -> Result<()> {
             }
         }
         for e in skill::scan_dir(&abs).unwrap_or_default() {
-            let bytes = std::fs::read(abs.join(&e.path))?;
             let path = format!("{dir}/{}", e.path);
+            let bytes = std::fs::read(abs.join(&e.path)).ctx(&path)?;
             reach.add(&e.path, e.exec, &bytes);
             let Ok(text) = std::str::from_utf8(&bytes) else { continue };
             for (line, why) in skill::risky(text) {
