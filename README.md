@@ -225,6 +225,9 @@ what you picked.
 - Archives with absolute paths, `..`, devices or symlinks that leave their skill are rejected.
   No symlink is ever written from a package. Size and file count are capped (`--max-download`,
   `--max-unpacked`, `--max-files`).
+- File names must be valid on every OS: Windows-reserved names, `<>:"|?*\`, control characters
+  and paths that collide by case or Unicode form fail a skill that contains them, and are
+  skipped outside the selected skills.
 - No package code runs, ever. No telemetry.
 - `min-release-age` for GitHub sources reads commit dates, which the committer sets. A
   backdated commit passes the cooldown; reviewing what `add`/`update` change in `skills.lock` is

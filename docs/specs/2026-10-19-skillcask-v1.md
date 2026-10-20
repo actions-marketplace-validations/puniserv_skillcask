@@ -259,6 +259,14 @@ in `--verbose` URLs.
   verification.
 - Archives: reject absolute paths, `..`, symlinks leaving their skill, hard links and devices; limits on download
   size (50 MiB), unpacked size (100 MiB) and file count (5,000), overridable per command.
+- Archive names must work on every OS: no Windows-reserved names (`CON`, `PRN`, `AUX`, `NUL`,
+  `COM1`-`COM9`, `LPT1`-`LPT9`, also with an extension), no trailing dot or space, no
+  `<>:"|?*\` or control characters, and no two paths that are one name on a case-insensitive
+  or Unicode-normalising file system (`README.md` and `readme.md`, `café` composed and
+  decomposed). Such entries are not extracted. A selected skill that contains one fails with
+  the same error on every OS; outside the selected skills they are skipped, so a stray file in
+  a repository does not block its skills. Duplicate entries and mismatched zip headers fail the
+  whole archive, and the limits count every entry.
 - No package code runs at any point.
 - Release artefacts: checksums and build provenance attestations; `skillcask --version` prints
   the commit.
