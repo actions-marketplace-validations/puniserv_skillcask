@@ -1,4 +1,4 @@
-//! Policy layers (D17): environment, enforced keys of the user `config.toml`, the manifest's
+//! Policy layers (D18): environment, enforced keys of the user `config.toml`, the manifest's
 //! `[policy]`, the rest of `config.toml`, built-in defaults.
 
 use std::collections::{BTreeMap, BTreeSet};

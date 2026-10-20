@@ -1,4 +1,4 @@
-//! Layered policy and `allow-sources` (D17).
+//! Layered policy and `allow-sources` (D18).
 mod common;
 
 use common::*;

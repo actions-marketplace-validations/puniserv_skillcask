@@ -98,7 +98,7 @@ pub struct Policy {
     pub packagist: bool,
     /// `requires:` may name GitHub sources (D16).
     pub github_requires: bool,
-    /// The only sources allowed; `None`: all (D17).
+    /// The only sources allowed; `None`: all (D18).
     pub allow_sources: Option<Vec<String>>,
     /// Keys set by a layer, with that layer, for `status`.
     pub effective: crate::policy::Effective,
@@ -186,7 +186,7 @@ pub fn parse(text: &str, global: bool) -> Result<Manifest> {
     parse_with(text, global, &crate::policy::Outer::default())
 }
 
-/// The manifest with the policy layers of `config.toml` and the environment (D17).
+/// The manifest with the policy layers of `config.toml` and the environment (D18).
 pub fn layered(text: &str, global: bool) -> Result<Manifest> {
     let m = parse_with(text, global, &crate::policy::outer()?)?;
     if let Some(api) = &m.github {
