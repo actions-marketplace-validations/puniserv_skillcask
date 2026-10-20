@@ -8,7 +8,7 @@ use jiff::SignedDuration;
 use toml_edit::{DocumentMut, Item, TableLike};
 
 use crate::bail;
-use crate::error::{Error, MANIFEST, Result};
+use crate::error::{Context, Error, MANIFEST, Result};
 
 pub const CONFIG: &str = "config.toml";
 pub const SKILLS_SH: &str = "skills-sh";
@@ -181,12 +181,12 @@ pub fn outer() -> Result<Outer> {
 }
 
 fn read_config(path: &Path) -> Result<Outer> {
+    let shown = path.display().to_string();
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Outer::default()),
-        Err(e) => return Err(e.into()),
+        Err(e) => return Err(e).ctx(&shown),
     };
-    let shown = path.display().to_string();
     let doc: DocumentMut = text.parse().map_err(|e| Error::new(MANIFEST, format!("{shown}: {e}")))?;
     if let Some((k, _)) = doc.iter().find(|(k, _)| !matches!(*k, "policy" | "agents" | "search")) {
         bail!(MANIFEST, "{shown}: only [policy], [agents] and [search] are read here, found {k}");
@@ -225,7 +225,7 @@ pub fn remember_skills_sh(on: bool) -> Result<std::path::PathBuf> {
     let text = match std::fs::read_to_string(&path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(e.into()),
+        Err(e) => return Err(e).ctx(path.display()),
     };
     let mut doc: DocumentMut = text.parse().map_err(|e| Error::new(MANIFEST, format!("{}: {e}", path.display())))?;
     let search = doc.entry("search").or_insert_with(toml_edit::table);

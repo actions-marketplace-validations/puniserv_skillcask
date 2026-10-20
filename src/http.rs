@@ -9,7 +9,7 @@ use ureq::tls::{PemItem, RootCerts, TlsConfig};
 use url::Url;
 
 use crate::bail;
-use crate::error::{AUTH, Error, IO, NETWORK, Result};
+use crate::error::{AUTH, Context, Error, IO, NETWORK, Result};
 
 const MAX_REDIRECTS: usize = 5;
 const JSON_LIMIT: u64 = 50 * 1024 * 1024;
@@ -66,7 +66,7 @@ impl Auth {
             match std::fs::read_to_string(&path) {
                 Ok(text) => auth.add(&text, &path.display().to_string())?,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => return Err(e.into()),
+                Err(e) => return Err(e).ctx(path.display()),
             }
         }
         let token = ["GITHUB_TOKEN", "GH_TOKEN"].iter().find_map(|k| std::env::var(k).ok().filter(|t| !t.is_empty()));
@@ -375,6 +375,14 @@ impl Http {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unreadable_auth_json_names_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("auth.json")).unwrap();
+        let e = Auth::load(dir.path()).unwrap_err();
+        assert!(e.msg.starts_with(&format!("{}: ", dir.path().join("auth.json").display())), "{}", e.msg);
+    }
 
     #[test]
     fn only_broken_connections_are_transient() {
