@@ -37,7 +37,7 @@ byte-identical skills to the ones committed in the lock, or a non-zero exit.
 
 ## Non-goals (v1)
 
-- Dependencies between skills (`require` in skill packages is ignored).
+- Composer `require` of skill packages (ignored; skills declare dependencies in `SKILL.md`, D16).
 - Installing from plain git repositories or URLs other than GitHub (see D11).
 - Trust prompts: an entry in `skills.toml` is the decision.
 - Running any code from a package (scripts, hooks, plugins). Never, not only in v1.
@@ -64,6 +64,7 @@ byte-identical skills to the ones committed in the lock, or a non-zero exit.
 | D13 | `--global` manages personal skills: store `~/.agents/skills`, links in `~/.claude/skills` etc., manifest and lock in `~/.config/skillcask`; a skill name clash inside one scope is solved with `rename`, a clash across scopes is a warning. | Agents read personal skills from home and skills have no namespaces. The design is in `docs/specs/2026-10-20-global-and-aliases.md`. |
 | D14 | `publish` records the tree hash of each new version in `extra.ai-agent-skill-tree`; without the published zip in `--out`, a version whose `shasum` differs counts as unchanged when its tree matches, and no zip is written for it. | CI that does not keep `dist/` must not fail on every published version when a `zip` or deflate update changes the bytes of the same tree. Downloading every old zip first would cost a request per version on each run. |
 | D15 | A repository may set its own `min-release-age`, which overrides `policy.min-release-age` for packages resolved there; GitHub sources keep the policy value. | Internal skills are reviewed in merge requests and published after every merge; a project-wide `"0"` would also drop the cooldown for public sources. |
+| D16 | A skill declares dependencies in a top-level `requires:` map of its `SKILL.md` frontmatter; they are resolved from the consumer's repositories (GitHub only with `policy.github-requires = true`), one version per package, and locked with `requires` / `dependency = true` in a `version = 2` lock. | Skills that call other skills break silently when one is missing. Composer `require` already holds `php` and plugins in existing packages and cannot name GitHub sources; reading the downloaded `SKILL.md` works for every source. The design is in `docs/specs/2026-10-20-skill-dependencies.md`. |
 | D17 | A host no Composer source covers is asked from git's credential helper (`git credential fill`), on by default, off with `SKILLCASK_GIT_CREDENTIALS=0`; `skillcask auth set <host>` stores a token there. | Tokens then live in the macOS Keychain, the Windows Credential Manager or libsecret instead of a plain-text `auth.json`, with no new dependency: every developer machine has git and a helper. |
 
 ## Project files
