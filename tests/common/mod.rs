@@ -222,6 +222,30 @@ impl Project {
         self.dir.path()
     }
 
+    pub fn home(&self) -> &Path {
+        self.home.path()
+    }
+
+    /// `skillcask --global <args>` with the config dir at `~/.config/skillcask` of the fake home.
+    pub fn global(&self, args: &[&str], code: i32) -> String {
+        let mut a = vec!["--global"];
+        a.extend_from_slice(args);
+        self.expect(&a, code)
+    }
+
+    pub fn global_manifest(&self, server: &Server, skills: &str) {
+        let dir = self.home().join(".config/skillcask");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("skills.toml"),
+            format!(
+                "[repositories]\nfix = {{ type = \"composer\", url = \"{}\" }}\n\n[skills]\n{skills}\n[policy]\npackagist = false\n",
+                server.url("/packages.json")
+            ),
+        )
+        .unwrap();
+    }
+
     pub fn manifest(&self, server: &Server, skills: &str) {
         self.write(
             "skills.toml",
@@ -256,7 +280,9 @@ impl Project {
             .env("COMPOSER_HOME", self.home.path())
             .env_remove("COMPOSER_AUTH")
             .env_remove("CI")
-            .env_remove("SKILLCASK_LINK_MODE");
+            .env_remove("SKILLCASK_LINK_MODE")
+            .env_remove("SKILLCASK_HOME")
+            .env_remove("XDG_CONFIG_HOME");
         for (k, v) in &self.env {
             c.env(k, v);
         }

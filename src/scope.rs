@@ -19,26 +19,22 @@ impl Scope {
         Scope { config: root.clone(), root, global: false }
     }
 
-    #[allow(dead_code)] // used from Task 3/4 (--global)
     pub fn global() -> Result<Scope> {
         let Some(home) = home() else { bail!(MANIFEST, "--global needs HOME (or USERPROFILE) to be set") };
         Ok(Scope { config: config_dir(&home, |k| std::env::var_os(k)), root: home, global: true })
     }
 
     /// `rel` (a path under `root`) as the user should read it in messages.
-    #[allow(dead_code)] // used from Task 3/4 (--global)
     pub fn show(&self, rel: &str) -> String {
         if self.global { format!("~/{rel}") } else { rel.to_string() }
     }
 }
 
-#[allow(dead_code)] // used from Task 3/4 (--global)
 pub fn home() -> Option<PathBuf> {
     std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).filter(|h| !h.is_empty()).map(PathBuf::from)
 }
 
 /// `$SKILLCASK_HOME`, else `$XDG_CONFIG_HOME/skillcask`, else `~/.config/skillcask`.
-#[allow(dead_code)] // used from Task 3/4 (--global)
 fn config_dir(home: &Path, var: impl Fn(&str) -> Option<std::ffi::OsString>) -> PathBuf {
     let set = |k: &str| var(k).filter(|v| !v.is_empty()).map(PathBuf::from);
     set("SKILLCASK_HOME")

@@ -32,6 +32,28 @@ allow-ranges = true
 packagist = true
 "#;
 
+pub const GLOBAL_TEMPLATE: &str = r#"# skillcask global manifest: personal skills in ~/.agents/skills. Lock: skills.lock.
+
+[repositories]
+# name = { type = "composer", url = "https://example.com/packages.json" }
+
+[skills]
+# "vendor/name" = "^1.0"
+# "owner/repo" = { github = true, skills = ["name"] }   # GitHub, default branch
+
+[agents]
+targets = [".claude/skills", ".junie/skills"]
+
+[policy]
+min-release-age = "3d"
+allow-ranges = true
+packagist = true
+"#;
+
+pub fn template(global: bool) -> &'static str {
+    if global { GLOBAL_TEMPLATE } else { TEMPLATE }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Repository {
     pub name: String,
@@ -76,12 +98,12 @@ pub struct Manifest {
 }
 
 impl Manifest {
-    pub fn load(root: &Path) -> Result<Manifest> {
-        let path = root.join(FILE);
+    pub fn load(dir: &Path, global: bool) -> Result<Manifest> {
+        let path = dir.join(FILE);
         if !path.exists() {
-            bail!(MANIFEST, "{FILE} not found; run `skillcask init`");
+            bail!(MANIFEST, "{FILE} not found; run `skillcask init{}`", if global { " --global" } else { "" });
         }
-        parse(&std::fs::read_to_string(&path)?)
+        parse(&std::fs::read_to_string(&path)?, global)
     }
 
     pub fn repository(&self, name: &str) -> Option<&Repository> {
@@ -97,7 +119,7 @@ fn bad(what: impl std::fmt::Display) -> crate::error::Error {
     crate::error::Error::new(MANIFEST, format!("{FILE}: {what}"))
 }
 
-pub fn parse(text: &str) -> Result<Manifest> {
+pub fn parse(text: &str, global: bool) -> Result<Manifest> {
     let doc: DocumentMut = text.parse().map_err(bad)?;
 
     let mut repositories = Vec::new();
@@ -184,6 +206,9 @@ pub fn parse(text: &str) -> Result<Manifest> {
 
     let agents = doc.get("agents").and_then(Item::as_table_like);
     let local = match agents.and_then(|a| a.get("local")) {
+        Some(_) if global => {
+            return Err(bad("agents.local is not supported with --global; personal skills go straight into ~/.agents/skills"));
+        }
         None => DEFAULT_LOCAL.to_string(),
         Some(i) => i.as_str().ok_or_else(|| bad("agents.local must be a path"))?.trim_end_matches('/').to_string(),
     };
@@ -201,7 +226,7 @@ pub fn parse(text: &str) -> Result<Manifest> {
         }
     }
 
-    if targets.contains(&local) {
+    if !global && targets.contains(&local) {
         return Err(bad(format!("agents.local {local:?} cannot also be a target")));
     }
 
@@ -276,7 +301,7 @@ fn edit(root: &Path, f: impl FnOnce(&mut DocumentMut)) -> Result<()> {
     let text = std::fs::read_to_string(&path).ctx(FILE)?;
     let mut doc: DocumentMut = text.parse().map_err(bad)?;
     f(&mut doc);
-    parse(&doc.to_string())?;
+    parse(&doc.to_string(), false)?;
     std::fs::write(&path, doc.to_string())?;
     Ok(())
 }
@@ -345,6 +370,7 @@ targets = [".claude/skills"]
 [policy]
 min-release-age = "12h"
 "#,
+            false,
         )
         .unwrap();
         assert_eq!(m.repositories.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["acme", "packagist"]);
@@ -356,17 +382,19 @@ min-release-age = "12h"
 
     #[test]
     fn defaults_and_rejections() {
-        let m = parse(TEMPLATE).unwrap();
+        let m = parse(TEMPLATE, false).unwrap();
+        assert!(parse(GLOBAL_TEMPLATE, true).is_ok());
+        assert!(parse("[agents]\nlocal = \".skills\"", true).is_err());
         assert_eq!(m.policy.min_release_age, SignedDuration::from_hours(72));
         assert_eq!(m.targets, DEFAULT_TARGETS);
-        assert!(parse("[repositories]\nx = { url = \"http://a\" }").is_err());
-        assert!(parse("[skills]\n\"Acme/X\" = \"1.0\"").is_err());
-        assert!(parse("[skills]\n\"a/b\" = { version = \"1\", repository = \"nope\" }").is_err());
-        assert!(parse("[policy]\nallow-ranges = false\n[skills]\n\"a/b\" = \"^1.0\"").is_err());
-        assert!(parse("[policy]\nallow-ranges = false\n[skills]\n\"a/b\" = \"1.0.3\"").is_ok());
-        assert!(parse("[agents]\ntargets = [\"../x\"]").is_err());
-        assert!(parse("[policy]\npackagist = false").unwrap().repositories.is_empty());
-        let gh = |entry: &str| parse(&format!("[repositories]\nr = {{ url = \"https://r\" }}\n[skills]\n\"a/b\" = {entry}"));
+        assert!(parse("[repositories]\nx = { url = \"http://a\" }", false).is_err());
+        assert!(parse("[skills]\n\"Acme/X\" = \"1.0\"", false).is_err());
+        assert!(parse("[skills]\n\"a/b\" = { version = \"1\", repository = \"nope\" }", false).is_err());
+        assert!(parse("[policy]\nallow-ranges = false\n[skills]\n\"a/b\" = \"^1.0\"", false).is_err());
+        assert!(parse("[policy]\nallow-ranges = false\n[skills]\n\"a/b\" = \"1.0.3\"", false).is_ok());
+        assert!(parse("[agents]\ntargets = [\"../x\"]", false).is_err());
+        assert!(parse("[policy]\npackagist = false", false).unwrap().repositories.is_empty());
+        let gh = |entry: &str| parse(&format!("[repositories]\nr = {{ url = \"https://r\" }}\n[skills]\n\"a/b\" = {entry}"), false);
         assert!(gh("{ github = true, ref = \"main\" }").is_ok());
         assert!(gh("{ github = true, version = \"^1.0\", ref = \"main\" }").is_err());
         assert!(gh("{ ref = \"main\" }").is_err());
@@ -374,7 +402,7 @@ min-release-age = "12h"
         for evil in ["../x", "a b", "-x", "a?b", "a//b", "x/"] {
             assert!(gh(&format!("{{ github = true, ref = {evil:?} }}")).is_err(), "{evil}");
         }
-        let strict = |entry: &str| parse(&format!("[policy]\nallow-ranges = false\n[skills]\n\"a/b\" = {entry}"));
+        let strict = |entry: &str| parse(&format!("[policy]\nallow-ranges = false\n[skills]\n\"a/b\" = {entry}"), false);
         assert!(strict("{ github = true }").is_err());
         assert!(strict(&format!("{{ github = true, ref = \"{}\" }}", "ab".repeat(20))).is_ok());
         assert_eq!(parse_age("0").unwrap(), SignedDuration::ZERO);
@@ -390,7 +418,7 @@ min-release-age = "12h"
         write_skill(dir.path(), &req).unwrap();
         let text = std::fs::read_to_string(dir.path().join(FILE)).unwrap();
         assert!(text.contains("# skillcask manifest"));
-        assert_eq!(parse(&text).unwrap().skills, std::slice::from_ref(&req));
+        assert_eq!(parse(&text, false).unwrap().skills, std::slice::from_ref(&req));
         for (constraint, github, line) in [
             (DEFAULT_REF, GitHub::Ref, r#""a/b" = { github = true }"#),
             ("feature/x", GitHub::Ref, r#""a/b" = { github = true, ref = "feature/x" }"#),
@@ -400,9 +428,9 @@ min-release-age = "12h"
             write_skill(dir.path(), &gh).unwrap();
             let text = std::fs::read_to_string(dir.path().join(FILE)).unwrap();
             assert!(text.contains(line), "{text}");
-            assert_eq!(parse(&text).unwrap().skills, [gh]);
+            assert_eq!(parse(&text, false).unwrap().skills, [gh]);
         }
         remove_skills(dir.path(), &["a/b".into()]).unwrap();
-        assert!(parse(&std::fs::read_to_string(dir.path().join(FILE)).unwrap()).unwrap().skills.is_empty());
+        assert!(parse(&std::fs::read_to_string(dir.path().join(FILE)).unwrap(), false).unwrap().skills.is_empty());
     }
 }

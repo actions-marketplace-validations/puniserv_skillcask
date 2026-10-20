@@ -60,7 +60,11 @@ impl Ctx {
     }
 
     fn manifest_or_default(&self) -> Result<Manifest> {
-        if self.s.config.join(manifest::FILE).exists() { Manifest::load(&self.s.config) } else { manifest::parse(manifest::TEMPLATE) }
+        if self.s.config.join(manifest::FILE).exists() {
+            Manifest::load(&self.s.config, self.s.global)
+        } else {
+            manifest::parse(manifest::template(self.s.global), self.s.global)
+        }
     }
 
     fn fetch(&self, name: &str, dist: &Dist, expected: Option<&str>, shasum: Option<&str>) -> Result<(String, Fetched)> {
@@ -185,11 +189,26 @@ impl Ctx {
         for (n, (p, sk)) in &locked {
             let dir = project::store_dir(s, n);
             if dir.exists() && !old_managed.contains(n) && !installed_ok(s, sk) {
-                bail!(MANIFEST, "{STORE}/{n} exists and is not managed by skillcask, but {} provides a skill with that name", p.name);
+                bail!(
+                    MANIFEST,
+                    "{} exists and is not managed by skillcask, but {} provides a skill with that name",
+                    s.show(&format!("{STORE}/{n}")),
+                    p.name
+                );
             }
             for t in &m.targets {
-                if project::link_state(s, t, STORE, n) == LinkState::Foreign {
-                    bail!(MANIFEST, "{t}/{n} exists and was not created by skillcask; move it away");
+                let foreign = match project::link_state(s, t, STORE, n) {
+                    LinkState::Foreign => true,
+                    // In home a symlink skillcask did not make belongs to the user or another tool.
+                    LinkState::Wrong => {
+                        s.global
+                            && !old_managed.contains(n)
+                            && s.root.join(t).join(n).symlink_metadata().is_ok_and(|m| m.file_type().is_symlink())
+                    }
+                    _ => false,
+                };
+                if foreign {
+                    bail!(MANIFEST, "{} exists and was not created by skillcask; move it away", s.show(&format!("{t}/{n}")));
                 }
             }
         }
@@ -287,6 +306,9 @@ fn locked_names(lock: &Lock) -> Result<BTreeMap<String, (&Package, &LockedSkill)
 }
 
 fn hand_written(s: &Scope, lock: &Lock, old_managed: &BTreeSet<String>, locals: &BTreeSet<String>) -> Result<BTreeSet<String>> {
+    if s.global {
+        return Ok(BTreeSet::new());
+    }
     let locked: BTreeSet<&str> = lock.skills().map(|(_, sk)| sk.name.as_str()).collect();
     Ok(project::store_names(s)?
         .into_iter()
@@ -384,7 +406,8 @@ pub fn init(ctx: &Ctx) -> Result<()> {
     if path.exists() {
         bail!(MANIFEST, "{} already exists", manifest::FILE);
     }
-    std::fs::write(&path, manifest::TEMPLATE)?;
+    std::fs::create_dir_all(&ctx.s.config)?;
+    std::fs::write(&path, manifest::template(ctx.s.global))?;
     println!("created {}", manifest::FILE);
     Ok(())
 }
@@ -498,16 +521,17 @@ fn finish_add(ctx: &Ctx, existed: bool, m: &Manifest, req: &SkillReq, repo: &Rep
     ctx.preflight(m, &lock)?;
 
     if !existed {
-        std::fs::write(ctx.s.config.join(manifest::FILE), manifest::TEMPLATE)?;
+        std::fs::create_dir_all(&ctx.s.config)?;
+        std::fs::write(ctx.s.config.join(manifest::FILE), manifest::template(ctx.s.global))?;
     }
     manifest::write_skill(&ctx.s.config, req)?;
     lock.save(&ctx.s.config)?;
     println!("added {} = {:?} ({})", req.name, req.constraint, c.version);
-    ctx.materialize(&Manifest::load(&ctx.s.config)?, &lock, prepared)
+    ctx.materialize(&Manifest::load(&ctx.s.config, ctx.s.global)?, &lock, prepared)
 }
 
 pub fn remove(ctx: &Ctx, names: &[String]) -> Result<()> {
-    let m = Manifest::load(&ctx.s.config)?;
+    let m = Manifest::load(&ctx.s.config, ctx.s.global)?;
     let mut lock = Lock::load(&ctx.s.config)?;
     for n in names {
         if m.skill(n).is_none() && lock.get(n).is_none() {
@@ -517,11 +541,11 @@ pub fn remove(ctx: &Ctx, names: &[String]) -> Result<()> {
     manifest::remove_skills(&ctx.s.config, names)?;
     lock.packages.retain(|p| !names.contains(&p.name));
     lock.save(&ctx.s.config)?;
-    ctx.materialize(&Manifest::load(&ctx.s.config)?, &lock, HashMap::new())
+    ctx.materialize(&Manifest::load(&ctx.s.config, ctx.s.global)?, &lock, HashMap::new())
 }
 
 pub fn install(ctx: &Ctx, frozen: bool) -> Result<()> {
-    let m = Manifest::load(&ctx.s.config)?;
+    let m = Manifest::load(&ctx.s.config, ctx.s.global)?;
     let mut lock = Lock::load(&ctx.s.config)?;
     let (needs, stale, why) = reconcile(&m, &lock);
     let mut prepared = HashMap::new();
@@ -544,7 +568,7 @@ pub fn install(ctx: &Ctx, frozen: bool) -> Result<()> {
 }
 
 pub fn update(ctx: &Ctx, names: &[String]) -> Result<()> {
-    let m = Manifest::load(&ctx.s.config)?;
+    let m = Manifest::load(&ctx.s.config, ctx.s.global)?;
     let mut lock = Lock::load(&ctx.s.config)?;
     for n in names {
         if m.skill(n).is_none() {
@@ -569,7 +593,7 @@ pub fn update(ctx: &Ctx, names: &[String]) -> Result<()> {
 }
 
 pub fn outdated(ctx: &Ctx) -> Result<()> {
-    let m = Manifest::load(&ctx.s.config)?;
+    let m = Manifest::load(&ctx.s.config, ctx.s.global)?;
     let lock = Lock::load(&ctx.s.config)?;
     let reg = Registry::new(ctx.http()?);
     let now = Timestamp::now();
@@ -599,7 +623,7 @@ pub fn outdated(ctx: &Ctx) -> Result<()> {
 }
 
 pub fn status(ctx: &Ctx) -> Result<()> {
-    let m = Manifest::load(&ctx.s.config)?;
+    let m = Manifest::load(&ctx.s.config, ctx.s.global)?;
     let lock = Lock::load(&ctx.s.config)?;
     let mut rows = vec![["package", "version", "skill", "state"].map(String::from)];
     let mut bad = 0;
@@ -645,7 +669,7 @@ pub fn status(ctx: &Ctx) -> Result<()> {
 
 pub fn doctor(ctx: &Ctx, fix: bool) -> Result<()> {
     let s = &ctx.s;
-    let m = Manifest::load(&s.config)?;
+    let m = Manifest::load(&s.config, s.global)?;
     let lock = Lock::load(&s.config)?;
     for p in m.targets.iter().map(String::as_str).chain([STORE, ".gitignore"]) {
         project::no_symlink(s, p)?;
@@ -659,7 +683,7 @@ pub fn doctor(ctx: &Ctx, fix: bool) -> Result<()> {
     let mut copies = BTreeSet::new();
     for (at, source, n) in link_plan(&m, &locked, &hand, &locals) {
         let state = project::link_state(s, &at, source, &n);
-        let what = format!("{at}/{n}: link {}", format!("{state:?}").to_lowercase());
+        let what = format!("{}: link {}", s.show(&format!("{at}/{n}")), format!("{state:?}").to_lowercase());
         if state != LinkState::Ok {
             if fix && s.root.join(source).join(&n).is_dir() && state != LinkState::Foreign {
                 project::link(s, &at, source, &n)?;
@@ -698,8 +722,10 @@ pub fn doctor(ctx: &Ctx, fix: bool) -> Result<()> {
 
     for (n, (p, sk)) in &locked {
         match tree_on_disk(s, n) {
-            None => open.push(format!("{STORE}/{n}: not installed ({}); run `skillcask install`", p.name)),
-            Some(h) if h != sk.tree_sha256 => open.push(format!("{STORE}/{n}: modified ({}); run `skillcask install` to restore", p.name)),
+            None => open.push(format!("{}: not installed ({}); run `skillcask install`", s.show(&format!("{STORE}/{n}")), p.name)),
+            Some(h) if h != sk.tree_sha256 => {
+                open.push(format!("{}: modified ({}); run `skillcask install` to restore", s.show(&format!("{STORE}/{n}")), p.name))
+            }
             Some(_) => {}
         }
     }

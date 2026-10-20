@@ -31,6 +31,9 @@ struct Cli {
     /// Print every HTTP request (credentials are never printed).
     #[arg(short, long, global = true)]
     verbose: bool,
+    /// Manage personal skills in ~/.agents/skills instead of the project's.
+    #[arg(short, long, global = true)]
+    global: bool,
     /// Maximum download size, e.g. 50M.
     #[arg(long, global = true, value_parser = parse_size)]
     max_download: Option<u64>,
@@ -125,14 +128,21 @@ fn run(cli: Cli) -> Result<(), Error> {
         unpacked: cli.max_unpacked.unwrap_or(d.unpacked),
         files: cli.max_files.unwrap_or(d.files),
     };
+    if cli.global && matches!(cli.cmd, Cmd::External(_) | Cmd::Publish { .. }) {
+        return Err(Error::new(MANIFEST, "--global does not apply to this command"));
+    }
     if let Cmd::External(args) = &cli.cmd {
         return plugin(args);
     }
-    let root = match cli.cmd {
-        Cmd::Init | Cmd::Publish { .. } => std::env::current_dir()?,
-        _ => project::find_root()?,
+    let scope = if cli.global {
+        Scope::global()?
+    } else {
+        Scope::project(match cli.cmd {
+            Cmd::Init | Cmd::Publish { .. } => std::env::current_dir()?,
+            _ => project::find_root()?,
+        })
     };
-    let ctx = Ctx::new(Scope::project(root), cli.verbose, limits);
+    let ctx = Ctx::new(scope, cli.verbose, limits);
     match cli.cmd {
         Cmd::Init => commands::init(&ctx),
         Cmd::Add { package, repository } => commands::add(&ctx, &package, repository),

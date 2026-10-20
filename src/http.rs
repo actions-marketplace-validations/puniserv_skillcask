@@ -39,7 +39,7 @@ struct Auth(Vec<(String, Cred)>);
 
 impl Auth {
     fn load(config: &Path) -> Result<Auth> {
-        let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from);
+        let home = crate::scope::home();
         let composer_home = std::env::var_os("COMPOSER_HOME").map(PathBuf::from);
         let global = match (composer_home, home) {
             (Some(c), _) => Some(c.join("auth.json")),

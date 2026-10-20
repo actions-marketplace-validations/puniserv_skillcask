@@ -114,7 +114,27 @@ Constraints follow Composer semantics: `^0.3` means `>=0.3.0 <0.4.0`, `~1.2` mea
 `>=1.2 <2.0`, and pre-releases are only selected when the constraint names a stability
 (`^1.0@beta`).
 
+### Personal skills (`--global`)
+
+`skillcask --global` (`-g`) manages skills for your user instead of a project, with the same
+manifest, lock and verification:
+
+```sh
+skillcask -g add github:mattpocock/skills/grill-me
+skillcask -g install --frozen    # e.g. from a dotfiles repository
+```
+
+- `skills.toml`, `skills.lock` and an optional `auth.json` live in `~/.config/skillcask`
+  (`$XDG_CONFIG_HOME/skillcask`; `SKILLCASK_HOME` overrides both). Keep them in your dotfiles.
+- Skills go to `~/.agents/skills` (read by Codex), with links in `~/.claude/skills` and
+  `~/.junie/skills` (`[agents] targets`, relative to home). Links are absolute, so a symlinked
+  `~/.claude` works. `[agents] local` does not apply.
+- Personal skills you wrote by hand stay where they are and are not linked anywhere.
+- The list of managed paths is `~/.config/skillcask/installed`; nothing touches git.
+
 ### Commands
+
+Every command except `publish` takes `-g, --global`.
 
 | Command | |
 |---|---|
