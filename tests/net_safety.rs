@@ -160,3 +160,48 @@ fn tags_beyond_the_page_limit_are_warned_about() {
     let out = p.ok(&["add", "github:acme/many"]);
     assert!(out.contains("warning") && out.contains("1000 tags"), "{out}");
 }
+
+#[test]
+fn cross_host_redirect_drops_credentials() {
+    let a = Server::start();
+    let b = Server::start();
+    b.simple("acme/one", "1.0.0", "one");
+    for path in ["/packages.json", "/p2/acme/one.json"] {
+        a.redirect(path, &b.url(path));
+    }
+    a.require_auth(Some("Bearer t0ken"));
+    let mut p = Project::new(&a);
+    trust(&mut p, &[&a, &b]);
+    p.env.push(("COMPOSER_AUTH".into(), json!({ "bearer": { host(&a): "t0ken" } }).to_string()));
+    p.manifest(&a, "\"acme/one\" = \"^1.0\"\n");
+    p.ok(&["install"]);
+    assert!(a.log().iter().all(|l| l.ends_with("auth=true")), "{:?}", a.log());
+    assert!(!b.log().is_empty() && b.requests().iter().all(|r| !r.headers.contains_key("authorization")), "{:?}", b.log());
+}
+
+#[test]
+fn redirect_to_plain_http_is_refused_before_connecting() {
+    let s = Server::start();
+    let plain = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    s.redirect("/packages.json", &format!("http://127.0.0.1:{}/packages.json", plain.local_addr().unwrap().port()));
+    let p = Project::new(&s);
+    p.manifest(&s, "\"acme/one\" = \"^1.0\"\n");
+    let out = p.expect(&["install"], 3);
+    assert!(out.contains("refusing non-HTTPS"), "{out}");
+    plain.set_nonblocking(true).unwrap();
+    assert_eq!(plain.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock, "no plain HTTP connection");
+}
+
+#[test]
+fn more_than_five_redirects_fail() {
+    let s = Server::start();
+    s.redirect("/packages.json", "/r1");
+    for i in 1..=6 {
+        s.redirect(&format!("/r{i}"), &format!("/r{}", i + 1));
+    }
+    let p = Project::new(&s);
+    p.manifest(&s, "\"acme/one\" = \"^1.0\"\n");
+    let out = p.expect(&["install"], 3);
+    assert!(out.contains("more than 5 redirects"), "{out}");
+    assert_eq!(s.log().len(), 6, "{:?}", s.log());
+}
