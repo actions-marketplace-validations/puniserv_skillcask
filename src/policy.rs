@@ -184,18 +184,17 @@ pub fn resolve(project: &Layer, o: &Outer) -> Result<Effective> {
             && e != v
         {
             let var = format!("SKILLCASK_{}", k.to_uppercase().replace('-', "_"));
-            overrides.push(format!("warning: {var} overrides policy.{k} = {e} enforced by {}; using {v}", o.config_path));
+            overrides.push(format!("{var} overrides policy.{k} = {e} enforced by {}; using {v}", o.config_path));
         }
         // With the key in the environment the project's value is unused, so it cannot clash.
         if let (Some(e), Some(p), None) = (enforced, project.values.get(k), o.env.values.get(k))
             && e != p
         {
-            bail!(
-                MANIFEST,
-                "policy.{k} is enforced as {e} by {}; remove it from {} or ask to lift it",
-                o.config_path,
-                crate::manifest::FILE
-            );
+            return Err(Error::new(MANIFEST, format!("policy.{k} is enforced as {e} by {}", o.config_path)).hint(format!(
+                "remove policy.{k} from {}, or ask whoever manages {} to lift it",
+                crate::manifest::FILE,
+                o.config_path
+            )));
         }
         let pick = if let Some(v) = o.env.values.get(k) {
             Some((v, "environment"))
@@ -212,7 +211,7 @@ pub fn resolve(project: &Layer, o: &Outer) -> Result<Effective> {
     }
     if !overrides.is_empty() && !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
         for w in overrides {
-            eprintln!("{w}");
+            crate::ui::warn(w);
         }
     }
     Ok(out)

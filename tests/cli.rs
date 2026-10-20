@@ -948,7 +948,7 @@ fn personal_skills_shadowing_project_ones_are_warned_about() {
     assert!(out.contains("warning: one: ~/.claude/skills/one shadows the project skill in Claude Code"), "{out}");
     assert!(out.contains("warning: mine: ~/.agents/skills/mine also exists; the agent may show both"), "{out}");
     let out = p.ok(&["doctor"]);
-    assert!(out.contains("warning: one:") && out.contains("no problems found"), "{out}");
+    assert!(out.contains("  ! one: ~/.claude/skills/one shadows") && out.contains("no problems found"), "{out}");
 
     // Global installs land in the home dirs the check looks at; they must not warn about themselves.
     p.global_manifest(&s, "\"acme/one\" = \"^1.0\"\n");

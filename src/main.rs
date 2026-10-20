@@ -15,6 +15,7 @@ mod publish;
 mod registry;
 mod scope;
 mod skill;
+mod ui;
 mod version;
 
 use std::ffi::OsString;
@@ -40,6 +41,10 @@ struct Cli {
     /// Manage personal skills in ~/.agents/skills instead of the project's.
     #[arg(short, long, global = true)]
     global: bool,
+    /// Terse output for coding agents: no colour, no padding, problems only. Also SKILLCASK_AGENT=1;
+    /// detected from AI_AGENT or CLAUDECODE unless SKILLCASK_AGENT=0.
+    #[arg(long, global = true)]
+    agent: bool,
     /// Maximum download size, e.g. 50M.
     #[arg(long, global = true, value_parser = parse_size)]
     max_download: Option<u64>,
@@ -215,8 +220,8 @@ fn auth(cmd: &AuthCmd) -> Result<(), Error> {
         AuthCmd::Set { .. } => {
             let piped = !std::io::stdin().is_terminal();
             let token = if piped { Some(std::io::read_to_string(std::io::stdin())?.trim().to_string()) } else { None };
-            credential::store(&key, username, token.as_deref())?;
-            eprintln!("stored a token for {key} in git's credential helper");
+            let (chars, helpers) = credential::store(&key, username, token.as_deref())?;
+            ui::done("stored", format!("a {chars}-character token for {key} with git's credential helper ({helpers})"));
         }
         AuthCmd::Remove { .. } => credential::remove(&key, username)?,
     }
@@ -251,8 +256,9 @@ fn main() {
         let _ = e.print();
         std::process::exit(if e.use_stderr() { MANIFEST.into() } else { 0 });
     });
+    ui::init(cli.agent);
     if let Err(e) = run(cli) {
-        eprintln!("error: {e}");
+        ui::error(&e.msg, e.hint.as_deref());
         std::process::exit(e.code.into());
     }
 }

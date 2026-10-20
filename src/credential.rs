@@ -58,8 +58,9 @@ pub fn fill(host: &str) -> Option<(String, String)> {
 }
 
 /// Stores a token for `host` with git's helper. `token`: from a pipe; `None` lets git prompt
-/// without echo.
-pub fn store(host: &str, username: &str, token: Option<&str>) -> Result<()> {
+/// without echo. Returns the token's length in characters and the helpers that keep it, so the
+/// user can tell the paste arrived without the token being shown.
+pub fn store(host: &str, username: &str, token: Option<&str>) -> Result<(usize, String)> {
     // A newline would add fields to git's credential protocol.
     if username.is_empty()
         || token == Some("")
@@ -73,23 +74,23 @@ pub fn store(host: &str, username: &str, token: Option<&str>) -> Result<()> {
         bail!(AUTH, "git has no credential helper; set credential.helper (osxkeychain, manager or libsecret) first");
     }
     if helpers.lines().any(|h| h.trim() == "store") {
-        eprintln!("warning: git's credential helper `store` keeps the token in plain text in ~/.git-credentials");
+        crate::ui::warn("git's credential helper `store` keeps the token in plain text in ~/.git-credentials");
     }
     // A stored token would be returned instead of the prompt.
     git("reject", &describe(host, Some(username), None), false);
-    let filled = match token {
-        Some(t) => describe(host, Some(username), Some(t)),
+    let token = match token {
+        Some(t) => t.to_string(),
         None => {
             let out = git("fill", &describe(host, Some(username), None), true)
                 .ok_or_else(|| crate::error::Error::new(AUTH, "no token entered"))?;
-            let password = field(&out, "password").ok_or_else(|| crate::error::Error::new(AUTH, "no token entered"))?;
-            describe(host, Some(username), Some(&password))
+            field(&out, "password").ok_or_else(|| crate::error::Error::new(AUTH, "no token entered"))?
         }
     };
-    if git("approve", &filled, false).is_none() {
+    if git("approve", &describe(host, Some(username), Some(&token)), false).is_none() {
         bail!(AUTH, "git credential approve failed for {host}");
     }
-    Ok(())
+    let helpers: Vec<&str> = helpers.lines().map(str::trim).filter(|h| !h.is_empty()).collect();
+    Ok((token.chars().count(), helpers.join(", ")))
 }
 
 /// Only the entry of `username`: without one git would erase every credential for the host,

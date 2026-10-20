@@ -328,6 +328,12 @@ impl Project {
             .env_remove("COMPOSER_AUTH")
             .env_remove("CI")
             .env_remove("SKILLCASK_LINK_MODE")
+            // The tests run inside coding agents and coloured terminals too; output must not depend on it.
+            .env_remove("AI_AGENT")
+            .env_remove("CLAUDECODE")
+            .env_remove("SKILLCASK_AGENT")
+            .env_remove("NO_COLOR")
+            .env_remove("CLICOLOR_FORCE")
             .env_remove("SKILLCASK_HOME")
             .env_remove("XDG_CONFIG_HOME")
             // HOME holds the only git config, so no system credential helper (Keychain) is asked.

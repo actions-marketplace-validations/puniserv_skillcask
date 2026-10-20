@@ -32,6 +32,9 @@ fn auth_set_stores_a_piped_token_with_git() {
     helper(&p, "");
     let o = p.run_input(&["auth", "set", "git.example.com"], "s3cret\n");
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let shown = format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr));
+    assert!(shown.contains("stored a 6-character token for git.example.com"), "{shown}");
+    assert!(!shown.contains("s3cret"), "the token itself is never shown: {shown}");
     let stored = std::fs::read_to_string(p.home().join("stored")).unwrap();
     assert!(stored.contains("host=git.example.com\n") && stored.contains("username=PRIVATE-TOKEN\npassword=s3cret\n"), "{stored}");
     assert!(!p.run_input(&["auth", "set", "git.example.com"], "a\nb\n").status.success(), "a newline would inject fields");

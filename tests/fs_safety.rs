@@ -225,7 +225,10 @@ fn a_project_rooted_at_home_is_refused() {
     p.env.push(("HOME".into(), root.clone()));
     p.env.push(("USERPROFILE".into(), root));
     let out = p.expect(&["install"], 1);
-    assert!(out.contains("the home directory is the global scope; use --global"), "{out}");
+    assert!(
+        out.contains("the home directory is the global scope, not a project") && out.contains("hint: manage personal skills with --global"),
+        "{out}"
+    );
     assert!(!p.exists(".agents") && !p.exists(".gitignore"));
 }
 
@@ -235,7 +238,10 @@ fn init_refuses_home_and_the_global_config_dir() {
     let mut p = Project::new(&s);
     p.cwd = Some(p.home().to_path_buf());
     let out = p.expect(&["init"], 1);
-    assert!(out.contains("the home directory is the global scope; use --global"), "{out}");
+    assert!(
+        out.contains("the home directory is the global scope, not a project") && out.contains("hint: manage personal skills with --global"),
+        "{out}"
+    );
     assert!(!p.home().join("skills.toml").exists());
 
     let cfg = p.home().join(".config/skillcask");

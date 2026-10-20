@@ -28,8 +28,12 @@ which echoes nothing, so a user cannot tell whether the paste arrived.
 - `doctor` for a person: problems (`✗`), repairs (`✓`) and warnings (`!`) grouped, then a summary.
   For an agent: one line per item without symbols.
 - `outdated` and other tables: aligned columns for a person, tab-separated for an agent.
-- `auth set` confirms what it received: `received a 53-character token for <host>; stored with
-  osxkeychain`. Only the length, never any character of the token.
+- `auth set` confirms what it received: `stored a 53-character token for <host> with git's
+  credential helper (osxkeychain)`. Only the length, never any character of the token.
+
+- Text that comes from a registry (names, versions, descriptions, URLs) can carry terminal escape
+  sequences, for example OSC 52 writing the clipboard. `search` replaces every control character in
+  it, and errors, warnings and notes replace all of them except their own line breaks.
 
 ## Non-goals
 

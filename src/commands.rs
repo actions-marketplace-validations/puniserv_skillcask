@@ -18,6 +18,7 @@ use crate::project::{self, LinkState, STORE};
 use crate::registry::{self, Candidate, Registry};
 use crate::scope::Scope;
 use crate::skill::{self, FileEntry};
+use crate::ui;
 use crate::version::{self, Constraint};
 
 pub struct Ctx {
@@ -205,7 +206,7 @@ impl Ctx {
                 match name.or_else(|| skill::valid_name(base).then(|| base.to_string())) {
                     Some(n) => n,
                     None => {
-                        eprintln!("warning: {}: skipping {md}: no valid skill name ([a-z0-9][a-z0-9-]*)", c.name);
+                        crate::ui::warn(format!("{}: skipping {md}: no valid skill name ([a-z0-9][a-z0-9-]*)", c.name));
                         continue;
                     }
                 }
@@ -536,7 +537,7 @@ impl Ctx {
                     std::fs::write(project::store_dir(s, &sk.name).join(skill::SKILL_MD), md)?;
                 }
                 set_modes(&mut modes, &sk.name, &files);
-                println!("installed {} ({} {})", sk.name, p.name, p.version);
+                crate::ui::done("installed", format!("{} ({} {})", sk.name, p.name, p.version));
             }
         }
 
@@ -546,7 +547,7 @@ impl Ctx {
             }
             set_modes(&mut modes, n, &[]);
             if kept.contains(n) {
-                eprintln!("warning: kept {}: modified or not installed by skillcask", s.show(&format!("{STORE}/{n}")));
+                crate::ui::warn(format!("kept {}: modified or not installed by skillcask", s.show(&format!("{STORE}/{n}"))));
                 continue;
             }
             let dir = project::store_dir(s, n);
@@ -555,7 +556,7 @@ impl Ctx {
             } else if dir.is_dir() {
                 std::fs::remove_dir_all(dir)?;
             }
-            println!("removed {n}");
+            crate::ui::done("removed", n);
         }
         project::write_modes(s, &modes)?;
 
@@ -586,10 +587,10 @@ impl Ctx {
         let tracked = project::git_tracked(s, &managed_paths(&managed, &m.targets));
         if !tracked.is_empty() {
             project::git_untrack(s, &tracked)?;
-            eprintln!("warning: removed managed paths from the git index (files kept): {}", tracked.join(", "));
+            crate::ui::warn(format!("removed managed paths from the git index (files kept): {}", tracked.join(", ")));
         }
         for w in shadows(s, m, locked.keys().chain(&hand).chain(&locals)) {
-            eprintln!("warning: {w}");
+            crate::ui::warn(w);
         }
         Ok(())
     }
@@ -1018,7 +1019,7 @@ pub fn init(ctx: &Ctx) -> Result<()> {
     }
     std::fs::create_dir_all(&ctx.s.config)?;
     std::fs::write(&path, manifest::template(ctx.s.global))?;
-    println!("created {shown}");
+    crate::ui::done("created", &shown);
     Ok(())
 }
 
@@ -1159,9 +1160,9 @@ fn finish_add(ctx: &Ctx, m: &Manifest, req: &SkillReq, repo: &Repository, c: &Ca
 
     manifest::write_skill(&ctx.s.config, ctx.s.global, req)?;
     lock.save(&ctx.s.config)?;
-    println!("added {} = {:?} ({})", req.name, req.constraint, c.version);
+    crate::ui::done("added", format!("{} = {:?} ({})", req.name, req.constraint, c.version));
     for r in report {
-        println!("{r}");
+        say(&r);
     }
     ctx.materialize(&Manifest::load(&ctx.s.config, ctx.s.global)?, &lock, &old, prepared)
 }
@@ -1187,7 +1188,7 @@ pub fn remove(ctx: &Ctx, names: &[String]) -> Result<()> {
     settle_deps(ctx, &view, &mut lock, &mut prepared, &mut BTreeSet::new(), &skip)?;
     let still = deps::wanted(&view, &lock)?;
     for n in names.iter().filter(|n| lock.get(n).is_some()) {
-        println!("kept {n} as a dependency{}", required_by(&still, n));
+        crate::ui::done("kept", format!("{n} as a dependency{}", required_by(&still, n)));
     }
     ctx.preflight(&view, &lock, &old)?;
     manifest::remove_skills(&ctx.s.config, ctx.s.global, names)?;
@@ -1204,17 +1205,17 @@ pub fn install(ctx: &Ctx, frozen: bool) -> Result<()> {
     let mut prepared = HashMap::new();
     if !why.is_empty() {
         if frozen {
-            bail!(
+            return Err(Error::new(
                 MANIFEST,
-                "skills.lock is out of date with skills.toml (frozen install):\n  {}\nrun `skillcask install` locally and commit skills.lock",
-                why.join("\n  ")
-            );
+                format!("skills.lock is out of date with skills.toml (frozen install):\n  {}", why.join("\n  ")),
+            )
+            .hint("run skillcask install locally and commit skills.lock"));
         }
         let mut newcomers = BTreeSet::new();
         let report = settle_deps(ctx, &m, &mut lock, &mut prepared, &mut newcomers, &BTreeSet::new())?;
         m = settle_and_save(ctx, m, &mut lock, &old, &prepared, &newcomers)?;
         for r in report {
-            println!("{r}");
+            say(&r);
         }
     }
     ctx.materialize(&m, &lock, &old, prepared)?;
@@ -1277,12 +1278,12 @@ pub fn update(ctx: &Ctx, names: &[String]) -> Result<()> {
     for n in &skip {
         let req = deps::wanted(&m, &lock)?.reqs.into_iter().find(|r| r.name == *n).expect("skip holds manifest entries");
         if let Some(why) = drift(&m, &req, lock.get(n)) {
-            eprintln!("warning: {n}: {why}; `skillcask install` updates its lock entry");
+            crate::ui::warn(format!("{n}: {why}; `skillcask install` updates its lock entry"));
         }
     }
     let m = settle_and_save(ctx, m, &mut lock, &old, &prepared, &newcomers)?;
     for r in report {
-        println!("{r}");
+        say(&r);
     }
     ctx.materialize(&m, &lock, &old, prepared)
 }
@@ -1334,7 +1335,7 @@ pub fn outdated(ctx: &Ctx) -> Result<()> {
         let v = |c: Option<&Candidate>| c.map_or("-".to_string(), |c| c.version.clone());
         rows.push([req.name.clone(), locked, v(within), v(registry::newest(&cands, None)), note]);
     }
-    print_table(&rows);
+    ui::table(&rows, |_, _| None);
     Ok(())
 }
 
@@ -1344,10 +1345,13 @@ pub fn status(ctx: &Ctx) -> Result<()> {
     let mut rows = vec![["package", "version", "skill", "state"].map(String::from)];
     let mut bad = 0;
     let mut row = |rows: &mut Vec<[String; 4]>, p: &str, v: &str, s: &str, state: &str| {
-        if !matches!(state, "ok" | "hand-written" | "project") {
+        if !healthy(state) {
             bad += 1;
         }
-        rows.push([p, v, s, state].map(String::from));
+        // An agent pays for every row; it only needs the ones to act on.
+        if !(ui::agent() && healthy(state)) {
+            rows.push([p, v, s, state].map(String::from));
+        }
     };
     let w = deps::wanted(&m, &lock)?;
     for req in &w.reqs {
@@ -1388,12 +1392,25 @@ pub fn status(ctx: &Ctx) -> Result<()> {
         let state = if project::link_state(&ctx.s, STORE, &m.local, l) == LinkState::Ok { "project" } else { "not linked" };
         row(&mut rows, "-", "-", l, state);
     }
-    print_table(&rows);
-    for (k, (v, from)) in &m.policy.effective {
-        println!("policy.{k} = {v} ({from})");
+    let skills = rows.iter().skip(1).filter(|r| r[3] == "ok").count();
+    if rows.len() > 1 {
+        ui::table(&rows, |i, c| match (i, healthy(c)) {
+            (3, true) => Some(ui::Color::Green),
+            (3, false) => Some(ui::Color::Red),
+            _ => None,
+        });
+    }
+    // An agent learns the policy's origin from the error a blocked source raises.
+    for (k, (v, from)) in m.policy.effective.iter().filter(|_| !ui::agent()) {
+        println!("{}", ui::out(ui::Color::Dim, format!("policy.{k} = {v} ({from})")));
     }
     if bad > 0 {
-        bail!(MANIFEST, "{bad} problem(s); run `skillcask install`");
+        return Err(Error::new(MANIFEST, format!("{bad} problem(s)")).hint("run skillcask install"));
+    }
+    if ui::agent() {
+        println!("status: ok");
+    } else {
+        println!("{} {skills} skill(s) match skills.lock", ui::out(ui::Color::Green, "✓"));
     }
     Ok(())
 }
@@ -1467,31 +1484,33 @@ pub fn doctor(ctx: &Ctx, fix: bool) -> Result<()> {
         }
     }
 
-    for w in shadows(s, &m, locked.keys().chain(&hand).chain(&locals)) {
-        println!("warning: {w}");
-    }
-    for f in &fixed {
-        println!("fixed: {f}");
-    }
-    for o in &open {
-        println!("problem: {o}");
-    }
-    if !open.is_empty() {
-        bail!(
-            MANIFEST,
-            "{} problem(s){}",
-            open.len(),
-            if fix {
-                String::new()
-            } else if s.global {
-                format!("; `skillcask doctor --fix` repairs links and {block_file}")
+    let warnings = shadows(s, &m, locked.keys().chain(&hand).chain(&locals));
+    // An agent gets the same items with a word instead of a symbol and no blank lines.
+    let section = |items: &[String], mark: &str, word: &str, c: ui::Color| {
+        for i in items {
+            if ui::agent() {
+                println!("{word}: {i}");
             } else {
-                "; `skillcask doctor --fix` repairs links and the gitignore block".into()
+                println!("  {} {i}", ui::out(c, mark));
             }
-        );
+        }
+    };
+    section(&open, "✗", "problem", ui::Color::Red);
+    section(&fixed, "✓", "fixed", ui::Color::Green);
+    section(&warnings, "!", "warning", ui::Color::Yellow);
+    if !open.is_empty() {
+        let e = Error::new(MANIFEST, format!("{} problem(s)", open.len()));
+        return Err(match (fix, s.global) {
+            (true, _) => e,
+            (false, true) => e.hint(format!("skillcask --global doctor --fix repairs links and {block_file}")),
+            (false, false) => e.hint("skillcask doctor --fix repairs links and the gitignore block"),
+        });
     }
-    if fixed.is_empty() {
-        println!("no problems found");
+    let summary = if fixed.is_empty() { "no problems found".to_string() } else { format!("fixed {} problem(s)", fixed.len()) };
+    if ui::agent() {
+        println!("doctor: {summary}");
+    } else {
+        println!("{} {summary}", ui::out(ui::Color::Green, "✓"));
     }
     Ok(())
 }
@@ -1502,24 +1521,27 @@ pub fn search(ctx: &Ctx, query: &str) -> Result<()> {
     if results.is_empty() {
         println!("no skill packages match {query:?}");
     }
-    let width = results.iter().map(|(n, _)| n.len()).max().unwrap_or(0);
+    let results: Vec<(String, String)> = results.iter().map(|(n, d)| (ui::printable(n), ui::printable(d))).collect();
+    let width = results.iter().map(|(n, _)| n.chars().count()).max().unwrap_or(0);
     for (n, d) in results {
-        println!("{n:width$}  {d}");
+        if ui::agent() {
+            println!("{n}\t{d}");
+        } else {
+            println!("{n:width$}  {}", ui::out(ui::Color::Dim, d));
+        }
     }
     Ok(())
 }
 
-fn print_table<const N: usize>(rows: &[[String; N]]) {
-    let mut w = [0; N];
-    for r in rows {
-        for (i, c) in r.iter().enumerate() {
-            w[i] = w[i].max(c.len());
-        }
-    }
-    for r in rows {
-        let line: Vec<String> = r.iter().enumerate().map(|(i, c)| format!("{c:w$}", w = w[i])).collect();
-        println!("{}", line.join("  ").trim_end());
-    }
+/// A report line such as `updated a/b 1.0.0 -> 1.1.0`, its first word as the verb.
+fn say(line: &str) {
+    let (verb, rest) = line.split_once(' ').unwrap_or((line, ""));
+    ui::done(verb, rest);
+}
+
+/// `status` states that are not problems.
+fn healthy(state: &str) -> bool {
+    matches!(state, "ok" | "hand-written" | "project")
 }
 
 #[cfg(test)]

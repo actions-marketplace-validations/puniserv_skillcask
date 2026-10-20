@@ -149,7 +149,7 @@ fn candidates(package: &str, versions: Vec<Map<String, Value>>, base: &Url) -> V
             u
         });
         let (Some("zip"), Some(url)) = (s(&m, &["dist", "type"]).as_deref(), dist_url) else {
-            eprintln!("warning: skipping {package} {version}: no zip dist");
+            crate::ui::warn(format!("skipping {package} {version}: no zip dist"));
             continue;
         };
         let skill_paths = match extra {
@@ -160,7 +160,7 @@ fn candidates(package: &str, versions: Vec<Map<String, Value>>, base: &Url) -> V
         let time = s(&m, &["time"]).and_then(|t| {
             let parsed = release_time(&t);
             if parsed.is_none() {
-                eprintln!("warning: {package} {version}: unrecognised release time {t:?}");
+                crate::ui::warn(format!("{package} {version}: unrecognised release time {t:?}"));
             }
             parsed
         });
@@ -245,7 +245,7 @@ impl<'a> Registry<'a> {
             match found {
                 Ok(f) => out.extend(f),
                 Err(e) => {
-                    eprintln!("warning: repository {}: {}", repo.name, e.msg);
+                    crate::ui::warn(format!("repository {}: {}", repo.name, e.msg));
                     (failed, errors) = (Some(e), errors + 1);
                 }
             }
@@ -307,7 +307,7 @@ impl<'a> Registry<'a> {
         names.retain(|n| n.contains(&q));
         // ponytail: one metadata request per match, capped; a server-side search would lift the cap.
         if names.len() > SEARCH_LIMIT {
-            eprintln!("warning: repository {}: {} packages match; only the first {SEARCH_LIMIT} are checked", repo.name, names.len());
+            crate::ui::warn(format!("repository {}: {} packages match; only the first {SEARCH_LIMIT} are checked", repo.name, names.len()));
             names.truncate(SEARCH_LIMIT);
         }
         let mut out = Vec::new();
@@ -341,7 +341,7 @@ pub fn select(cands: &[Candidate], name: &str, constraint: &str, min_age: Signed
     match pick {
         Some(p) => {
             if p.time.is_none() {
-                eprintln!("warning: {name} {} has no release time; cooldown not applied", p.version);
+                crate::ui::warn(format!("{name} {} has no release time; cooldown not applied", p.version));
             }
             Ok(p.clone())
         }

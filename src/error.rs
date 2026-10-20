@@ -10,13 +10,20 @@ pub const IO: u8 = 5;
 pub struct Error {
     pub code: u8,
     pub msg: String,
+    /// The next step, printed on its own line under the error.
+    pub hint: Option<String>,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
 
 impl Error {
     pub fn new(code: u8, msg: impl Into<String>) -> Self {
-        Error { code, msg: msg.into() }
+        Error { code, msg: msg.into(), hint: None }
+    }
+
+    pub fn hint(mut self, hint: impl Into<String>) -> Self {
+        self.hint = Some(hint.into());
+        self
     }
 }
 
@@ -54,7 +61,7 @@ impl<T, E: Into<Error>> Context<T> for std::result::Result<T, E> {
     fn ctx(self, what: impl fmt::Display) -> Result<T> {
         self.map_err(|e| {
             let e = e.into();
-            Error::new(e.code, format!("{what}: {}", e.msg))
+            Error { msg: format!("{what}: {}", e.msg), ..e }
         })
     }
 }

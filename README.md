@@ -229,6 +229,11 @@ Every command except `publish` takes `-g, --global`.
 Exit codes: 0 ok, 1 manifest/lock/status problems, 2 authentication, 3 network, 4 hash mismatch,
 5 IO or archive error.
 
+Output is coloured in a terminal (`NO_COLOR` turns it off, `CLICOLOR_FORCE` on) and errors name
+the next step on a `hint:` line. For coding agents, `--agent` or `SKILLCASK_AGENT=1` prints terse,
+uncoloured, tab-separated output with only the rows that need action; it is on by itself when
+`AI_AGENT` or `CLAUDECODE=1` is set, unless `SKILLCASK_AGENT=0`.
+
 ### Skills from GitHub and skills.sh
 
 [skills.sh](https://skills.sh) lists skills as `owner/repo/skill`, for example

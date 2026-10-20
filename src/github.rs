@@ -108,7 +108,7 @@ fn read_tags(http: &Http, name: &str) -> Result<Vec<Candidate>> {
         }
     }
     if full {
-        eprintln!("warning: {name}: more than {} tags; only the first {} were read", TAG_PAGES * 100, TAG_PAGES * 100);
+        crate::ui::warn(format!("{name}: more than {} tags; only the first {} were read", TAG_PAGES * 100, TAG_PAGES * 100));
     }
     out.sort_by(|a, b| b.parsed.cmp(&a.parsed));
     Ok(out)
@@ -192,7 +192,7 @@ pub fn resolve(http: &Http, req: &SkillReq, min_age: SignedDuration, now: Timest
                 };
                 if at != sha {
                     let t = commit(http, name, &at)?.1;
-                    eprintln!("note: {name}: newer pushes to {r:?} are within policy.min-release-age; using {}", &at[..12]);
+                    crate::ui::note(format!("{name}: newer pushes to {r:?} are within policy.min-release-age; using {}", &at[..12]));
                     (sha, time) = (at, t);
                 }
                 // Before the oldest listed push only the commit date is known, at most that push.
@@ -222,7 +222,7 @@ pub fn resolve(http: &Http, req: &SkillReq, min_age: SignedDuration, now: Timest
                 if time > cutoff {
                     return Err(none());
                 }
-                eprintln!("note: {name}: newer commits on {r:?} are within policy.min-release-age; using {}", &sha[..12]);
+                crate::ui::note(format!("{name}: newer commits on {r:?} are within policy.min-release-age; using {}", &sha[..12]));
             }
             let parsed = Version::parse("0.0.0").expect("valid");
             Ok(candidate(name, sha[..12].to_string(), parsed, &sha, Some(time)))

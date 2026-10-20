@@ -121,7 +121,8 @@ impl Manifest {
     pub fn load(dir: &Path, global: bool) -> Result<Manifest> {
         let path = dir.join(FILE);
         if !path.exists() {
-            bail!(MANIFEST, "{FILE} not found; run `skillcask init{}`", if global { " --global" } else { "" });
+            let init = if global { "skillcask --global init" } else { "skillcask init" };
+            return Err(crate::error::Error::new(MANIFEST, format!("{FILE} not found")).hint(format!("run {init}")));
         }
         layered(&std::fs::read_to_string(&path)?, global)
     }

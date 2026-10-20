@@ -5,7 +5,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 use crate::bail;
-use crate::error::{IO, MANIFEST, Result};
+use crate::error::{Error, IO, MANIFEST, Result};
 use crate::scope::Scope;
 use crate::skill::SKILL_MD;
 
@@ -37,10 +37,12 @@ pub fn check_root(root: &Path) -> Result<()> {
     let canon = |p: &Path| std::fs::canonicalize(p).ok();
     let Some(r) = canon(root) else { return Ok(()) };
     if crate::scope::home().and_then(|h| canon(&h)).as_ref() == Some(&r) {
-        bail!(MANIFEST, "the home directory is the global scope; use --global");
+        return Err(Error::new(MANIFEST, "the home directory is the global scope, not a project")
+            .hint("manage personal skills with --global, e.g. skillcask --global install"));
     }
     if Scope::global().ok().and_then(|g| canon(&g.config)).as_ref() == Some(&r) {
-        bail!(MANIFEST, "{} is the global config directory; use --global", root.display());
+        return Err(Error::new(MANIFEST, format!("{} is the global config directory, not a project", root.display()))
+            .hint("manage personal skills with --global, e.g. skillcask --global install"));
     }
     Ok(())
 }
