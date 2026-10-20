@@ -751,6 +751,19 @@ fn global_refuses_to_replace_foreign_symlinks() {
     let out = p.global(&["add", "acme/one"], 1);
     assert!(out.contains("~/.claude/skills/one exists and was not created by skillcask"), "{out}");
     assert_eq!(std::fs::read_link(&link).unwrap(), other.path());
+
+    std::fs::remove_file(&link).unwrap();
+    p.global(&["add", "acme/one"], 0);
+    let installed = p.home().join(".config/skillcask/installed");
+    std::fs::remove_file(&installed).unwrap();
+    std::fs::remove_file(&link).unwrap();
+    std::os::unix::fs::symlink(other.path(), &link).unwrap();
+    let out = p.global(&["doctor"], 1);
+    assert!(out.contains(&format!("{}: stale managed block", installed.display())), "{out}");
+    assert!(out.contains(&format!("repairs links and {}", installed.display())), "{out}");
+    let out = p.global(&["doctor", "--fix"], 1);
+    assert!(out.contains("~/.claude/skills/one exists and was not created by skillcask; move it away"), "{out}");
+    assert_eq!(std::fs::read_link(&link).unwrap(), other.path());
 }
 
 #[cfg(unix)]

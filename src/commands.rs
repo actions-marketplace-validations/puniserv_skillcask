@@ -197,17 +197,7 @@ impl Ctx {
                 );
             }
             for t in &m.targets {
-                let foreign = match project::link_state(s, t, STORE, n) {
-                    LinkState::Foreign => true,
-                    // In home a symlink skillcask did not make belongs to the user or another tool.
-                    LinkState::Wrong => {
-                        s.global
-                            && !old_managed.contains(n)
-                            && s.root.join(t).join(n).symlink_metadata().is_ok_and(|m| m.file_type().is_symlink())
-                    }
-                    _ => false,
-                };
-                if foreign {
+                if not_ours(s, t, n, &project::link_state(s, t, STORE, n), &old_managed) {
                     bail!(MANIFEST, "{} exists and was not created by skillcask; move it away", s.show(&format!("{t}/{n}")));
                 }
             }
@@ -303,6 +293,18 @@ fn locked_names(lock: &Lock) -> Result<BTreeMap<String, (&Package, &LockedSkill)
         }
     }
     Ok(out)
+}
+
+/// A target entry skillcask must neither replace nor repair.
+fn not_ours(s: &Scope, at: &str, n: &str, state: &LinkState, old_managed: &BTreeSet<String>) -> bool {
+    match state {
+        LinkState::Foreign => true,
+        // In home a symlink skillcask did not make belongs to the user or another tool.
+        LinkState::Wrong => {
+            s.global && !old_managed.contains(n) && s.root.join(at).join(n).symlink_metadata().is_ok_and(|m| m.file_type().is_symlink())
+        }
+        _ => false,
+    }
 }
 
 fn hand_written(s: &Scope, lock: &Lock, old_managed: &BTreeSet<String>, locals: &BTreeSet<String>) -> Result<BTreeSet<String>> {
@@ -676,7 +678,8 @@ pub fn doctor(ctx: &Ctx, fix: bool) -> Result<()> {
     }
     let locked = locked_names(&lock)?;
     let locals = project::local_names(s, &m.local)?;
-    let hand = hand_written(s, &lock, &project::block_managed(s)?, &locals)?;
+    let old_managed = project::block_managed(s)?;
+    let hand = hand_written(s, &lock, &old_managed, &locals)?;
     let mut open = Vec::new();
     let mut fixed = Vec::new();
 
@@ -684,7 +687,9 @@ pub fn doctor(ctx: &Ctx, fix: bool) -> Result<()> {
     for (at, source, n) in link_plan(&m, &locked, &hand, &locals) {
         let state = project::link_state(s, &at, source, &n);
         let what = format!("{}: link {}", s.show(&format!("{at}/{n}")), format!("{state:?}").to_lowercase());
-        if state != LinkState::Ok {
+        if state != LinkState::Foreign && not_ours(s, &at, &n, &state, &old_managed) {
+            open.push(format!("{} exists and was not created by skillcask; move it away", s.show(&format!("{at}/{n}"))));
+        } else if state != LinkState::Ok {
             if fix && s.root.join(source).join(&n).is_dir() && state != LinkState::Foreign {
                 project::link(s, &at, source, &n)?;
                 fixed.push(what);
@@ -710,13 +715,15 @@ pub fn doctor(ctx: &Ctx, fix: bool) -> Result<()> {
         }
     }
 
+    let block_file = if s.global { s.config.join("installed").display().to_string() } else { ".gitignore".into() };
     let lines = project::block_lines(&managed, &m.targets, &copies);
     if project::read_block(s)? != lines {
+        let what = format!("{block_file}: stale managed block");
         if fix {
             project::write_block(s, &lines)?;
-            fixed.push(".gitignore: stale managed block".into());
+            fixed.push(what);
         } else {
-            open.push(".gitignore: stale managed block".into());
+            open.push(what);
         }
     }
 
@@ -741,7 +748,13 @@ pub fn doctor(ctx: &Ctx, fix: bool) -> Result<()> {
             MANIFEST,
             "{} problem(s){}",
             open.len(),
-            if fix { "" } else { "; `skillcask doctor --fix` repairs links and the gitignore block" }
+            if fix {
+                String::new()
+            } else if s.global {
+                format!("; `skillcask doctor --fix` repairs links and {block_file}")
+            } else {
+                "; `skillcask doctor --fix` repairs links and the gitignore block".into()
+            }
         );
     }
     if fixed.is_empty() {
