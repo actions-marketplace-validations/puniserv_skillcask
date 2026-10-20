@@ -281,8 +281,33 @@ impl Ctx {
             project::git_untrack(s, &tracked)?;
             eprintln!("warning: removed managed paths from the git index (files kept): {}", tracked.join(", "));
         }
+        for w in shadows(s, m, locked.keys().chain(&hand).chain(&locals)) {
+            eprintln!("warning: {w}");
+        }
         Ok(())
     }
+}
+
+/// Personal skills with the same name as project ones. Claude Code runs the personal one;
+/// Codex lists both. Empty for the global scope and for a project rooted at home.
+fn shadows<'a>(s: &Scope, m: &Manifest, names: impl IntoIterator<Item = &'a String>) -> Vec<String> {
+    let Some(home) = crate::scope::home().filter(|h| !s.global && std::fs::canonicalize(h).ok() != std::fs::canonicalize(&s.root).ok())
+    else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for n in names {
+        for d in std::iter::once(STORE).chain(m.targets.iter().map(String::as_str)) {
+            if home.join(d).join(n).symlink_metadata().is_ok() {
+                out.push(if d == ".claude/skills" {
+                    format!("{n}: ~/{d}/{n} shadows the project skill in Claude Code")
+                } else {
+                    format!("{n}: ~/{d}/{n} also exists; the agent may show both")
+                });
+            }
+        }
+    }
+    out
 }
 
 fn locked_names(lock: &Lock) -> Result<BTreeMap<String, (&Package, &LockedSkill)>> {
@@ -738,6 +763,9 @@ pub fn doctor(ctx: &Ctx, fix: bool) -> Result<()> {
         }
     }
 
+    for w in shadows(s, &m, locked.keys().chain(&hand).chain(&locals)) {
+        println!("warning: {w}");
+    }
     for f in &fixed {
         println!("fixed: {f}");
     }

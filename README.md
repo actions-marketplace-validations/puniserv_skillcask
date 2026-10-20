@@ -84,7 +84,9 @@ Project skills live in `.skills/<name>/SKILL.md` (`[agents] local`). skillcask l
 into the store (`.agents/skills/<name> -> ../../.skills/<name>`) and from there into every agent
 directory. These links are committed, so they work in every clone. A directory written by hand
 straight into `.agents/skills/` is linked the same way. A project skill with the same name as a
-locked one is an error.
+locked one is an error. When a skill with the same name exists in your home (`~/.claude/skills`,
+`~/.agents/skills`, …), `install` and `doctor` print a warning: Claude Code runs the personal one,
+Codex lists both.
 
 ### skills.toml
 

@@ -927,3 +927,41 @@ fn global_uses_xdg_config_home() {
     p.global(&["remove", "acme/one"], 0);
     assert!(!p.home().join(".agents/skills/one").exists());
 }
+
+#[test]
+fn personal_skills_shadowing_project_ones_are_warned_about() {
+    let s = Server::start();
+    s.simple("acme/one", "1.0.0", "one");
+    let p = Project::new(&s);
+    p.manifest(&s, "\"acme/one\" = \"^1.0\"\n");
+    p.write(".skills/mine/SKILL.md", &skill_md("mine"));
+    for d in [".claude/skills/one", ".agents/skills/mine"] {
+        std::fs::create_dir_all(p.home().join(d)).unwrap();
+        std::fs::write(p.home().join(d).join("SKILL.md"), "personal").unwrap();
+    }
+    let out = p.ok(&["install"]);
+    assert!(out.contains("warning: one: ~/.claude/skills/one shadows the project skill in Claude Code"), "{out}");
+    assert!(out.contains("warning: mine: ~/.agents/skills/mine also exists; the agent may show both"), "{out}");
+    let out = p.ok(&["doctor"]);
+    assert!(out.contains("warning: one:") && out.contains("no problems found"), "{out}");
+
+    // Global installs land in the home dirs the check looks at; they must not warn about themselves.
+    p.global_manifest(&s, "\"acme/one\" = \"^1.0\"\n");
+    std::fs::remove_dir_all(p.home().join(".claude/skills/one")).unwrap();
+    let out = p.global(&["install"], 0);
+    assert!(p.home().join(".claude/skills/one").exists(), "{out}");
+    assert!(!out.contains("warning"), "{out}");
+}
+
+#[test]
+fn a_project_in_home_does_not_warn_about_its_own_skills() {
+    let s = Server::start();
+    s.simple("acme/one", "1.0.0", "one");
+    let mut p = Project::new(&s);
+    p.manifest(&s, "\"acme/one\" = \"^1.0\"\n");
+    let root = p.path().display().to_string();
+    p.env.push(("HOME".into(), root.clone()));
+    p.env.push(("USERPROFILE".into(), root));
+    let out = p.ok(&["install"]);
+    assert!(p.exists(".claude/skills/one") && !out.contains("warning"), "{out}");
+}
