@@ -1229,9 +1229,7 @@ fn settle_deps(
             let current = lock.get(&req.name).cloned();
             let p = match ctx.relock(m, req, current.as_ref(), prepared)? {
                 Some(p) => p,
-                None => ctx
-                    .resolve(m, req, current.as_ref(), prepared)
-                    .map_err(|e| Error::new(e.code, format!("{}{}", e.msg, required_by(&w, &req.name))))?,
+                None => ctx.resolve(m, req, current.as_ref(), prepared).map_err(|e| e.map_msg(|m| m + &required_by(&w, &req.name)))?,
             };
             if current.is_none() && m.skill(&req.name).is_none() {
                 let by: Vec<&str> = w.by.get(&req.name).into_iter().flatten().map(|(r, _)| r.as_str()).collect();
@@ -2368,7 +2366,7 @@ pub fn diff_from(ctx: &Ctx, base: &Path, package: Option<&str>) -> Result<()> {
     } else {
         std::fs::read_to_string(base).ctx(base.display())?
     };
-    let old = crate::lock::parse(&text).map_err(|e| Error::new(e.code, format!("{}: {}", base.display(), e.msg)))?;
+    let old = crate::lock::parse(&text).ctx(base.display())?;
     if let Some(n) = package
         && lock.get(n).is_none()
         && old.get(n).is_none()

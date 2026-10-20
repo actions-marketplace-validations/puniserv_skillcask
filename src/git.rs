@@ -16,7 +16,7 @@ use zip::{CompressionMethod, System, ZipWriter};
 
 use crate::archive::Limits;
 use crate::bail;
-use crate::error::{Error, IO, MANIFEST, NETWORK, Result};
+use crate::error::{Context, Error, IO, MANIFEST, NETWORK, Result};
 use crate::github::is_sha;
 use crate::http::{Http, redact};
 use crate::lock::Dist;
@@ -142,7 +142,7 @@ fn remote(http: &Http, url: &str) -> Result<Remote> {
     let body = http
         .get(&format!("{url}/info/refs?service=git-upload-pack"), REFS_LIMIT)?
         .ok_or_else(|| Error::new(MANIFEST, format!("git: {url}: repository not found (404)")))?;
-    let r = parse_refs(&body).map_err(|e| Error::new(e.code, format!("{url}: {}", e.msg)))?;
+    let r = parse_refs(&body).ctx(url)?;
     SEEN.lock().unwrap_or_else(|e| e.into_inner()).push((url.to_string(), r.clone()));
     Ok(r)
 }
