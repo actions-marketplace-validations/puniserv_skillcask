@@ -1,5 +1,6 @@
 //! `skills.toml`: read with declaration order preserved, edited in place so comments survive.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use jiff::SignedDuration;
@@ -70,13 +71,15 @@ pub enum GitHub {
 /// The `ref` of a GitHub entry without one: the default branch.
 pub const DEFAULT_REF: &str = "HEAD";
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct SkillReq {
     pub name: String,
     pub constraint: String,
     pub repository: Option<String>,
     pub skills: Option<Vec<String>>,
     pub github: Option<GitHub>,
+    /// Upstream skill name to install name.
+    pub rename: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug)]
@@ -166,7 +169,7 @@ pub fn parse(text: &str, global: bool) -> Result<Manifest> {
                 return Err(bad(format!("{name:?} is not a valid package name (vendor/name, lowercase)")));
             }
             let req = if let Some(c) = item.as_str() {
-                SkillReq { name: name.into(), constraint: c.into(), repository: None, skills: None, github: None }
+                SkillReq { name: name.into(), constraint: c.into(), ..Default::default() }
             } else if let Some(t) = item.as_table_like() {
                 let github = match t.get("github") {
                     None => false,
@@ -195,7 +198,22 @@ pub fn parse(text: &str, global: bool) -> Result<Manifest> {
                     None => None,
                     Some(i) => Some(string_array(i).ok_or_else(|| bad(format!("{name}: skills must be a list of names")))?),
                 };
-                SkillReq { name: name.into(), constraint: constraint.into(), repository, skills, github }
+                let mut rename = BTreeMap::new();
+                if let Some(i) = t.get("rename") {
+                    let bad_table = || bad(format!("{name}: rename must be a table of skill = \"new-name\""));
+                    for (k, v) in i.as_table_like().ok_or_else(bad_table)?.iter() {
+                        let v = v.as_str().ok_or_else(bad_table)?;
+                        if !crate::skill::valid_name(v) {
+                            return Err(bad(format!("{name}: rename: {v:?} is not a valid skill name ([a-z0-9][a-z0-9-]*)")));
+                        }
+                        if rename.values().any(|x: &String| x == v) {
+                            return Err(bad(format!("{name}: rename: two skills renamed to {v:?}")));
+                        }
+                        rename.insert(k.to_string(), v.to_string());
+                    }
+                }
+                rename.retain(|k, v| k != v);
+                SkillReq { name: name.into(), constraint: constraint.into(), repository, skills, github, rename }
             } else {
                 return Err(bad(format!("{name}: expected a version string or a table")));
             };
@@ -309,7 +327,7 @@ fn edit(root: &Path, global: bool, f: impl FnOnce(&mut DocumentMut)) -> Result<(
 pub fn write_skill(root: &Path, global: bool, req: &SkillReq) -> Result<()> {
     edit(root, global, |doc| {
         let skills = doc.entry("skills").or_insert(toml_edit::table());
-        let item = if req.repository.is_none() && req.skills.is_none() && req.github.is_none() {
+        let item = if req.repository.is_none() && req.skills.is_none() && req.github.is_none() && req.rename.is_empty() {
             toml_edit::value(req.constraint.as_str())
         } else {
             let mut t = InlineTable::new();
@@ -331,6 +349,9 @@ pub fn write_skill(root: &Path, global: bool, req: &SkillReq) -> Result<()> {
             }
             if let Some(s) = &req.skills {
                 t.insert("skills", Value::Array(s.iter().map(String::as_str).collect()));
+            }
+            if !req.rename.is_empty() {
+                t.insert("rename", Value::InlineTable(req.rename.iter().map(|(k, v)| (k.as_str(), Value::from(v.as_str()))).collect()));
             }
             Item::Value(Value::InlineTable(t))
         };
@@ -405,6 +426,13 @@ min-release-age = "12h"
         let strict = |entry: &str| parse(&format!("[policy]\nallow-ranges = false\n[skills]\n\"a/b\" = {entry}"), false);
         assert!(strict("{ github = true }").is_err());
         assert!(strict(&format!("{{ github = true, ref = \"{}\" }}", "ab".repeat(20))).is_ok());
+        let r = |entry: &str| parse(&format!("[skills]\n\"a/b\" = {entry}"), false);
+        let ok = r(r#"{ version = "^1.0", rename = { code-review = "mp-review" } }"#).unwrap();
+        assert_eq!(ok.skills[0].rename, BTreeMap::from([("code-review".to_string(), "mp-review".to_string())]));
+        assert!(r(r#"{ version = "^1.0", rename = { a = "Bad Name" } }"#).is_err());
+        assert!(r(r#"{ version = "^1.0", rename = { a = "x", b = "x" } }"#).is_err());
+        assert!(r(r#"{ version = "^1.0", rename = ["x"] }"#).is_err());
+        assert!(r(r#"{ version = "^1.0", rename = { a = "a" } }"#).unwrap().skills[0].rename.is_empty(), "identity renames are dropped");
         assert_eq!(parse_age("0").unwrap(), SignedDuration::ZERO);
         assert!(parse_age("3y").is_err());
     }
@@ -413,8 +441,7 @@ min-release-age = "12h"
     fn edits_keep_comments() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join(FILE), TEMPLATE).unwrap();
-        let req =
-            SkillReq { name: "a/b".into(), constraint: "^1.0".into(), repository: None, skills: Some(vec!["x".into()]), github: None };
+        let req = SkillReq { name: "a/b".into(), constraint: "^1.0".into(), skills: Some(vec!["x".into()]), ..Default::default() };
         write_skill(dir.path(), false, &req).unwrap();
         let text = std::fs::read_to_string(dir.path().join(FILE)).unwrap();
         assert!(text.contains("# skillcask manifest"));
@@ -430,6 +457,11 @@ min-release-age = "12h"
             assert!(text.contains(line), "{text}");
             assert_eq!(parse(&text, false).unwrap().skills, [gh]);
         }
+        let renamed = SkillReq { rename: BTreeMap::from([("x".into(), "y".into())]), ..req.clone() };
+        write_skill(dir.path(), false, &renamed).unwrap();
+        let text = std::fs::read_to_string(dir.path().join(FILE)).unwrap();
+        assert!(text.contains(r#"rename = { x = "y" }"#), "{text}");
+        assert_eq!(parse(&text, false).unwrap().skills, [renamed]);
         remove_skills(dir.path(), false, &["a/b".into()]).unwrap();
         assert!(parse(&std::fs::read_to_string(dir.path().join(FILE)).unwrap(), false).unwrap().skills.is_empty());
     }

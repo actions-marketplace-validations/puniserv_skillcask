@@ -40,6 +40,31 @@ pub fn frontmatter(text: &str) -> BTreeMap<String, String> {
     out
 }
 
+/// Sets the frontmatter `name:` value, keeping every other byte. No frontmatter or no `name:`
+/// line: unchanged, since the directory name then names the skill.
+#[cfg_attr(not(test), expect(dead_code, reason = "install applies renames in the next change"))]
+pub fn rename_frontmatter(text: &str, to: &str) -> String {
+    let body = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let bom = &text[..text.len() - body.len()];
+    let mut lines = body.split_inclusive('\n');
+    if lines.next().map(str::trim_end) != Some("---") {
+        return text.to_string();
+    }
+    let mut at = body.find('\n').map_or(body.len(), |i| i + 1);
+    for line in lines {
+        let content = line.trim_end_matches(['\n', '\r']);
+        if content.trim_end() == "---" {
+            break;
+        }
+        if content.starts_with("name:") {
+            let eol = &line[content.len()..];
+            return format!("{bom}{}name: {to}{eol}{}", &body[..at], &body[at + line.len()..]);
+        }
+        at += line.len();
+    }
+    text.to_string()
+}
+
 /// `[a-z0-9][a-z0-9-]*`: also the directory name under `.agents/skills/`.
 pub fn valid_name(n: &str) -> bool {
     n.starts_with(|c: char| c.is_ascii_lowercase() || c.is_ascii_digit())
@@ -125,6 +150,20 @@ mod tests {
         assert!(!f.contains_key("a"));
         assert!(frontmatter("# no frontmatter").is_empty());
         assert!(valid_name("agents-md") && valid_name("a1") && !valid_name("-a") && !valid_name("A") && !valid_name(""));
+    }
+
+    #[test]
+    fn renames_frontmatter_name_only() {
+        let t = "---\nname: code-review\ndescription: name: x\n---\n# name: code-review\n";
+        assert_eq!(rename_frontmatter(t, "mp-review"), "---\nname: mp-review\ndescription: name: x\n---\n# name: code-review\n");
+        assert_eq!(rename_frontmatter("---\r\nname: \"a\"\r\n---\r\n", "b"), "---\r\nname: b\r\n---\r\n");
+        assert_eq!(rename_frontmatter("\u{feff}---\nname: a\n---\n", "b"), "\u{feff}---\nname: b\n---\n");
+        let no_name = "---\ndescription: d\n---\nname: a\n";
+        assert_eq!(rename_frontmatter(no_name, "b"), no_name);
+        let nested = "---\nmetadata:\n  name: x\n---\n";
+        assert_eq!(rename_frontmatter(nested, "b"), nested);
+        assert_eq!(rename_frontmatter("# no frontmatter", "b"), "# no frontmatter");
+        assert_eq!(frontmatter(&rename_frontmatter(t, "mp-review"))["name"], "mp-review");
     }
 
     #[test]

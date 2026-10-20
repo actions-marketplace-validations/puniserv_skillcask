@@ -20,6 +20,8 @@ pub struct Dist {
 #[derive(Clone, Debug, PartialEq)]
 pub struct LockedSkill {
     pub name: String,
+    /// Upstream name when installed under another one.
+    pub from: Option<String>,
     /// Directory of the skill inside the package, `/`-separated, `""` for the root.
     pub path: String,
     pub tree_sha256: String,
@@ -100,7 +102,11 @@ impl Lock {
             out.push_str("skills = [");
             for (i, s) in p.skills.iter().enumerate() {
                 let sep = if i == 0 { "" } else { "," };
-                let _ = write!(out, "{sep}\n  {{ name = {}, path = {}, tree-sha256 = {} }}", q(&s.name), q(&s.path), q(&s.tree_sha256));
+                let _ = write!(out, "{sep}\n  {{ name = {}, ", q(&s.name));
+                if let Some(f) = &s.from {
+                    let _ = write!(out, "from = {}, ", q(f));
+                }
+                let _ = write!(out, "path = {}, tree-sha256 = {} }}", q(&s.path), q(&s.tree_sha256));
             }
             out.push_str(if p.skills.is_empty() { "]\n" } else { ",\n]\n" });
         }
@@ -145,13 +151,14 @@ fn package(t: &dyn TableLike) -> Result<Package> {
         let st = v.as_inline_table().ok_or_else(|| bad(format!("{name}: invalid skills entry")))?;
         let skill = LockedSkill {
             name: s(st, "name").map_err(ctx)?,
+            from: st.get("from").map(|i| i.as_str().map(String::from).ok_or_else(|| bad(format!("{name}: invalid from")))).transpose()?,
             path: s(st, "path").map_err(ctx)?,
             tree_sha256: s(st, "tree-sha256").map_err(ctx)?,
         };
         // The lock is committed and may come from an untrusted change; both end up in paths.
         let safe_path =
             skill.path.is_empty() || skill.path.split('/').all(|c| !c.is_empty() && c != "." && c != ".." && !c.contains(['\\', ':']));
-        if !crate::skill::valid_name(&skill.name) || !safe_path {
+        if !crate::skill::valid_name(&skill.name) || skill.from.as_deref().is_some_and(|f| !crate::skill::valid_name(f)) || !safe_path {
             return Err(bad(format!("{name}: invalid skill entry {:?} at {:?}", skill.name, skill.path)));
         }
         skills.push(skill);
@@ -185,13 +192,15 @@ mod tests {
                 dist_sha256: "ab".repeat(32),
                 released: Some("2026-10-01T09:12:00Z".parse().unwrap()),
                 skills: vec![
-                    LockedSkill { name: "agents-md".into(), path: "".into(), tree_sha256: "cd".repeat(32) },
-                    LockedSkill { name: "two".into(), path: "skills/two".into(), tree_sha256: "ef".repeat(32) },
+                    LockedSkill { name: "agents-md".into(), from: None, path: "".into(), tree_sha256: "cd".repeat(32) },
+                    LockedSkill { name: "two".into(), from: Some("orig".into()), path: "skills/two".into(), tree_sha256: "ef".repeat(32) },
                 ],
             });
         }
         let text = lock.render();
         assert!(text.contains("released = 2026-10-01T09:12:00Z\n"));
+        assert!(text.contains("{ name = \"two\", from = \"orig\", path"));
+        assert!(parse(&text.replace("from = \"orig\"", "from = \"../x\"")).is_err());
         assert!(text.find("acme/agents-md").unwrap() < text.find("z/last").unwrap());
         let back = parse(&text).unwrap();
         assert_eq!(back, lock);

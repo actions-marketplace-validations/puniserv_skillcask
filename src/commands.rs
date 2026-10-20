@@ -158,7 +158,7 @@ impl Ctx {
                 bail!(MANIFEST, "{}: skill name {name:?} appears twice in the package ({} and {dir})", c.name, other.path);
             }
             let tree_sha256 = skill::tree_hash(&f.skill_files(&c.name, &name, &dir)?);
-            skills.push(LockedSkill { name, path: dir, tree_sha256 });
+            skills.push(LockedSkill { name, from: None, path: dir, tree_sha256 });
         }
         skills.sort_by(|a, b| a.name.cmp(&b.name));
         prepared.insert(c.name.clone(), f);
@@ -479,7 +479,8 @@ pub fn add(ctx: &Ctx, spec: &str, repository: Option<String>) -> Result<()> {
     let constraint = constraint.unwrap_or_else(|| {
         if m.policy.allow_ranges { c.parsed.major_minor() } else { c.version.trim_start_matches(['v', 'V']).to_string() }
     });
-    let req = SkillReq { name, constraint, repository, skills: existing.and_then(|e| e.skills), github: None };
+    let (skills, rename) = existing.map(|e| (e.skills, e.rename)).unwrap_or_default();
+    let req = SkillReq { name, constraint, repository, skills, rename, ..Default::default() };
     finish_add(ctx, existed, &m, &req, &repo, &c)
 }
 
@@ -525,7 +526,15 @@ fn add_github(ctx: &Ctx, spec: &str) -> Result<()> {
         (None, None) => (None, GitHub::Tags),
     };
     let any = if mode == GitHub::Tags { "*" } else { manifest::DEFAULT_REF };
-    let mut req = SkillReq { name, constraint: given.clone().unwrap_or_else(|| any.into()), repository: None, skills, github: Some(mode) };
+    let rename = existing.map(|e| e.rename).unwrap_or_default();
+    let mut req = SkillReq {
+        name,
+        constraint: given.clone().unwrap_or_else(|| any.into()),
+        skills,
+        github: Some(mode),
+        rename,
+        ..Default::default()
+    };
     if given.is_some() {
         manifest::check_constraint(&req, &m.policy).map_err(|e| Error::new(MANIFEST, format!("{}: {e}", req.name)))?;
     }
