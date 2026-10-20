@@ -64,9 +64,14 @@ pub fn publish(args: &PublishArgs) -> Result<()> {
     let mut found: BTreeMap<String, Vec<Found>> = BTreeMap::new();
     let mut origin: BTreeMap<String, PathBuf> = BTreeMap::new();
     for dir in dirs {
-        let fm = frontmatter(&std::fs::read_to_string(dir.join(SKILL_MD))?);
+        let text = std::fs::read_to_string(dir.join(SKILL_MD))?;
+        let fm = frontmatter(&text);
         let (Some(name), Some(version)) = (fm.get("name"), fm.get("version")) else { continue };
         let at = dir.display();
+        // Fails in the skill's own CI rather than at every consumer.
+        for (k, v) in crate::skill::requires(&text).map_err(|e| Error::new(MANIFEST, format!("{at}: {e}")))? {
+            crate::deps::check(&k, &v).map_err(|e| Error::new(MANIFEST, format!("{at}: requires: {e}")))?;
+        }
         if !valid_name(name) {
             bail!(MANIFEST, "{at}: invalid skill name {name:?}");
         }
@@ -480,6 +485,22 @@ mod tests {
         publish(&args(src.path(), out.path())).unwrap();
         let p2: Value = serde_json::from_slice(&std::fs::read(out.path().join("p2/acme/alpha.json")).unwrap()).unwrap();
         assert_eq!(p2["packages"]["acme/alpha"][0]["description"], "Reviews code");
+    }
+
+    #[test]
+    fn checks_requires() {
+        let src = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let write = |req: &str| {
+            std::fs::write(src.path().join(SKILL_MD), format!("---\nname: alpha\nversion: 1.0.0\nrequires:\n  {req}\n---\n")).unwrap()
+        };
+        write("acme/beta: ^1.0");
+        publish(&args(src.path(), out.path())).unwrap();
+        for bad in ["acme/beta: main", "beta: ^1.0", "- acme/beta"] {
+            write(bad);
+            let e = publish(&args(src.path(), out.path())).unwrap_err().msg;
+            assert!(e.contains("requires"), "{bad}: {e}");
+        }
     }
 
     #[test]

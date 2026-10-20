@@ -89,6 +89,8 @@ pub struct Policy {
     pub min_release_age: SignedDuration,
     pub allow_ranges: bool,
     pub packagist: bool,
+    /// `requires:` may name GitHub sources (D16).
+    pub github_requires: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -159,7 +161,11 @@ pub fn parse(text: &str, global: bool) -> Result<Manifest> {
             Some(i) => i.as_bool().ok_or_else(|| bad(format!("policy.{k} must be true or false"))),
         }
     };
-    let policy = Policy { min_release_age, allow_ranges: flag("allow-ranges")?, packagist: flag("packagist")? };
+    let github_requires = match get("github-requires") {
+        None => false,
+        Some(i) => i.as_bool().ok_or_else(|| bad("policy.github-requires must be true or false"))?,
+    };
+    let policy = Policy { min_release_age, allow_ranges: flag("allow-ranges")?, packagist: flag("packagist")?, github_requires };
     if policy.packagist && !repositories.iter().any(|r| r.name == "packagist") {
         repositories.push(Repository { name: "packagist".into(), url: PACKAGIST_URL.into(), ..Default::default() });
     }

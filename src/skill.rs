@@ -33,6 +33,64 @@ pub fn rename_frontmatter(text: &str, to: &str) -> String {
     format!("{bom}{}name: {to}{eol}{}", lines[..f.lines.start].concat(), lines[f.lines.end..].concat())
 }
 
+/// The top-level `requires:` block mapping, key to value as written (quotes and comments
+/// removed); empty without one. Values are checked by `deps::check`.
+pub fn requires(text: &str) -> std::result::Result<BTreeMap<String, String>, String> {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let Some(f) = fields(&lines).and_then(|f| f.into_iter().rev().find(|f| f.key == "requires")) else {
+        return Ok(BTreeMap::new());
+    };
+    let line = |l: &'_ str| l.trim_end_matches(['\n', '\r']).to_string();
+    let inline = line(lines[f.lines.start]).split_once(':').map_or(String::new(), |(_, v)| v.trim().to_string());
+    if !inline.is_empty() && !inline.starts_with('#') {
+        return Err("requires: must be a block mapping of package to constraint".into());
+    }
+    let mut out = BTreeMap::new();
+    let mut indent = None;
+    for l in &lines[f.lines.start + 1..f.lines.end] {
+        let l = line(l);
+        let t = l.trim_start();
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        if *indent.get_or_insert(l.len() - t.len()) != l.len() - t.len() {
+            return Err(format!("requires: unexpected nesting at {t:?}"));
+        }
+        let (k, v) = entry(t).ok_or_else(|| format!("requires: expected `package: constraint`, got {t:?}"))?;
+        if out.insert(k.clone(), v).is_some() {
+            return Err(format!("requires: {k} appears twice"));
+        }
+    }
+    Ok(out)
+}
+
+/// `key: value` of one mapping line; either side may be quoted.
+fn entry(t: &str) -> Option<(String, String)> {
+    let unquote = |s: &str| -> Option<(String, usize)> {
+        let q = s.chars().next().filter(|c| matches!(c, '"' | '\''))?;
+        let n = closing_quote(&s[1..], q)?;
+        Some((s[1..=n].to_string(), n + 2))
+    };
+    let (key, rest) = match unquote(t) {
+        Some((k, n)) => (k, t[n..].strip_prefix(':')?),
+        // `github:owner/repo` holds a colon; only `: ` or a final `:` ends a plain key.
+        None => match t.find(": ") {
+            Some(n) => (t[..n].to_string(), &t[n + 1..]),
+            None => (t.strip_suffix(':')?.to_string(), ""),
+        },
+    };
+    let rest = rest.trim();
+    let value = match unquote(rest) {
+        Some((v, _)) => v,
+        None => {
+            let cut = rest.char_indices().find(|&(n, c)| c == '#' && rest[..n].ends_with(char::is_whitespace));
+            rest[..cut.map_or(rest.len(), |(n, _)| n)].trim().to_string()
+        }
+    };
+    (!key.trim().is_empty() && !value.is_empty()).then(|| (key.trim().to_string(), value))
+}
+
 struct Field<'a> {
     key: &'a str,
     /// `None` when empty, nested or an unterminated quote.
@@ -226,6 +284,29 @@ mod tests {
         assert!(!f.contains_key("a"));
         assert!(frontmatter("# no frontmatter").is_empty());
         assert!(valid_name("agents-md") && valid_name("a1") && !valid_name("-a") && !valid_name("A") && !valid_name(""));
+    }
+
+    #[test]
+    fn reads_requires() {
+        let t = "---\nname: mr\nrequires:\n  acme/review: ^1.0 # pinned\n\n  # comment\n  \"github:o/r/pr\": 'main'\n  github:o/x: \">=1, <2\"\ndescription: d\n---\n";
+        let r = requires(t).unwrap();
+        assert_eq!(r.len(), 3, "{r:?}");
+        assert_eq!(r["acme/review"], "^1.0");
+        assert_eq!(r["github:o/r/pr"], "main");
+        assert_eq!(r["github:o/x"], ">=1, <2");
+        assert!(requires("---\nname: a\n---\n").unwrap().is_empty());
+        assert!(requires("---\nrequires:\n---\n").unwrap().is_empty());
+        assert!(requires("# none").unwrap().is_empty());
+        for bad in [
+            "---\nrequires: acme/a\n---\n",
+            "---\nrequires: {acme/a: ^1}\n---\n",
+            "---\nrequires:\n  - acme/a\n---\n",
+            "---\nrequires:\n  acme/a:\n    x: y\n---\n",
+            "---\nrequires:\n  acme/a:\n---\n",
+            "---\nrequires:\n  acme/a: ^1\n  acme/a: ^2\n---\n",
+        ] {
+            assert!(requires(bad).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

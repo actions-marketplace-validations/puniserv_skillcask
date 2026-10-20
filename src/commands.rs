@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 
 use crate::archive::{self, Limits};
 use crate::bail;
+use crate::deps;
 use crate::error::{Context, Error, HASH, MANIFEST, NETWORK, Result};
 use crate::github;
 use crate::http::Http;
@@ -177,7 +178,7 @@ impl Ctx {
         // GitHub repositories declare no skill paths; any SKILL.md counts.
         let discovered = c.skill_paths.is_empty();
         let paths = if discovered { github::discover(&f.entries) } else { c.skill_paths.clone() };
-        let mut found: Vec<(String, String)> = Vec::new();
+        let mut found: Vec<(String, String, String)> = Vec::new();
         for p in &paths {
             let p = p.trim_start_matches("./").trim_end_matches('/');
             let rel = Path::new(p);
@@ -209,11 +210,11 @@ impl Ctx {
                     Error::new(MANIFEST, format!("{} {}: {md} has no frontmatter name matching [a-z0-9][a-z0-9-]*", c.name, c.version))
                 })?
             };
-            found.push((name, dir));
+            found.push((name, dir, md));
         }
         for k in req.rename.keys() {
-            if !found.iter().any(|(n, _)| n == k) {
-                let have: Vec<&str> = found.iter().map(|(n, _)| n.as_str()).collect();
+            if !found.iter().any(|(n, ..)| n == k) {
+                let have: Vec<&str> = found.iter().map(|(n, ..)| n.as_str()).collect();
                 bail!(MANIFEST, "{}: rename: no skill {k:?} in {} (it has: {})", req.name, c.version, have.join(", "));
             }
             if req.skills.as_ref().is_some_and(|sel| !sel.contains(k)) {
@@ -222,18 +223,28 @@ impl Ctx {
         }
         if let Some(sel) = &req.skills {
             for s in sel {
-                if !found.iter().any(|(n, _)| n == s) {
-                    let have: Vec<&str> = found.iter().map(|(n, _)| n.as_str()).collect();
+                if !found.iter().any(|(n, ..)| n == s) {
+                    let have: Vec<&str> = found.iter().map(|(n, ..)| n.as_str()).collect();
                     bail!(MANIFEST, "{}: no skill {s:?} in {} (it has: {})", req.name, c.version, have.join(", "));
                 }
             }
-            found.retain(|(n, _)| sel.contains(n));
+            found.retain(|(n, ..)| sel.contains(n));
         }
         if found.is_empty() {
             bail!(MANIFEST, "{} {}: no skills found", c.name, c.version);
         }
         let mut skills: Vec<LockedSkill> = Vec::new();
-        for (from, dir) in found {
+        let mut requires: BTreeMap<String, String> = BTreeMap::new();
+        for (from, dir, md) in found {
+            let bad = |e: String| Error::new(MANIFEST, format!("{} {}: {md}: {e}", c.name, c.version));
+            for (k, v) in skill::requires(&std::fs::read_to_string(f.dir.path().join(&md))?).map_err(bad)? {
+                deps::check(&k, &v).map_err(bad)?;
+                let v = match requires.remove(&k) {
+                    Some(prev) => deps::intersect(&[prev, v]).map_err(bad)?,
+                    None => v,
+                };
+                requires.insert(k, v);
+            }
             let to = req.rename.get(&from);
             let name = to.unwrap_or(&from).clone();
             if let Some(other) = skills.iter().find(|s| s.name == name) {
@@ -261,6 +272,7 @@ impl Ctx {
                 v.sort();
                 v
             }),
+            requires,
             skills,
         })
     }
@@ -272,8 +284,8 @@ impl Ctx {
             project::no_symlink(&self.s, p)?;
         }
         if let Some(c) = self.conflicts(m, lock, old, &BTreeSet::new())?.first() {
-            let renames = m.skill(&c.package).map(|r| r.rename.clone()).unwrap_or_default();
-            bail!(MANIFEST, "{}", hint(c, &self.taken_names(m, lock)?, &renames));
+            let renames = m.skill(&c.package).map(|r| &r.rename);
+            bail!(MANIFEST, "{}", hint(c, &self.taken_names(m, lock)?, renames));
         }
         // Hand-written and project skills have no package to rename; without this check they
         // would fail in the middle of `materialize`.
@@ -406,7 +418,9 @@ impl Ctx {
         let mut last: Option<(String, String)> = None;
         loop {
             let taken = self.taken_names(m, lock)?;
-            let Some(c) = self.conflicts(m, lock, old, newcomers)?.into_iter().find(|c| c.rename && newcomers.contains(&c.package)) else {
+            // A dependency has no manifest entry to hold `rename`; `preflight` names the fix.
+            let offer = |c: &Conflict| c.rename && newcomers.contains(&c.package) && m.skill(&c.package).is_some();
+            let Some(c) = self.conflicts(m, lock, old, newcomers)?.into_iter().find(offer) else {
                 break;
             };
             // A rename to an untaken name clears the conflict; if it did not, asking again would loop.
@@ -420,8 +434,11 @@ impl Ctx {
             last = Some((c.package, c.upstream));
         }
         if shadows_too {
-            let news: Vec<(String, LockedSkill)> =
-                lock.skills().filter(|(p, _)| newcomers.contains(&p.name)).map(|(p, s)| (p.name.clone(), s.clone())).collect();
+            let news: Vec<(String, LockedSkill)> = lock
+                .skills()
+                .filter(|(p, _)| newcomers.contains(&p.name) && m.skill(&p.name).is_some())
+                .map(|(p, s)| (p.name.clone(), s.clone()))
+                .collect();
             for (p, s) in news {
                 let Some(w) = shadows(&self.s, m, [&s.name]).into_iter().next() else { continue };
                 let taken = self.taken_names(m, lock)?;
@@ -565,16 +582,18 @@ fn suggest(package: &str, upstream: &str, taken: &BTreeSet<String>) -> Option<St
     (skill::valid_name(&name) && !taken.contains(&name)).then_some(name)
 }
 
-/// `renames`: the entry's current `rename`, shown merged so the line can replace it.
-fn hint(c: &Conflict, taken: &BTreeSet<String>, renames: &BTreeMap<String, String>) -> String {
+/// `renames`: the entry's current `rename`, shown merged so the line can replace it; `None` for a
+/// dependency, which has no entry yet.
+fn hint(c: &Conflict, taken: &BTreeSet<String>, renames: Option<&BTreeMap<String, String>>) -> String {
     if !c.rename {
         return c.msg.clone();
     }
     let to = suggest(&c.package, &c.upstream, taken).unwrap_or_else(|| "<new-name>".into());
-    let mut all = renames.clone();
+    let mut all = renames.cloned().unwrap_or_default();
     all.insert(c.upstream.clone(), to);
     let pairs: Vec<String> = all.iter().map(|(k, v)| format!("{k} = \"{v}\"")).collect();
-    format!("{}\n  to install it under another name, set in its entry in {}:\n  rename = {{ {} }}", c.msg, manifest::FILE, pairs.join(", "))
+    let place = if renames.is_some() { "set in its entry in" } else { "it is a dependency; add an entry for it to" };
+    format!("{}\n  to install it under another name, {place} {}:\n  rename = {{ {} }}", c.msg, manifest::FILE, pairs.join(", "))
 }
 
 fn question(msg: &str, package: &str) -> String {
@@ -795,21 +814,77 @@ fn managed_paths(managed: &BTreeSet<String>, targets: &[String]) -> Vec<String> 
 }
 
 /// Manifest entries that need resolving, lock entries to drop, and why.
-fn reconcile(m: &Manifest, lock: &Lock) -> (Vec<SkillReq>, Vec<String>, Vec<String>) {
+/// `reqs`: the effective requirements, `deps::wanted`.
+fn reconcile(m: &Manifest, reqs: &[SkillReq], lock: &Lock) -> (Vec<SkillReq>, Vec<String>, Vec<String>) {
     let (mut needs, mut stale, mut why) = (Vec::new(), Vec::new(), Vec::new());
-    for req in &m.skills {
+    for req in reqs {
         if let Some(r) = drift(m, req, lock.get(&req.name)) {
             why.push(format!("{}: {r}", req.name));
             needs.push(req.clone());
         }
     }
     for p in &lock.packages {
-        if m.skill(&p.name).is_none() {
-            why.push(format!("{}: in skills.lock but not in skills.toml", p.name));
+        if !reqs.iter().any(|r| r.name == p.name) {
+            why.push(format!("{}: in skills.lock but neither in skills.toml nor required", p.name));
             stale.push(p.name.clone());
         }
     }
     (needs, stale, why)
+}
+
+/// Manifest entries that drift from `lock`, and lock entries nobody wants: commands that do not
+/// own them leave them alone.
+fn drifted(m: &Manifest, lock: &Lock) -> BTreeSet<String> {
+    let Ok(w) = deps::wanted(m, lock) else { return BTreeSet::new() };
+    let (needs, stale, _) = reconcile(m, &w.reqs, lock);
+    needs.into_iter().map(|r| r.name).filter(|n| m.skill(n).is_some()).chain(stale).collect()
+}
+
+fn required_by(w: &deps::Wanted, name: &str) -> String {
+    let Some(by) = w.by.get(name) else { return String::new() };
+    format!("\n  required by: {}", by.iter().map(|(r, c)| format!("{r} ({c})")).collect::<Vec<_>>().join(", "))
+}
+
+/// A requirer's new version can require more, so resolving repeats until nothing drifts.
+const MAX_ROUNDS: usize = 50;
+
+/// Resolves until the lock matches the manifest plus every dependency, and drops what nobody
+/// wants. `skip`: drifted manifest entries this command leaves alone. Returns a line per new
+/// dependency, printed once the command has saved.
+fn settle_deps(
+    ctx: &Ctx,
+    m: &Manifest,
+    lock: &mut Lock,
+    prepared: &mut HashMap<String, Fetched>,
+    newcomers: &mut BTreeSet<String>,
+    skip: &BTreeSet<String>,
+) -> Result<Vec<String>> {
+    let mut report = Vec::new();
+    for _ in 0..MAX_ROUNDS {
+        let w = deps::wanted(m, lock)?;
+        let (needs, stale, _) = reconcile(m, &w.reqs, lock);
+        lock.packages.retain(|p| !stale.contains(&p.name) || skip.contains(&p.name));
+        let needs: Vec<SkillReq> = needs.into_iter().filter(|r| !skip.contains(&r.name)).collect();
+        if needs.is_empty() {
+            return Ok(report);
+        }
+        for req in &needs {
+            let current = lock.get(&req.name).cloned();
+            let p = match ctx.relock(m, req, current.as_ref(), prepared)? {
+                Some(p) => p,
+                None => ctx
+                    .resolve(m, req, current.as_ref(), prepared)
+                    .map_err(|e| Error::new(e.code, format!("{}{}", e.msg, required_by(&w, &req.name))))?,
+            };
+            if current.is_none() && m.skill(&req.name).is_none() {
+                let by: Vec<&str> = w.by.get(&req.name).into_iter().flatten().map(|(r, _)| r.as_str()).collect();
+                report.push(format!("added {} {} (dependency of {})", p.name, p.version, by.join(", ")));
+            }
+            newcomers.insert(req.name.clone());
+            lock.upsert(p);
+        }
+    }
+    bail!(MANIFEST, "dependencies do not settle after {MAX_ROUNDS} rounds; check for requirements that keep changing each other")
 }
 
 /// Why the lock entry does not match the manifest entry. Keys a lock may lack (written by an
@@ -1029,13 +1104,20 @@ fn finish_add(ctx: &Ctx, m: &Manifest, req: &SkillReq, repo: &Repository, c: &Ca
     let mut view = m.clone();
     view.skills.retain(|r| r.name != req.name);
     view.skills.push(req.clone());
-    let changed = ctx.settle_conflicts(&view, &mut lock, &old, &prepared, &BTreeSet::from([req.name.clone()]), true)?;
+    let mut skip = drifted(m, &old);
+    skip.remove(&req.name);
+    let mut newcomers = BTreeSet::from([req.name.clone()]);
+    let report = settle_deps(ctx, &view, &mut lock, &mut prepared, &mut newcomers, &skip)?;
+    let changed = ctx.settle_conflicts(&view, &mut lock, &old, &prepared, &newcomers, true)?;
     let req = &changed.into_iter().find(|r| r.name == req.name).unwrap_or_else(|| req.clone());
     ctx.preflight(&view, &lock, &old)?;
 
     manifest::write_skill(&ctx.s.config, ctx.s.global, req)?;
     lock.save(&ctx.s.config)?;
     println!("added {} = {:?} ({})", req.name, req.constraint, c.version);
+    for r in report {
+        println!("{r}");
+    }
     ctx.materialize(&Manifest::load(&ctx.s.config, ctx.s.global)?, &lock, &old, prepared)
 }
 
@@ -1043,25 +1125,36 @@ pub fn remove(ctx: &Ctx, names: &[String]) -> Result<()> {
     let m = Manifest::load(&ctx.s.config, ctx.s.global)?;
     let mut lock = Lock::load(&ctx.s.config)?;
     let old = lock.clone();
+    let w = deps::wanted(&m, &lock)?;
     for n in names {
         if m.skill(n).is_none() && lock.get(n).is_none() {
             bail!(MANIFEST, "{n} is not in {} or {}", manifest::FILE, crate::lock::FILE);
         }
+        if m.skill(n).is_none() && w.by.contains_key(n) {
+            bail!(MANIFEST, "{n} is a dependency; remove what requires it{}", required_by(&w, n));
+        }
     }
-    lock.packages.retain(|p| !names.contains(&p.name));
     let mut view = m.clone();
     view.skills.retain(|r| !names.contains(&r.name));
+    let mut prepared = HashMap::new();
+    let mut skip = drifted(&m, &old);
+    skip.retain(|n| !names.contains(n));
+    settle_deps(ctx, &view, &mut lock, &mut prepared, &mut BTreeSet::new(), &skip)?;
+    let still = deps::wanted(&view, &lock)?;
+    for n in names.iter().filter(|n| lock.get(n).is_some()) {
+        println!("kept {n} as a dependency{}", required_by(&still, n));
+    }
     ctx.preflight(&view, &lock, &old)?;
     manifest::remove_skills(&ctx.s.config, ctx.s.global, names)?;
     lock.save(&ctx.s.config)?;
-    ctx.materialize(&Manifest::load(&ctx.s.config, ctx.s.global)?, &lock, &old, HashMap::new())
+    ctx.materialize(&Manifest::load(&ctx.s.config, ctx.s.global)?, &lock, &old, prepared)
 }
 
 pub fn install(ctx: &Ctx, frozen: bool) -> Result<()> {
     let mut m = Manifest::load(&ctx.s.config, ctx.s.global)?;
     let mut lock = Lock::load(&ctx.s.config)?;
     let old = lock.clone();
-    let (needs, stale, why) = reconcile(&m, &lock);
+    let (_, _, why) = reconcile(&m, &deps::wanted(&m, &lock)?.reqs, &lock);
     let filled = !frozen && fill_new_keys(&m, &mut lock);
     let mut prepared = HashMap::new();
     if !why.is_empty() {
@@ -1072,16 +1165,12 @@ pub fn install(ctx: &Ctx, frozen: bool) -> Result<()> {
                 why.join("\n  ")
             );
         }
-        for req in &needs {
-            let p = match ctx.relock(&m, req, old.get(&req.name), &mut prepared)? {
-                Some(p) => p,
-                None => ctx.resolve(&m, req, old.get(&req.name), &mut prepared)?,
-            };
-            lock.upsert(p);
-        }
-        lock.packages.retain(|p| !stale.contains(&p.name));
-        let newcomers = needs.iter().map(|r| r.name.clone()).collect();
+        let mut newcomers = BTreeSet::new();
+        let report = settle_deps(ctx, &m, &mut lock, &mut prepared, &mut newcomers, &BTreeSet::new())?;
         m = settle_and_save(ctx, m, &mut lock, &old, &prepared, &newcomers)?;
+        for r in report {
+            println!("{r}");
+        }
     }
     ctx.materialize(&m, &lock, &old, prepared)?;
     if filled && why.is_empty() {
@@ -1117,16 +1206,19 @@ pub fn update(ctx: &Ctx, names: &[String]) -> Result<()> {
     let m = Manifest::load(&ctx.s.config, ctx.s.global)?;
     let mut lock = Lock::load(&ctx.s.config)?;
     let old = lock.clone();
+    let w = deps::wanted(&m, &old)?;
     for n in names {
-        if m.skill(n).is_none() {
-            bail!(MANIFEST, "{n} is not in {}", manifest::FILE);
+        if !w.reqs.iter().any(|r| r.name == *n) {
+            bail!(MANIFEST, "{n} is not in {} and no locked package requires it", manifest::FILE);
         }
     }
     let mut prepared = HashMap::new();
     let mut newcomers = BTreeSet::new();
     let mut report = Vec::new();
+    let skip: BTreeSet<String> =
+        drifted(&m, &old).into_iter().filter(|n| m.skill(n).is_some() && !names.contains(n) && old.get(n).is_some()).collect();
     // Entries not locked yet are resolved too, so the lock is complete afterwards.
-    for req in m.skills.iter().filter(|r| names.is_empty() || names.contains(&r.name) || old.get(&r.name).is_none()) {
+    for req in w.reqs.iter().filter(|r| names.is_empty() || names.contains(&r.name) || old.get(&r.name).is_none()) {
         newcomers.insert(req.name.clone());
         let new = ctx.resolve(&m, req, old.get(&req.name), &mut prepared)?;
         match old.get(&req.name) {
@@ -1136,13 +1228,13 @@ pub fn update(ctx: &Ctx, names: &[String]) -> Result<()> {
         }
         lock.upsert(new);
     }
-    for req in m.skills.iter().filter(|r| !newcomers.contains(&r.name)) {
-        if let Some(why) = drift(&m, req, old.get(&req.name)) {
-            eprintln!("warning: {}: {why}; `skillcask install` updates its lock entry", req.name);
+    report.extend(settle_deps(ctx, &m, &mut lock, &mut prepared, &mut newcomers, &skip)?);
+    for n in &skip {
+        let req = deps::wanted(&m, &lock)?.reqs.into_iter().find(|r| r.name == *n).expect("skip holds manifest entries");
+        if let Some(why) = drift(&m, &req, lock.get(n)) {
+            eprintln!("warning: {n}: {why}; `skillcask install` updates its lock entry");
         }
     }
-    let (_, stale, _) = reconcile(&m, &lock);
-    lock.packages.retain(|p| !stale.contains(&p.name));
     let m = settle_and_save(ctx, m, &mut lock, &old, &prepared, &newcomers)?;
     for r in report {
         println!("{r}");
@@ -1211,10 +1303,15 @@ pub fn status(ctx: &Ctx) -> Result<()> {
         }
         rows.push([p, v, s, state].map(String::from));
     };
-    for req in &m.skills {
+    let w = deps::wanted(&m, &lock)?;
+    for req in &w.reqs {
+        let label = match w.by.get(&req.name).filter(|_| m.skill(&req.name).is_none()) {
+            Some(by) => format!("{} (via {})", req.name, by.iter().map(|(r, _)| r.as_str()).collect::<Vec<_>>().join(", ")),
+            None => req.name.clone(),
+        };
         let p = lock.get(&req.name);
         if let Some(why) = drift(&m, req, p) {
-            row(&mut rows, &req.name, p.map_or("-", |p| &p.version), "-", &why);
+            row(&mut rows, &label, p.map_or("-", |p| &p.version), "-", &why);
             continue;
         }
         let Some(p) = p else { continue };
@@ -1224,7 +1321,7 @@ pub fn status(ctx: &Ctx) -> Result<()> {
                 Some(h) if h != sk.tree_sha256 => "modified",
                 Some(_) => "ok",
             };
-            row(&mut rows, &p.name, &p.version, &sk.name, state);
+            row(&mut rows, &label, &p.version, &sk.name, state);
         }
     }
     let mut providers: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
@@ -1234,7 +1331,7 @@ pub fn status(ctx: &Ctx) -> Result<()> {
     for (n, ps) in providers.iter().filter(|(_, ps)| ps.len() > 1) {
         row(&mut rows, "-", "-", n, &format!("skill {n:?} is provided by both {}", ps.join(" and ")));
     }
-    for p in lock.packages.iter().filter(|p| m.skill(&p.name).is_none()) {
+    for p in lock.packages.iter().filter(|p| !w.reqs.iter().any(|r| r.name == p.name)) {
         row(&mut rows, &p.name, &p.version, "-", "not in skills.toml");
     }
     let locals = project::local_names(&ctx.s, &m.local)?;
@@ -1404,6 +1501,10 @@ mod tests {
         assert_eq!(question(&c.msg, &c.package), c.msg);
         assert_eq!(question("one: ~/.claude/skills/one shadows", "acme/a"), "one: ~/.claude/skills/one shadows (acme/a)");
         let renames = BTreeMap::from([("a".to_string(), "x".to_string())]);
-        assert!(hint(&c, &taken, &renames).ends_with("rename = { a = \"x\", one = \"acme-one\" }"), "{}", hint(&c, &taken, &renames));
+        assert!(
+            hint(&c, &taken, Some(&renames)).ends_with("rename = { a = \"x\", one = \"acme-one\" }"),
+            "{}",
+            hint(&c, &taken, Some(&renames))
+        );
     }
 }

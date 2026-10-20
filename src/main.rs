@@ -3,6 +3,7 @@
 mod archive;
 mod commands;
 mod credential;
+mod deps;
 mod error;
 mod github;
 mod http;
