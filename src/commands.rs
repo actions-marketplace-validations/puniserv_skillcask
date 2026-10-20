@@ -193,11 +193,16 @@ impl Ctx {
         Ok(Package {
             name: c.name.clone(),
             constraint: req.constraint.clone(),
+            git_ref: req.github.map(|g| g == GitHub::Ref),
             version: c.version.clone(),
             repository: repo.url.clone(),
             dist: c.dist.clone(),
             dist_sha256: sha,
             released: c.time,
+            selected: req.skills.clone().map(|mut v| {
+                v.sort();
+                v
+            }),
             skills,
         })
     }
@@ -688,34 +693,7 @@ fn managed_paths(managed: &BTreeSet<String>, targets: &[String]) -> Vec<String> 
 fn reconcile(m: &Manifest, lock: &Lock) -> (Vec<SkillReq>, Vec<String>, Vec<String>) {
     let (mut needs, mut stale, mut why) = (Vec::new(), Vec::new(), Vec::new());
     for req in &m.skills {
-        let reason = match lock.get(&req.name) {
-            None => Some("not in skills.lock".to_string()),
-            Some(p) if p.constraint != req.constraint => {
-                Some(format!("constraint changed from {:?} to {:?}", p.constraint, req.constraint))
-            }
-            Some(p) if source_changed(m, req, p) => Some("repository changed".to_string()),
-            // ponytail: removing `skills = [...]` does not re-resolve to all skills; run `update` for that.
-            Some(p)
-                if req.skills.as_ref().is_some_and(|sel| {
-                    let a: BTreeSet<&String> = sel.iter().collect();
-                    let b: BTreeSet<&String> = p.skills.iter().map(|s| s.from.as_ref().unwrap_or(&s.name)).collect();
-                    a != b
-                }) =>
-            {
-                Some("skill selection changed".to_string())
-            }
-            Some(p)
-                if {
-                    let locked: BTreeMap<&String, &String> =
-                        p.skills.iter().filter_map(|s| s.from.as_ref().map(|f| (f, &s.name))).collect();
-                    locked != req.rename.iter().collect()
-                } =>
-            {
-                Some("rename changed".to_string())
-            }
-            Some(_) => None,
-        };
-        if let Some(r) = reason {
+        if let Some(r) = drift(m, req, lock.get(&req.name)) {
             why.push(format!("{}: {r}", req.name));
             needs.push(req.clone());
         }
@@ -729,11 +707,43 @@ fn reconcile(m: &Manifest, lock: &Lock) -> (Vec<SkillReq>, Vec<String>, Vec<Stri
     (needs, stale, why)
 }
 
+/// Why the lock entry does not match the manifest entry. Keys a lock may lack (written by an
+/// older version) count as matching: absent `selected` is all skills, absent `ref` any mode.
+fn drift(m: &Manifest, req: &SkillReq, p: Option<&Package>) -> Option<String> {
+    let Some(p) = p else { return Some("not in skills.lock".into()) };
+    if p.constraint != req.constraint {
+        return Some(format!("constraint changed from {:?} to {:?}", p.constraint, req.constraint));
+    }
+    if source_changed(m, req, p) {
+        return Some("repository changed".into());
+    }
+    let mode = |r: bool| if r { "ref" } else { "version" };
+    if let (Some(g), Some(r)) = (req.github, p.git_ref)
+        && r != (g == GitHub::Ref)
+    {
+        return Some(format!("changed from {} to {}", mode(r), mode(!r)));
+    }
+    let upstream: BTreeSet<&String> = p.skills.iter().map(|s| s.from.as_ref().unwrap_or(&s.name)).collect();
+    let selection_changed = match &req.skills {
+        Some(sel) => sel.iter().collect::<BTreeSet<_>>() != upstream,
+        None => p.selected.is_some(),
+    };
+    if selection_changed {
+        return Some("skill selection changed".into());
+    }
+    let renamed: BTreeMap<&String, &String> = p.skills.iter().filter_map(|s| s.from.as_ref().map(|f| (f, &s.name))).collect();
+    if renamed != req.rename.iter().collect() {
+        return Some("rename changed".into());
+    }
+    None
+}
+
 fn source_changed(m: &Manifest, req: &SkillReq, p: &Package) -> bool {
     match (req.github, &req.repository) {
-        (Some(_), _) => p.repository != github::repository(&req.name).url,
+        // Only the path: the API base may differ between machines (GitHub Enterprise, a proxy).
+        (Some(_), _) => !p.repository.ends_with(&format!("/repos/{}", req.name)),
         (None, Some(r)) => m.repository(r).is_some_and(|r| r.url != p.repository),
-        (None, None) => github::is_github(&p.repository),
+        (None, None) => !m.repositories.iter().any(|r| r.url == p.repository),
     }
 }
 
@@ -903,6 +913,7 @@ pub fn install(ctx: &Ctx, frozen: bool) -> Result<()> {
     let mut lock = Lock::load(&ctx.s.config)?;
     let old = lock.clone();
     let (needs, stale, why) = reconcile(&m, &lock);
+    let filled = !frozen && fill_new_keys(&m, &mut lock);
     let mut prepared = HashMap::new();
     if !why.is_empty() {
         if frozen {
@@ -919,7 +930,34 @@ pub fn install(ctx: &Ctx, frozen: bool) -> Result<()> {
         let newcomers = needs.iter().map(|r| r.name.clone()).collect();
         m = settle_and_save(ctx, m, &mut lock, &old, &prepared, &newcomers)?;
     }
-    ctx.materialize(&m, &lock, &old, prepared)
+    ctx.materialize(&m, &lock, &old, prepared)?;
+    if filled && why.is_empty() {
+        lock.save(&ctx.s.config)?;
+    }
+    Ok(())
+}
+
+/// Adds `selected` and `ref` to entries of a lock written before those keys existed.
+fn fill_new_keys(m: &Manifest, lock: &mut Lock) -> bool {
+    let mut filled = false;
+    for p in &mut lock.packages {
+        let Some(req) = m.skill(&p.name).filter(|r| drift(m, r, Some(p)).is_none()) else { continue };
+        if p.selected.is_none()
+            && let Some(sel) = &req.skills
+        {
+            let mut sel = sel.clone();
+            sel.sort();
+            p.selected = Some(sel);
+            filled = true;
+        }
+        if p.git_ref.is_none()
+            && let Some(g) = req.github
+        {
+            p.git_ref = Some(g == GitHub::Ref);
+            filled = true;
+        }
+    }
+    filled
 }
 
 pub fn update(ctx: &Ctx, names: &[String]) -> Result<()> {
@@ -1009,20 +1047,27 @@ pub fn status(ctx: &Ctx) -> Result<()> {
         rows.push([p, v, s, state].map(String::from));
     };
     for req in &m.skills {
-        match lock.get(&req.name) {
-            None => row(&mut rows, &req.name, "-", "-", "not locked"),
-            Some(p) if p.constraint != req.constraint => row(&mut rows, &req.name, &p.version, "-", "constraint changed"),
-            Some(p) => {
-                for sk in &p.skills {
-                    let state = match tree_on_disk(&ctx.s, &sk.name) {
-                        None => "not installed",
-                        Some(h) if h != sk.tree_sha256 => "modified",
-                        Some(_) => "ok",
-                    };
-                    row(&mut rows, &p.name, &p.version, &sk.name, state);
-                }
-            }
+        let p = lock.get(&req.name);
+        if let Some(why) = drift(&m, req, p) {
+            row(&mut rows, &req.name, p.map_or("-", |p| &p.version), "-", &why);
+            continue;
         }
+        let Some(p) = p else { continue };
+        for sk in &p.skills {
+            let state = match tree_on_disk(&ctx.s, &sk.name) {
+                None => "not installed",
+                Some(h) if h != sk.tree_sha256 => "modified",
+                Some(_) => "ok",
+            };
+            row(&mut rows, &p.name, &p.version, &sk.name, state);
+        }
+    }
+    let mut providers: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for (p, sk) in lock.skills() {
+        providers.entry(&sk.name).or_default().push(&p.name);
+    }
+    for (n, ps) in providers.iter().filter(|(_, ps)| ps.len() > 1) {
+        row(&mut rows, "-", "-", n, &format!("skill {n:?} is provided by both {}", ps.join(" and ")));
     }
     for p in lock.packages.iter().filter(|p| m.skill(&p.name).is_none()) {
         row(&mut rows, &p.name, &p.version, "-", "not in skills.toml");

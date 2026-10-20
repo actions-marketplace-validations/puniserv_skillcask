@@ -325,8 +325,7 @@ fn edit(root: &Path, global: bool, f: impl FnOnce(&mut DocumentMut)) -> Result<(
     let mut doc: DocumentMut = text.parse().map_err(bad)?;
     f(&mut doc);
     parse(&doc.to_string(), global)?;
-    std::fs::write(&path, doc.to_string())?;
-    Ok(())
+    crate::project::write_atomic(&path, &doc.to_string())
 }
 
 pub fn write_skill(root: &Path, global: bool, req: &SkillReq) -> Result<()> {

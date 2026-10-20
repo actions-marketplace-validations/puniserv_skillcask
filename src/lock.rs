@@ -31,11 +31,16 @@ pub struct LockedSkill {
 pub struct Package {
     pub name: String,
     pub constraint: String,
+    /// GitHub only: `constraint` is a ref (true) or a version over tags (false). `None`: not
+    /// GitHub, or a lock written before the key existed.
+    pub git_ref: Option<bool>,
     pub version: String,
     pub repository: String,
     pub dist: Dist,
     pub dist_sha256: String,
     pub released: Option<Timestamp>,
+    /// `skills = [...]` of the entry; `None` means all skills (also in locks older than the key).
+    pub selected: Option<Vec<String>>,
     pub skills: Vec<LockedSkill>,
 }
 
@@ -59,8 +64,7 @@ impl Lock {
     }
 
     pub fn save(&self, root: &Path) -> Result<()> {
-        std::fs::write(root.join(FILE), self.render())?;
-        Ok(())
+        crate::project::write_atomic(&root.join(FILE), &self.render())
     }
 
     pub fn get(&self, name: &str) -> Option<&Package> {
@@ -83,14 +87,11 @@ impl Lock {
         let mut packages = self.packages.clone();
         packages.sort_by(|a, b| a.name.cmp(&b.name));
         for p in &packages {
-            let _ = write!(
-                out,
-                "\n[[package]]\nname = {}\nconstraint = {}\nversion = {}\nrepository = {}\n",
-                q(&p.name),
-                q(&p.constraint),
-                q(&p.version),
-                q(&p.repository)
-            );
+            let _ = write!(out, "\n[[package]]\nname = {}\nconstraint = {}\n", q(&p.name), q(&p.constraint));
+            if let Some(r) = p.git_ref {
+                let _ = writeln!(out, "ref = {r}");
+            }
+            let _ = write!(out, "version = {}\nrepository = {}\n", q(&p.version), q(&p.repository));
             let _ = write!(out, "dist = {{ type = {}, url = {}", q(&p.dist.kind), q(&p.dist.url));
             if let Some(r) = &p.dist.reference {
                 let _ = write!(out, ", reference = {}", q(r));
@@ -98,6 +99,9 @@ impl Lock {
             let _ = writeln!(out, " }}\ndist-sha256 = {}", q(&p.dist_sha256));
             if let Some(t) = p.released {
                 let _ = writeln!(out, "released = {}", t.round(jiff::Unit::Second).unwrap_or(t));
+            }
+            if let Some(sel) = &p.selected {
+                let _ = writeln!(out, "selected = [{}]", sel.iter().map(|n| q(n)).collect::<Vec<_>>().join(", "));
             }
             out.push_str("skills = [");
             for (i, s) in p.skills.iter().enumerate() {
@@ -120,10 +124,14 @@ pub fn parse(text: &str) -> Result<Lock> {
         Some(1) => {}
         v => return Err(bad(format!("unsupported lock version {v:?}"))),
     }
-    let mut packages = Vec::new();
+    let mut packages: Vec<Package> = Vec::new();
     if let Some(arr) = doc.get("package").and_then(Item::as_array_of_tables) {
         for t in arr.iter() {
-            packages.push(package(t)?);
+            let p = package(t)?;
+            if packages.iter().any(|x| x.name == p.name) {
+                return Err(bad(format!("invalid lock: package {} appears twice", p.name)));
+            }
+            packages.push(p);
         }
     }
     Ok(Lock { packages })
@@ -158,21 +166,53 @@ fn package(t: &dyn TableLike) -> Result<Package> {
         // The lock is committed and may come from an untrusted change; both end up in paths.
         let safe_path =
             skill.path.is_empty() || skill.path.split('/').all(|c| !c.is_empty() && c != "." && c != ".." && !c.contains(['\\', ':']));
-        if !crate::skill::valid_name(&skill.name) || skill.from.as_deref().is_some_and(|f| !crate::skill::valid_name(f)) || !safe_path {
+        if !crate::skill::valid_name(&skill.name)
+            || skill.from.as_deref().is_some_and(|f| !crate::skill::valid_name(f) || f == skill.name)
+            || !safe_path
+        {
             return Err(bad(format!("{name}: invalid skill entry {:?} at {:?}", skill.name, skill.path)));
+        }
+        if !is_sha256(&skill.tree_sha256) {
+            return Err(bad(format!("invalid tree-sha256 of skill {} in {name}", skill.name)));
         }
         skills.push(skill);
     }
+    let selected = match t.get("selected") {
+        None => None,
+        Some(i) => Some(
+            i.as_array()
+                .and_then(|a| a.iter().map(|v| v.as_str().filter(|n| crate::skill::valid_name(n)).map(String::from)).collect())
+                .ok_or_else(|| bad(format!("invalid selected in {name}")))?,
+        ),
+    };
+    let git_ref = t.get("ref").map(|i| i.as_bool().ok_or_else(|| bad(format!("invalid ref in {name}")))).transpose()?;
+    let dist = Dist { kind: s(dist, "type").map_err(ctx)?, url: s(dist, "url").map_err(ctx)?, reference: s(dist, "reference").ok() };
+    if dist.kind != "zip" {
+        return Err(bad(format!("invalid dist type {:?} in {name}, only \"zip\"", dist.kind)));
+    }
+    if !dist.url.starts_with("https://") {
+        return Err(bad(format!("invalid dist url in {name}: only https:// is allowed")));
+    }
+    let dist_sha256 = s(t, "dist-sha256").map_err(ctx)?;
+    if !is_sha256(&dist_sha256) {
+        return Err(bad(format!("invalid dist-sha256 in {name}")));
+    }
     Ok(Package {
         constraint: s(t, "constraint").map_err(ctx)?,
+        git_ref,
         version: s(t, "version").map_err(ctx)?,
         repository: s(t, "repository").map_err(ctx)?,
-        dist: Dist { kind: s(dist, "type").map_err(ctx)?, url: s(dist, "url").map_err(ctx)?, reference: s(dist, "reference").ok() },
-        dist_sha256: s(t, "dist-sha256").map_err(ctx)?,
+        dist,
+        dist_sha256,
         released,
+        selected,
         skills,
         name,
     })
+}
+
+fn is_sha256(h: &str) -> bool {
+    h.len() == 64 && h.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 #[cfg(test)]
@@ -183,14 +223,17 @@ mod tests {
     fn round_trip_is_byte_stable() {
         let mut lock = Lock::default();
         for name in ["z/last", "acme/agents-md"] {
+            let last = name == "z/last";
             lock.upsert(Package {
                 name: name.into(),
                 constraint: "^1.0".into(),
+                git_ref: last.then_some(false),
                 version: "1.0.2".into(),
                 repository: "https://git.example.com/packages.json".into(),
                 dist: Dist { kind: "zip".into(), url: "https://x/a \"q\".zip".into(), reference: Some("9f2c1e".into()) },
                 dist_sha256: "ab".repeat(32),
                 released: Some("2026-10-01T09:12:00Z".parse().unwrap()),
+                selected: last.then(|| vec!["agents-md".into(), "orig".into()]),
                 skills: vec![
                     LockedSkill { name: "agents-md".into(), from: None, path: "".into(), tree_sha256: "cd".repeat(32) },
                     LockedSkill { name: "two".into(), from: Some("orig".into()), path: "skills/two".into(), tree_sha256: "ef".repeat(32) },
@@ -212,5 +255,46 @@ mod tests {
         assert!(parse(&evil("ok", "../..")).is_err());
         assert!(parse(&evil("ok", "a//b")).is_err());
         assert!(parse(&evil("ok", "skills/ok")).is_ok());
+    }
+
+    #[test]
+    fn new_keys_are_optional_and_render_only_when_set() {
+        let mut lock = parse(&sample()).unwrap();
+        assert_eq!(lock.render(), sample(), "a lock without the new keys renders byte-identical");
+        let p = &mut lock.packages[0];
+        (p.git_ref, p.selected) = (Some(true), Some(vec!["one".into()]));
+        let text = lock.render();
+        assert!(text.contains("constraint = \"^1.0\"\nref = true\nversion") && text.contains("selected = [\"one\"]\nskills = ["), "{text}");
+        assert_eq!(parse(&text).unwrap(), lock);
+    }
+
+    fn sample() -> String {
+        let h = "ab".repeat(32);
+        format!(
+            "# Generated by skillcask. Do not edit.\nversion = 1\n\n[[package]]\nname = \"a/b\"\nconstraint = \"^1.0\"\nversion = \"1.0.0\"\nrepository = \"https://r/packages.json\"\ndist = {{ type = \"zip\", url = \"https://r/a.zip\" }}\ndist-sha256 = \"{h}\"\nskills = [\n  {{ name = \"one\", path = \"\", tree-sha256 = \"{h}\" }},\n]\n"
+        )
+    }
+
+    #[test]
+    fn invalid_values_are_rejected() {
+        let ok = sample();
+        let h = "ab".repeat(32);
+        for (from, to) in [
+            (format!("dist-sha256 = \"{h}\""), "dist-sha256 = \"AB\"".to_string()),
+            (format!("dist-sha256 = \"{h}\""), format!("dist-sha256 = \"{}\"", h.to_uppercase())),
+            (format!("tree-sha256 = \"{h}\""), "tree-sha256 = \"x\"".to_string()),
+            ("url = \"https://".into(), "url = \"http://".into()),
+            ("type = \"zip\"".into(), "type = \"tar\"".into()),
+            ("name = \"one\", ".into(), "name = \"one\", from = \"one\", ".into()),
+            ("version = \"1.0.0\"".into(), "ref = \"yes\"\nversion = \"1.0.0\"".into()),
+            ("skills = [".into(), "selected = [\"Bad\"]\nskills = [".into()),
+        ] {
+            let text = ok.replace(&from, &to);
+            assert_ne!(text, ok, "{from}");
+            let e = parse(&text).unwrap_err();
+            assert!(e.msg.starts_with("skills.lock: ") && e.msg.contains("invalid") && e.code == MANIFEST, "{to}: {}", e.msg);
+        }
+        let twice = format!("{ok}{}", &ok[ok.find("\n[[package]]").unwrap()..]);
+        assert!(parse(&twice).unwrap_err().msg.contains("invalid lock: package a/b appears twice"));
     }
 }

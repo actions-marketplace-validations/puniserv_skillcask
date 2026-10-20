@@ -25,10 +25,6 @@ pub fn repository(name: &str) -> Repository {
     Repository { name: "github".into(), url: format!("{}/repos/{name}", api()) }
 }
 
-pub fn is_github(locked_repository: &str) -> bool {
-    locked_repository.starts_with(&format!("{}/repos/", api()))
-}
-
 pub fn is_sha(r: &str) -> bool {
     r.len() == 40 && r.bytes().all(|b| b.is_ascii_hexdigit())
 }

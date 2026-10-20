@@ -134,6 +134,18 @@ skills = [{ name = "agents-md", path = "", tree-sha256 = "…" }]
   and hashed as a copy of that file; any other symlink inside a skill, devices and empty
   directories are rejected at install. Symlinks outside the installed skill directories are
   ignored.
+- `ref` (GitHub entries only): `true` when `constraint` is a branch, tag or commit (`ref =` in the
+  manifest), `false` when it is a version constraint over tags.
+- `selected`: the entry's `skills = [...]`, sorted; absent when the entry installs all skills.
+- `ref` and `selected` are written only when they apply, so other entries render as before.
+  Locks written before these keys existed still parse and install: an absent `selected` means
+  all skills unless the manifest entry has `skills = [...]` (then the locked skill names are
+  compared, as before), and an absent `ref` is not compared. A non-frozen `install` adds the
+  missing keys; `--frozen` never fails only because they are missing.
+- Parsing rejects (exit 1, `skills.lock: invalid …`) a hash that is not 64 lowercase hex digits,
+  a dist URL that is not `https://`, a dist type other than `zip`, a package listed twice, and a
+  `from` equal to the skill's `name`.
+- Written atomically: a temp file in the same directory, then a rename (`skills.toml` too).
 - Entries sorted by `name`; no timestamps other than `released`, so parallel branches merge.
 
 ## Package format
@@ -195,10 +207,10 @@ mismatch (exit 4) rather than installing unverified content.
 | `add github:<owner/repo>[/skill][@version-or-ref]` | GitHub entry; `/skill` adds to `skills = [...]`. `@x` is a version constraint when it parses as one, else a ref. Without `@`: version tags if the repository has any (`^<major.minor>`), else the default branch. |
 | `add <vendor/name>[@constraint] [--repository r]` | Resolve first (typo or no match leaves files untouched), write manifest and lock, install. No constraint: `^<major.minor>` of the resolved version, or exact with `allow-ranges = false`. |
 | `remove <vendor/name>…` | Drop from manifest and lock; remove installed directories, links and gitignore lines. |
-| `install [--frozen]` | Install exactly the lock: download dist, verify `dist-sha256`, unpack to a temp dir, verify every `tree-sha256`, move into place, link, rewrite the gitignore block. Entries in the manifest but not in the lock (or with a changed constraint) are resolved and locked; with `--frozen` (implied when `CI` is set) that is exit 1 instead. Already-installed skills whose tree hash matches are skipped. |
+| `install [--frozen]` | Install exactly the lock: download dist, verify `dist-sha256`, unpack to a temp dir, verify every `tree-sha256`, move into place, link, rewrite the gitignore block. Entries in the manifest that do not match the lock (missing, or a changed constraint, repository, GitHub mode, `skills` selection or `rename`) are resolved and locked; with `--frozen` (implied when `CI` is set) that is exit 1 instead. Already-installed skills whose tree hash matches are skipped. |
 | `update [vendor/name…]` | Re-resolve within constraints (cooldown applies), rewrite the lock, install. |
 | `outdated` | Per package: locked, newest within constraint, newest overall, eligible date under cooldown. |
-| `status` | Manifest vs lock vs installed (hash) per skill. Exit 1 on any mismatch. |
+| `status` | Manifest vs lock (every reason `install --frozen` checks, and a skill name provided by two packages) vs installed (hash) per skill. Exit 1 on any mismatch. |
 | `doctor [--fix]` | Broken or committed managed links, stale gitignore block, modified installed skills (tree hash). `--fix` repairs without downloading. |
 | `search <query>` | Packagist search API filtered by `type=ai-agent-skill`; for other repositories, a substring match over `available-packages` when the repository lists them. |
 | `<other>` | Runs `skillcask-<other>` from `PATH` with the remaining arguments and exits with its code (git/cargo-style plugins). Only executables the user installed; packages never provide them. Migrations from other manifest formats live in plugins, not in the core. |

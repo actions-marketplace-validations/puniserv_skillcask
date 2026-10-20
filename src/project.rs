@@ -86,6 +86,29 @@ pub fn no_symlink(s: &Scope, sub: &str) -> Result<()> {
     Ok(())
 }
 
+/// Writes through a temp file and a rename in the same dir, so an interrupted write leaves the old
+/// file or the new one. A symlinked file (dotfiles) is written at its target, keeping the link.
+pub fn write_atomic(path: &Path, text: &str) -> Result<()> {
+    use std::io::Write;
+    let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    std::fs::create_dir_all(dir)?;
+    let mut tmp = tempfile::Builder::new().prefix(TMP).tempfile_in(dir)?;
+    tmp.write_all(text.as_bytes())?;
+    match std::fs::metadata(&path) {
+        Ok(m) => tmp.as_file().set_permissions(m.permissions())?,
+        #[cfg(unix)]
+        Err(_) => {
+            use std::os::unix::fs::PermissionsExt;
+            tmp.as_file().set_permissions(std::fs::Permissions::from_mode(0o644))?
+        }
+        #[cfg(not(unix))]
+        Err(_) => {}
+    }
+    tmp.persist(&path).map_err(|e| e.error)?;
+    Ok(())
+}
+
 /// A sibling temp dir in the store, so the final rename stays on one filesystem.
 pub fn temp_dir(s: &Scope) -> Result<tempfile::TempDir> {
     no_symlink(s, STORE)?;
