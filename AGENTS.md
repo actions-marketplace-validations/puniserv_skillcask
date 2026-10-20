@@ -1,8 +1,9 @@
 # skillcask
 
 Lockfile-first package manager for agent skills, shipped as one Rust binary. Design, non-goals and
-numbered decisions (D1, D2, …) live in `docs/spec.md`: read it before changing how the manifest, lock,
-install or publish behave, and record a new decision there in the same change.
+numbered decisions (D1, D2, …) live in `docs/specs/2026-10-19-skillcask-v1.md`: read it before
+changing how the manifest, lock, install or publish behave, and record a new decision there in the
+same change.
 
 ## Checks
 

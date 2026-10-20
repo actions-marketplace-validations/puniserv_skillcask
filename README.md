@@ -213,7 +213,7 @@ over HTTPS.
 
 ## Design
 
-See [docs/spec.md](docs/spec.md).
+See [docs/specs/2026-10-19-skillcask-v1.md](docs/specs/2026-10-19-skillcask-v1.md).
 
 ## License
 
