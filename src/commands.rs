@@ -714,11 +714,17 @@ enum Owned {
 /// lock entry is unchanged.
 fn store_conflict(s: &Scope, p: &Package, sk: &LockedSkill, old: &Lock, owned: &Owned) -> Option<(String, bool)> {
     let shown = s.show(&format!("{STORE}/{}", sk.name));
-    let h = tree_on_disk(s, &sk.name);
+    let mut expect = vec![sk.tree_sha256.as_str()];
+    let old_skill = locked_skill(old, &sk.name);
+    expect.extend(old_skill.map(|(_, os)| os.tree_sha256.as_str()));
+    if let Owned::Hashes(hs) = owned {
+        expect.extend(hs.iter().map(String::as_str));
+    }
+    let h = tree_on_disk(s, &sk.name, &expect);
     if h.as_ref().is_some_and(|h| *h == sk.tree_sha256 || matches!(owned, Owned::Hashes(hs) if hs.contains(h))) {
         return None;
     }
-    let (Some(h), Some((op, os))) = (h, locked_skill(old, &sk.name)) else {
+    let (Some(h), Some((op, os))) = (h, old_skill) else {
         return Some((format!("{shown} exists and is not managed by skillcask, but {} provides a skill with that name", p.name), true));
     };
     let away = "move it away (or delete it), then run `skillcask install`";
@@ -740,16 +746,21 @@ fn kept(s: &Scope, lock: &Lock, old: &Lock, old_managed: &BTreeSet<String>) -> B
         .iter()
         .filter(|n| locked_skill(lock, n).is_none())
         .filter(|n| project::store_dir(s, n).symlink_metadata().is_ok_and(|m| !m.file_type().is_symlink()))
-        .filter(|n| tree_on_disk(s, n) != locked_skill(old, n).map(|(_, sk)| sk.tree_sha256.clone()))
+        .filter(|n| {
+            let want = locked_skill(old, n).map(|(_, sk)| sk.tree_sha256.as_str());
+            tree_on_disk(s, n, want.as_slice()).as_deref() != want
+        })
         .cloned()
         .collect()
 }
 
 fn installed_ok(s: &Scope, sk: &LockedSkill) -> bool {
-    tree_on_disk(s, &sk.name).is_some_and(|h| h == sk.tree_sha256)
+    tree_on_disk(s, &sk.name, &[&sk.tree_sha256]).is_some_and(|h| h == sk.tree_sha256)
 }
 
-fn tree_on_disk(s: &Scope, name: &str) -> Option<String> {
+/// `expect`: hashes the caller compares with. HFS+ stores names decomposed, so with a non-ASCII
+/// path the NFC and NFD spellings are tried too, and the one matching `expect` wins.
+fn tree_on_disk(s: &Scope, name: &str, expect: &[&str]) -> Option<String> {
     let dir = project::store_dir(s, name);
     let mut entries = skill::scan_dir(&dir).ok().filter(|_| dir.is_dir())?;
     if !cfg!(unix) {
@@ -758,7 +769,19 @@ fn tree_on_disk(s: &Scope, name: &str) -> Option<String> {
             e.exec = modes.contains(&format!("{name}/{}", e.path));
         }
     }
-    Some(skill::tree_hash(&entries))
+    let raw = skill::tree_hash(&entries);
+    if expect.contains(&raw.as_str()) || entries.iter().all(|e| e.path.is_ascii()) {
+        return Some(raw);
+    }
+    let nfc = icu_normalizer::ComposingNormalizerBorrowed::new_nfc();
+    let nfd = icu_normalizer::DecomposingNormalizerBorrowed::new_nfd();
+    let spelled = |f: &dyn Fn(&str) -> String| {
+        skill::tree_hash(&entries.iter().map(|e| FileEntry { path: f(&e.path), ..e.clone() }).collect::<Vec<_>>())
+    };
+    [spelled(&|p| nfc.normalize(p).into_owned()), spelled(&|p| nfd.normalize(p).into_owned())]
+        .into_iter()
+        .find(|h| expect.contains(&h.as_str()))
+        .or(Some(raw))
 }
 
 fn set_modes(modes: &mut BTreeSet<String>, name: &str, files: &[FileEntry]) {
@@ -1195,7 +1218,7 @@ pub fn status(ctx: &Ctx) -> Result<()> {
         }
         let Some(p) = p else { continue };
         for sk in &p.skills {
-            let state = match tree_on_disk(&ctx.s, &sk.name) {
+            let state = match tree_on_disk(&ctx.s, &sk.name, &[&sk.tree_sha256]) {
                 None => "not installed",
                 Some(h) if h != sk.tree_sha256 => "modified",
                 Some(_) => "ok",
@@ -1288,7 +1311,7 @@ pub fn doctor(ctx: &Ctx, fix: bool) -> Result<()> {
     }
 
     for (n, (p, sk)) in &locked {
-        match tree_on_disk(s, n) {
+        match tree_on_disk(s, n, &[&sk.tree_sha256]) {
             None => open.push(format!("{}: not installed ({}); run `skillcask install`", s.show(&format!("{STORE}/{n}")), p.name)),
             Some(h) if h != sk.tree_sha256 => {
                 open.push(format!("{}: modified ({}); run `skillcask install` to restore", s.show(&format!("{STORE}/{n}")), p.name))

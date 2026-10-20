@@ -173,9 +173,11 @@ pub fn extract(zip: &[u8], dest: &Path, limits: &Limits) -> Result<Extracted> {
     links.extend(pending.into_iter().map(|(path, _)| Link { path, target: None }));
 
     // Whatever the name checks miss (a file system folding names in some other way) shows up
-    // here as fewer or different paths than the hashes cover.
-    let on_disk: BTreeSet<String> = scan_dir(dest)?.into_iter().map(|f| f.path).collect();
-    if on_disk != out.iter().map(|f| f.path.clone()).collect() {
+    // here as fewer or different paths than the hashes cover. HFS+ stores names decomposed (NFD),
+    // so both sides compare in NFC; `collisions` already refused names equal in NFC.
+    let nfc = icu_normalizer::ComposingNormalizerBorrowed::new_nfc();
+    let on_disk: BTreeSet<String> = scan_dir(dest)?.into_iter().map(|f| nfc.normalize(&f.path).into_owned()).collect();
+    if on_disk != out.iter().map(|f| nfc.normalize(&f.path).into_owned()).collect() {
         bail!(IO, "archive: the extracted files differ from the archive entries");
     }
     Ok(Extracted { files: out, links, skipped })

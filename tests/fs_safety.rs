@@ -404,3 +404,21 @@ fn a_dir_in_no_lock_history_is_still_a_conflict_after_upgrading() {
     assert!(!out.contains("rename ="), "{out}");
     assert_eq!(p.read(".agents/skills/one/SKILL.md"), "edited");
 }
+
+/// HFS+ stores names decomposed (NFD): a store file spelled differently from the archive is
+/// still the locked tree.
+#[test]
+fn a_store_file_spelled_in_nfd_is_not_modified() {
+    let s = Server::start();
+    let zip = zipball(&[("SKILL.md", &skill_md("one")), ("caf\u{e9}.md", "x")]);
+    s.package("acme/one", vec![Ver { version: "1.0.0", time: Some(ago(240)), zip, extra: None }]);
+    let p = Project::new(&s);
+    p.manifest(&s, "\"acme/one\" = \"^1.0\"\n");
+    p.ok(&["install"]);
+    std::fs::remove_file(p.path().join(".agents/skills/one/caf\u{e9}.md")).unwrap();
+    p.write(".agents/skills/one/cafe\u{301}.md", "x");
+    p.ok(&["status"]);
+    p.ok(&["install", "--frozen"]);
+    p.write(".agents/skills/one/cafe\u{301}.md", "changed");
+    assert!(p.expect(&["status"], 1).contains("modified"));
+}
