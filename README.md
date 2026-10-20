@@ -99,7 +99,7 @@ acme = { type = "composer", url = "https://git.example.com/api/v4/group/42/-/pac
 "netresearch/agent-jira-skill" = "^3.34"
 "acme/agents-md" = { version = "^1.0", repository = "acme" }
 "acme/review" = { version = "1.4.2", repository = "acme", skills = ["review"] }
-"mattpocock/skills" = { github = true, version = "^1.3", skills = ["tdd", "grill-me"] }
+"mattpocock/skills" = { github = true, version = "^1.3", skills = ["tdd", "code-review"], rename = { code-review = "mp-code-review" } }
 "anthropics/skills" = { github = true, skills = ["pdf"] }      # default branch
 
 [agents]
@@ -115,6 +115,19 @@ packagist = true         # false: drop the implicit Packagist repository
 Constraints follow Composer semantics: `^0.3` means `>=0.3.0 <0.4.0`, `~1.2` means
 `>=1.2 <2.0`, and pre-releases are only selected when the constraint names a stability
 (`^1.0@beta`).
+
+### Name conflicts
+
+Skills have no namespaces: an agent knows a skill by its name. Two skills with the same name in
+one project are an error. Install one of them under another name with `rename`:
+
+```toml
+"mattpocock/skills" = { github = true, rename = { code-review = "mp-code-review" } }
+```
+
+skillcask then installs `.agents/skills/mp-code-review` and changes the `name:` line in its
+`SKILL.md`; the lock records the original name and the hash of the renamed copy. Nothing else in
+the skill changes, so text that mentions the old name (`/code-review`) stays as it is.
 
 ### Personal skills (`--global`)
 

@@ -42,7 +42,6 @@ pub fn frontmatter(text: &str) -> BTreeMap<String, String> {
 
 /// Sets the frontmatter `name:` value, keeping every other byte. No frontmatter or no `name:`
 /// line: unchanged, since the directory name then names the skill.
-#[cfg_attr(not(test), expect(dead_code, reason = "install applies renames in the next change"))]
 pub fn rename_frontmatter(text: &str, to: &str) -> String {
     let body = text.strip_prefix('\u{feff}').unwrap_or(text);
     let bom = &text[..text.len() - body.len()];

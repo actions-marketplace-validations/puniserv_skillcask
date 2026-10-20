@@ -44,6 +44,19 @@ impl Fetched {
         }
         Ok(archive::subtree(&self.entries, dir))
     }
+
+    /// The skill's files as installed under `to`: SKILL.md gets the new frontmatter name, on disk
+    /// too, so `place` copies the renamed file. Idempotent; `add` and `install` both call it.
+    fn renamed_files(&self, mut files: Vec<FileEntry>, dir: &str, to: &str) -> Result<Vec<FileEntry>> {
+        let Some(e) = files.iter_mut().find(|e| e.path == skill::SKILL_MD) else {
+            return Ok(files);
+        };
+        let path = self.dir.path().join(dir).join(skill::SKILL_MD);
+        let new = skill::rename_frontmatter(&std::fs::read_to_string(&path)?, to);
+        std::fs::write(&path, &new)?;
+        *e = FileEntry::new(e.path.clone(), e.exec, new.as_bytes());
+        Ok(files)
+    }
 }
 
 impl Ctx {
@@ -149,16 +162,28 @@ impl Ctx {
             }
             found.retain(|(n, _)| sel.contains(n));
         }
+        for k in req.rename.keys() {
+            if !found.iter().any(|(n, _)| n == k) {
+                let have: Vec<&str> = found.iter().map(|(n, _)| n.as_str()).collect();
+                bail!(MANIFEST, "{}: rename: no skill {k:?} in {} (it has: {})", req.name, c.version, have.join(", "));
+            }
+        }
         if found.is_empty() {
             bail!(MANIFEST, "{} {}: no skills found", c.name, c.version);
         }
         let mut skills: Vec<LockedSkill> = Vec::new();
-        for (name, dir) in found {
+        for (from, dir) in found {
+            let to = req.rename.get(&from);
+            let name = to.unwrap_or(&from).clone();
             if let Some(other) = skills.iter().find(|s| s.name == name) {
                 bail!(MANIFEST, "{}: skill name {name:?} appears twice in the package ({} and {dir})", c.name, other.path);
             }
-            let tree_sha256 = skill::tree_hash(&f.skill_files(&c.name, &name, &dir)?);
-            skills.push(LockedSkill { name, from: None, path: dir, tree_sha256 });
+            let mut files = f.skill_files(&c.name, &from, &dir)?;
+            if to.is_some() {
+                files = f.renamed_files(files, &dir, &name)?;
+            }
+            let tree_sha256 = skill::tree_hash(&files);
+            skills.push(LockedSkill { name, from: to.map(|_| from), path: dir, tree_sha256 });
         }
         skills.sort_by(|a, b| a.name.cmp(&b.name));
         prepared.insert(c.name.clone(), f);
@@ -234,7 +259,10 @@ impl Ctx {
                 None => self.fetch(&p.name, &p.dist, Some(&p.dist_sha256), None)?.1,
             };
             for sk in need {
-                let files = f.skill_files(&p.name, &sk.name, &sk.path)?;
+                let mut files = f.skill_files(&p.name, sk.from.as_ref().unwrap_or(&sk.name), &sk.path)?;
+                if sk.from.is_some() {
+                    files = f.renamed_files(files, &sk.path, &sk.name)?;
+                }
                 let got = skill::tree_hash(&files);
                 if got != sk.tree_sha256 {
                     bail!(
@@ -398,11 +426,20 @@ fn reconcile(m: &Manifest, lock: &Lock) -> (Vec<SkillReq>, Vec<String>, Vec<Stri
             Some(p)
                 if req.skills.as_ref().is_some_and(|sel| {
                     let a: BTreeSet<&String> = sel.iter().collect();
-                    let b: BTreeSet<&String> = p.skills.iter().map(|s| &s.name).collect();
+                    let b: BTreeSet<&String> = p.skills.iter().map(|s| s.from.as_ref().unwrap_or(&s.name)).collect();
                     a != b
                 }) =>
             {
                 Some("skill selection changed".to_string())
+            }
+            Some(p)
+                if {
+                    let locked: BTreeMap<&String, &String> =
+                        p.skills.iter().filter_map(|s| s.from.as_ref().map(|f| (f, &s.name))).collect();
+                    locked != req.rename.iter().collect()
+                } =>
+            {
+                Some("rename changed".to_string())
             }
             Some(_) => None,
         };

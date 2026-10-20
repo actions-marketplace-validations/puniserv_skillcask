@@ -965,3 +965,30 @@ fn a_project_in_home_does_not_warn_about_its_own_skills() {
     let out = p.ok(&["install"]);
     assert!(p.exists(".claude/skills/one") && !out.contains("warning"), "{out}");
 }
+
+#[test]
+fn renamed_skill_installs_under_its_new_name() {
+    let s = Server::start();
+    s.simple("acme/one", "1.0.0", "one");
+    let p = Project::new(&s);
+    p.manifest(&s, "\"acme/one\" = { version = \"^1.0\", rename = { one = \"acme-one\" } }\n");
+    p.ok(&["install"]);
+    assert_eq!(p.read(".agents/skills/acme-one/SKILL.md"), skill_md("one").replacen("name: one", "name: acme-one", 1));
+    assert!(p.exists(".claude/skills/acme-one/SKILL.md") && !p.exists(".agents/skills/one"));
+    assert!(p.read("skills.lock").contains("{ name = \"acme-one\", from = \"one\", path = \"\""), "{}", p.read("skills.lock"));
+    p.ok(&["status"]);
+    p.ok(&["doctor"]);
+
+    let mut ci = clone_of(&p, &s);
+    ci.env.push(("CI".into(), "true".into()));
+    ci.ok(&["install"]);
+    assert_eq!(ci.read(".agents/skills/acme-one/SKILL.md"), p.read(".agents/skills/acme-one/SKILL.md"));
+
+    p.manifest(&s, "\"acme/one\" = { version = \"^1.0\", rename = { one = \"other\" } }\n");
+    assert!(p.expect(&["install", "--frozen"], 1).contains("rename changed"));
+    p.ok(&["install"]);
+    assert!(p.exists(".agents/skills/other") && !p.exists(".agents/skills/acme-one"));
+
+    p.manifest(&s, "\"acme/one\" = { version = \"^1.0\", rename = { nope = \"x\" } }\n");
+    assert!(p.expect(&["install"], 1).contains("rename: no skill \"nope\""));
+}
