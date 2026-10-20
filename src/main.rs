@@ -115,7 +115,7 @@ fn parse_size(s: &str) -> Result<u64, String> {
         Some((i, 'G' | 'g')) => (&s[..i], 1 << 30),
         _ => (s, 1),
     };
-    num.parse::<u64>().map(|n| n * mult).map_err(|_| format!("invalid size {s:?}, use e.g. 50M"))
+    num.parse::<u64>().ok().and_then(|n| n.checked_mul(mult)).ok_or_else(|| format!("invalid size {s:?}, use e.g. 50M"))
 }
 
 fn ci() -> bool {
@@ -174,7 +174,7 @@ fn run(cli: Cli) -> Result<(), Error> {
 fn plugin(args: &[OsString]) -> Result<(), Error> {
     let name = args[0].to_string_lossy();
     // A separator would make Command run a path relative to the cwd instead of searching PATH.
-    if name.contains(['/', '\\']) {
+    if name.is_empty() || name.contains(['/', '\\']) {
         return Err(Error::new(MANIFEST, format!("unknown command {name:?}")));
     }
     let exe = format!("skillcask-{name}");
@@ -185,6 +185,10 @@ fn plugin(args: &[OsString]) -> Result<(), Error> {
             Error::new(error::IO, format!("{exe}: {e}"))
         }
     })?;
+    #[cfg(unix)]
+    if let Some(sig) = std::os::unix::process::ExitStatusExt::signal(&status) {
+        std::process::exit(128 + sig);
+    }
     std::process::exit(status.code().unwrap_or(1));
 }
 

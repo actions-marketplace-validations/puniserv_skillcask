@@ -236,3 +236,28 @@ fn untracking_works_with_staged_changes() {
     assert!(out.contains("removed managed paths from the git index"), "{out}");
     assert!(git(p.path(), &["ls-files"]).is_empty());
 }
+
+#[test]
+fn huge_size_is_an_error_not_a_panic() {
+    let s = Server::start();
+    let p = Project::new(&s);
+    assert!(p.expect(&["--max-download", "99999999999G", "status"], 1).contains("invalid size"));
+}
+
+#[cfg(unix)]
+#[test]
+fn plugin_edge_cases() {
+    use std::os::unix::fs::PermissionsExt;
+    let s = Server::start();
+    let mut p = Project::new(&s);
+    let bin = tempfile::tempdir().unwrap();
+    for (name, body) in [("skillcask-", "echo ran\n"), ("skillcask-die", "kill -9 $$\n")] {
+        let f = bin.path().join(name);
+        std::fs::write(&f, format!("#!/bin/sh\n{body}")).unwrap();
+        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    p.env.push(("PATH".into(), format!("{}:{}", bin.path().display(), std::env::var("PATH").unwrap())));
+    let out = p.expect(&[""], 1);
+    assert!(out.contains("unknown command") && !out.contains("ran"), "{out}");
+    p.expect(&["die"], 137);
+}

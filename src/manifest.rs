@@ -236,7 +236,7 @@ pub fn parse(text: &str, global: bool) -> Result<Manifest> {
     };
     for t in targets.iter().chain([&local]) {
         let p = Path::new(t);
-        if p.is_absolute() || p.components().any(|c| !matches!(c, std::path::Component::Normal(_))) || t.is_empty() {
+        if p.is_absolute() || p.components().any(|c| !matches!(c, std::path::Component::Normal(_))) || t.is_empty() || t.contains('\\') {
             return Err(bad(format!("agents: {t:?} must be a relative path inside the project")));
         }
         if p == Path::new(crate::project::STORE) {
@@ -419,6 +419,8 @@ min-release-age = "12h"
         assert!(parse("[policy]\nallow-ranges = false\n[skills]\n\"a/b\" = \"^1.0\"", false).is_err());
         assert!(parse("[policy]\nallow-ranges = false\n[skills]\n\"a/b\" = \"1.0.3\"", false).is_ok());
         assert!(parse("[agents]\ntargets = [\"../x\"]", false).is_err());
+        assert!(parse("[agents]\ntargets = [\"a\\\\b\"]", false).is_err());
+        assert!(parse("[agents]\nlocal = \"..\\\\x\"", false).is_err());
         assert!(parse("[policy]\npackagist = false", false).unwrap().repositories.is_empty());
         let gh = |entry: &str| parse(&format!("[repositories]\nr = {{ url = \"https://r\" }}\n[skills]\n\"a/b\" = {entry}"), false);
         assert!(gh("{ github = true, ref = \"main\" }").is_ok());
