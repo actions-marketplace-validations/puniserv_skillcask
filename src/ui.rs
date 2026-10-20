@@ -102,12 +102,15 @@ pub fn printable(s: &str) -> String {
 
 /// A line on stdout led by a green verb: `installed x (vendor/x 1.0.0)`.
 pub fn done(verb: &str, rest: impl Display) {
-    println!("{} {rest}", out(Color::Green, verb));
+    println!("{} {}", out(Color::Green, verb), printable(&rest.to_string()));
 }
 
 /// Columns aligned for a person, tab-separated for an agent; `color` colours a cell after
 /// padding, so escape codes do not break the alignment.
 pub fn table<const N: usize>(rows: &[[String; N]], color: impl Fn(usize, &str) -> Option<Color>) {
+    // Cells hold versions and states from registries and the committed lock.
+    let rows: Vec<[String; N]> = rows.iter().map(|r| r.clone().map(|c| printable(&c))).collect();
+    let rows = &rows;
     if agent() {
         for r in rows {
             println!("{}", r.join("\t"));

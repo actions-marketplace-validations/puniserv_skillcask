@@ -98,6 +98,10 @@ impl Version {
 /// Returns the version, how many numeric parts were written, and whether a stability suffix
 /// was written.
 fn parse_partial(s: &str) -> Option<(Version, usize, bool)> {
+    // The original string is printed and locked, and build metadata after `+` is not compared.
+    if s.contains(char::is_control) {
+        return None;
+    }
     let s = s.trim();
     // Build metadata does not take part in comparison, as in Composer.
     let s = s.split_once('+').map_or(s, |(v, _)| v);
@@ -317,6 +321,13 @@ mod tests {
 
     fn v(s: &str) -> Version {
         parse_partial(s).unwrap().0
+    }
+
+    /// Regression guard: build metadata is not compared, but the raw string is printed and locked.
+    #[test]
+    fn control_characters_are_not_a_version() {
+        assert!(Version::parse("1.0.0+\x1b]52;c;ZXZpbA==\x07").is_none());
+        assert!(Version::parse("1.0.0+build.5").is_some());
     }
 
     #[test]
