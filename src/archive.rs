@@ -9,7 +9,7 @@ use zip::{CompressionMethod, System, ZipArchive, ZipWriter};
 
 use crate::bail;
 use crate::error::{IO, Result};
-use crate::skill::{FileEntry, scan_dir};
+use crate::skill::{FileEntry, scan_dir, scan_publish};
 
 const S_IFMT: u32 = 0o170000;
 const S_IFREG: u32 = 0o100000;
@@ -267,9 +267,10 @@ pub fn subtree(entries: &[FileEntry], dir: &str) -> Vec<FileEntry> {
     entries.iter().filter_map(|e| e.path.strip_prefix(&prefix).map(|p| FileEntry { path: p.to_string(), ..e.clone() })).collect()
 }
 
-/// Same tree, same bytes: files only, sorted, fixed mtime and permissions.
-pub fn zip_dir(dir: &Path) -> Result<Vec<u8>> {
-    let mut entries = scan_dir(dir)?;
+/// Same tree, same bytes: files only, sorted, fixed mtime and permissions. Also returns the
+/// zipped files.
+pub fn zip_dir(dir: &Path) -> Result<(Vec<u8>, Vec<FileEntry>)> {
+    let mut entries = scan_publish(dir)?;
     entries.sort_by(|a, b| a.path.cmp(&b.path));
     let mut w = ZipWriter::new(Cursor::new(Vec::new()));
     for e in &entries {
@@ -281,7 +282,7 @@ pub fn zip_dir(dir: &Path) -> Result<Vec<u8>> {
         w.start_file(e.path.as_str(), opts)?;
         w.write_all(&std::fs::read(dir.join(&e.path))?)?;
     }
-    Ok(w.finish()?.into_inner())
+    Ok((w.finish()?.into_inner(), entries))
 }
 
 #[cfg(test)]
@@ -483,6 +484,38 @@ mod tests {
     }
 
     #[test]
+    fn zip_dir_skips_hidden_entries() {
+        let a = tempfile::tempdir().unwrap();
+        std::fs::write(a.path().join("SKILL.md"), b"s").unwrap();
+        let b = tempfile::tempdir().unwrap();
+        std::fs::write(b.path().join("SKILL.md"), b"s").unwrap();
+        std::fs::write(b.path().join(".DS_Store"), b"x").unwrap();
+        std::fs::write(b.path().join(".env"), b"SECRET=1").unwrap();
+        std::fs::create_dir_all(b.path().join("sub/.git")).unwrap();
+        std::fs::write(b.path().join("sub/.git/HEAD"), b"x").unwrap();
+        assert_eq!(zip_dir(a.path()).unwrap().0, zip_dir(b.path()).unwrap().0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn zip_dir_copies_links_inside_the_skill() {
+        let copy = tempfile::tempdir().unwrap();
+        let linked = tempfile::tempdir().unwrap();
+        for d in [copy.path(), linked.path()] {
+            std::fs::write(d.join("SKILL.md"), b"s").unwrap();
+            std::fs::write(d.join("AGENTS.md"), b"agents").unwrap();
+        }
+        std::fs::write(copy.path().join("CLAUDE.md"), b"agents").unwrap();
+        std::os::unix::fs::symlink("AGENTS.md", linked.path().join("CLAUDE.md")).unwrap();
+        assert_eq!(zip_dir(copy.path()).unwrap().0, zip_dir(linked.path()).unwrap().0);
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("x"), b"x").unwrap();
+        std::os::unix::fs::symlink(outside.path().join("x"), linked.path().join("abs")).unwrap();
+        let e = zip_dir(linked.path()).err().unwrap().msg;
+        assert!(e.contains("\"abs\"") && e.contains("inside the skill"), "{e}");
+    }
+
+    #[test]
     fn zip_dir_is_deterministic_and_round_trips() {
         let make = || {
             let d = tempfile::tempdir().unwrap();
@@ -499,8 +532,8 @@ mod tests {
         let a = make();
         std::thread::sleep(std::time::Duration::from_millis(1100));
         let b = make();
-        let za = zip_dir(a.path()).unwrap();
-        assert_eq!(za, zip_dir(b.path()).unwrap());
+        let za = zip_dir(a.path()).unwrap().0;
+        assert_eq!(za, zip_dir(b.path()).unwrap().0);
         let out = tempfile::tempdir().unwrap();
         let entries = extract(&za, out.path(), &Limits::default()).unwrap().files;
         assert_eq!(tree_hash(&entries), tree_hash(&scan_dir(a.path()).unwrap()));

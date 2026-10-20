@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use crate::bail;
 use crate::error::{Context, Error, MANIFEST, Result};
 use crate::manifest::valid_package_name;
-use crate::skill::{SKILL_MD, frontmatter, valid_name};
+use crate::skill::{FileEntry, SKILL_MD, frontmatter, tree_hash, valid_name};
 use crate::version::{Stability, Version};
 
 pub struct PublishArgs {
@@ -29,6 +29,7 @@ struct Found {
     normalized: Version,
     description: Option<String>,
     zip: Vec<u8>,
+    files: Vec<FileEntry>,
 }
 
 pub fn publish(args: &PublishArgs) -> Result<()> {
@@ -79,8 +80,8 @@ pub fn publish(args: &PublishArgs) -> Result<()> {
             bail!(MANIFEST, "{package} is defined in both {} and {at}; set `package:` in one SKILL.md", first.display());
         }
         let versions = found.entry(package.clone()).or_default();
-        let description = fm.get("description").filter(|d| ![">", "|", ">-", "|-"].contains(&d.as_str())).cloned();
-        versions.push(Found { zip: crate::archive::zip_dir(&dir).ctx(&at)?, version: version.clone(), normalized, description });
+        let (zip, files) = crate::archive::zip_dir(&dir).ctx(&at)?;
+        versions.push(Found { zip, files, version: version.clone(), normalized, description: fm.get("description").cloned() });
     }
 
     let index_path = out.join("packages.json");
@@ -94,6 +95,10 @@ pub fn publish(args: &PublishArgs) -> Result<()> {
         .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
         .unwrap_or_default();
     available.extend(index.get("packages").and_then(Value::as_object).into_iter().flat_map(|m| m.keys().cloned()));
+    // Names become paths under `out`.
+    if let Some(p) = available.iter().find(|p| !valid_package_name(p)) {
+        bail!(MANIFEST, "{}: invalid package name {p:?}", index_path.display());
+    }
     // Earlier versions come from the inline index or the p2 file, so switching modes keeps them.
     let load = |package: &str| -> Result<Vec<Value>> {
         match index.get("packages").and_then(|p| p.get(package)) {
@@ -128,11 +133,13 @@ pub fn publish(args: &PublishArgs) -> Result<()> {
             let shasum = hex::encode(Sha1::digest(&f.zip));
             let normalized = f.normalized.to_string();
             let existing = meta.iter().find(|m| m.get("version_normalized").and_then(Value::as_str) == Some(normalized.as_str()));
-            let state = match existing {
-                Some(m) if m["dist"]["shasum"].as_str() != Some(shasum.as_str()) => {
-                    bail!(MANIFEST, "{package} {} is already published with different content; bump the version", f.version)
-                }
-                Some(_) => "unchanged",
+            let zip_path = out.join("dist").join(&package).join(format!("{}.zip", f.version));
+            let (state, zip) = match existing.map(|m| m["dist"]["shasum"].as_str().unwrap_or_default()) {
+                Some(s) if s == shasum => ("unchanged", f.zip),
+                Some(s) => match published_zip_with_tree(&zip_path, s, &f.files)? {
+                    Some(old) => ("unchanged", old),
+                    None => bail!(MANIFEST, "{package} {} is already published with different content; bump the version", f.version),
+                },
                 None => {
                     let mut m = json!({
                         "name": package,
@@ -156,10 +163,10 @@ pub fn publish(args: &PublishArgs) -> Result<()> {
                         m["description"] = d.into();
                     }
                     meta.push(m);
-                    "published"
+                    ("published", f.zip)
                 }
             };
-            writes.push((out.join("dist").join(&package).join(format!("{}.zip", f.version)), f.zip));
+            writes.push((zip_path, zip));
             report.push(format!("{state} {package} {}", f.version));
         }
         let key = |m: &Value| m.get("version_normalized").and_then(Value::as_str).and_then(Version::parse);
@@ -194,6 +201,24 @@ pub fn publish(args: &PublishArgs) -> Result<()> {
         println!("{line}");
     }
     Ok(())
+}
+
+/// The zip at `path` if it is the published one (`shasum`) and holds the same files as `files`.
+/// Its bytes may differ from a fresh zip after a deflate change. Hidden entries, which older
+/// versions zipped, and exec bits on systems without them are ignored.
+fn published_zip_with_tree(path: &Path, shasum: &str, files: &[FileEntry]) -> Result<Option<Vec<u8>>> {
+    let Ok(zip) = std::fs::read(path) else { return Ok(None) };
+    if !hex::encode(Sha1::digest(&zip)).eq_ignore_ascii_case(shasum) {
+        return Ok(None);
+    }
+    let tmp = tempfile::tempdir()?;
+    let mut old = crate::archive::extract(&zip, tmp.path(), &crate::archive::Limits::default()).ctx(path.display())?.files;
+    old.retain(|f| !f.path.split('/').any(|p| p.starts_with('.')));
+    let mut new = files.to_vec();
+    if !cfg!(unix) {
+        old.iter_mut().chain(new.iter_mut()).for_each(|f| f.exec = false);
+    }
+    Ok((tree_hash(&old) == tree_hash(&new)).then_some(zip))
 }
 
 fn find(dir: &Path, out: &Path, found: &mut Vec<PathBuf>) -> Result<()> {
@@ -302,6 +327,68 @@ mod tests {
             p2["packages"]["acme/alpha"].as_array().unwrap().iter().map(|v| v["version"].as_str().unwrap().to_string()).collect();
         assert_eq!(versions, ["1.1.0", "1.0.0"]);
         assert!(out.path().join("dist/acme/alpha/1.0.0.zip").exists());
+    }
+
+    fn args(src: &Path, out: &Path) -> PublishArgs {
+        PublishArgs {
+            vendor: "acme".into(),
+            base_url: Some("https://example.com".into()),
+            dist_url: None,
+            inline: false,
+            out: out.into(),
+            paths: vec![src.into()],
+        }
+    }
+
+    #[test]
+    fn keeps_a_published_zip_whose_tree_is_unchanged() {
+        let src = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        skill(src.path(), "a", "alpha", "1.0.0", "a");
+        publish(&args(src.path(), out.path())).unwrap();
+        // An earlier deflate implementation: same tree, other bytes.
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let opts = zip::write::SimpleFileOptions::DEFAULT.compression_method(zip::CompressionMethod::Stored).unix_permissions(0o644);
+        w.start_file(SKILL_MD, opts).unwrap();
+        std::io::Write::write_all(&mut w, b"---\nname: alpha\nversion: 1.0.0\ndescription: d\n---\na").unwrap();
+        let old = w.finish().unwrap().into_inner();
+        std::fs::write(out.path().join("dist/acme/alpha/1.0.0.zip"), &old).unwrap();
+        let p2 = out.path().join("p2/acme/alpha.json");
+        let meta = std::fs::read_to_string(&p2).unwrap();
+        let shasum =
+            serde_json::from_str::<Value>(&meta).unwrap()["packages"]["acme/alpha"][0]["dist"]["shasum"].as_str().unwrap().to_string();
+        std::fs::write(&p2, meta.replace(&shasum, &hex::encode(Sha1::digest(&old)))).unwrap();
+
+        let before = snapshot(out.path());
+        publish(&args(src.path(), out.path())).unwrap();
+        assert_eq!(snapshot(out.path()), before);
+        skill(src.path(), "a", "alpha", "1.0.0", "changed");
+        assert!(publish(&args(src.path(), out.path())).unwrap_err().msg.contains("different content"));
+    }
+
+    #[test]
+    fn never_writes_outside_out() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let out = tmp.path().join("x/out");
+        std::fs::create_dir_all(&out).unwrap();
+        skill(&src, "a", "alpha", "1.0.0", "a");
+        let evil = json!({ "packages": { "../../evil": { "1.0.0": { "version": "1.0.0", "version_normalized": "1.0.0.0" } } } });
+        std::fs::write(out.join("packages.json"), evil.to_string()).unwrap();
+        assert!(publish(&args(&src, &out)).unwrap_err().msg.contains("../../evil"));
+        let names: Vec<_> = std::fs::read_dir(tmp.path().join("x")).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(names, ["out"]);
+        assert!(!out.join("p2").exists() && !out.join("dist").exists());
+    }
+
+    #[test]
+    fn reads_block_scalar_descriptions() {
+        let src = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join(SKILL_MD), "---\nname: alpha\nversion: 1.0.0\ndescription: >-\n  Reviews\n  code\n---\n").unwrap();
+        publish(&args(src.path(), out.path())).unwrap();
+        let p2: Value = serde_json::from_slice(&std::fs::read(out.path().join("p2/acme/alpha.json")).unwrap()).unwrap();
+        assert_eq!(p2["packages"]["acme/alpha"][0]["description"], "Reviews code");
     }
 
     #[test]
