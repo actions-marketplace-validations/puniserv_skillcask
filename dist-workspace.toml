@@ -20,6 +20,6 @@ install-updater = false
 github-attestations = true
 checksum = "sha256"
 pr-run-mode = "plan"
-# release.yml is hand-edited after `dist generate`: the publish-npm job uses npm trusted
-# publishing (permissions: id-token: write, npm >= 11.5.1, no NPM_TOKEN). Re-apply after regenerating.
+# release.yml is hand-edited after `dist generate` (npm trusted publishing, pinned actions and
+# installers); see AGENTS.md. Re-apply after regenerating.
 allow-dirty = ["ci"]

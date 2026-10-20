@@ -40,6 +40,11 @@ Conventional Commits with a lowercase subject that states the outcome, e.g.
    GitHub Release, Homebrew formula and npm package.
 3. `cargo publish --locked` from the tag (manual).
 
-`release.yml` comes from `dist generate`, but its `publish-npm` job is hand-edited for npm trusted
-publishing: `id-token: write`, npm >= 11.5.1, and no `registry-url` in `setup-node` (it injects a
-placeholder `NODE_AUTH_TOKEN` that breaks OIDC with E404). Re-apply the edit after regenerating.
+`release.yml` comes from `dist generate`, but it is hand-edited; re-apply the edits after
+regenerating:
+
+- `publish-npm` uses npm trusted publishing: `id-token: write`, an exact npm >= 11.5.1 at least
+  3 days old, no `GH_TOKEN`, and no `registry-url` in `setup-node` (it injects a placeholder
+  `NODE_AUTH_TOKEN` that breaks OIDC with E404).
+- Supply chain: every action pinned to a commit sha, the dist installer checked against a pinned
+  sha256, and `GH_TOKEN: ""` on the steps that install tools.
