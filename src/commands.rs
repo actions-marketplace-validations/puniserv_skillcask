@@ -203,11 +203,12 @@ impl Ctx {
     }
 
     /// Conflicts that would stop `materialize`, checked before `add` writes skills.toml and skills.lock.
-    fn preflight(&self, m: &Manifest, lock: &Lock) -> Result<()> {
+    /// `old`: the lock as it was before this command.
+    fn preflight(&self, m: &Manifest, lock: &Lock, old: &Lock) -> Result<()> {
         for p in m.targets.iter().map(String::as_str).chain([STORE, ".gitignore"]) {
             project::no_symlink(&self.s, p)?;
         }
-        if let Some(c) = self.conflicts(m, lock, &BTreeSet::new())?.first() {
+        if let Some(c) = self.conflicts(m, lock, old, &BTreeSet::new())?.first() {
             let renames = m.skill(&c.package).map(|r| r.rename.clone()).unwrap_or_default();
             bail!(MANIFEST, "{}", hint(c, &self.taken_names(m, lock)?, &renames));
         }
@@ -216,7 +217,7 @@ impl Ctx {
 
     /// Skills that cannot be installed under their name. In a clash between packages the one in
     /// `newcomers` is reported, so it is the one offered a rename.
-    fn conflicts(&self, m: &Manifest, lock: &Lock, newcomers: &BTreeSet<String>) -> Result<Vec<Conflict>> {
+    fn conflicts(&self, m: &Manifest, lock: &Lock, old: &Lock, newcomers: &BTreeSet<String>) -> Result<Vec<Conflict>> {
         let s = &self.s;
         let mut out = Vec::new();
         let conflict = |p: &Package, sk: &LockedSkill, msg: String| Conflict {
@@ -244,8 +245,10 @@ impl Ctx {
             }
         }
         let old_managed = project::block_managed(s)?;
+        let stale = project::stale_local_links(s, &m.local, &locals)?;
         for (n, (p, sk)) in &locked {
-            if project::store_dir(s, n).exists() && !old_managed.contains(*n) && !installed_ok(s, sk) {
+            let present = project::store_dir(s, n).symlink_metadata().is_ok();
+            if present && !stale.iter().any(|x| x == n) && !replaceable(s, p, sk, old, &old_managed) {
                 let msg = format!(
                     "{} exists and is not managed by skillcask, but {} provides a skill with that name",
                     s.show(&format!("{STORE}/{n}")),
@@ -301,6 +304,7 @@ impl Ctx {
         &self,
         m: &Manifest,
         lock: &mut Lock,
+        old: &Lock,
         prepared: &HashMap<String, Fetched>,
         newcomers: &BTreeSet<String>,
         shadows_too: bool,
@@ -318,7 +322,7 @@ impl Ctx {
         let mut last: Option<(String, String)> = None;
         loop {
             let taken = self.taken_names(m, lock)?;
-            let Some(c) = self.conflicts(m, lock, newcomers)?.into_iter().find(|c| newcomers.contains(&c.package)) else { break };
+            let Some(c) = self.conflicts(m, lock, old, newcomers)?.into_iter().find(|c| newcomers.contains(&c.package)) else { break };
             // A rename to an untaken name clears the conflict; if it did not, asking again would loop.
             if last.as_ref().is_some_and(|(p, u)| *p == c.package && *u == c.upstream) {
                 break;
@@ -352,22 +356,18 @@ impl Ctx {
     }
 
     /// Makes disk match the lock: store, links, gitignore block, git index.
-    fn materialize(&self, m: &Manifest, lock: &Lock, mut prepared: HashMap<String, Fetched>) -> Result<()> {
-        self.preflight(m, lock)?;
+    fn materialize(&self, m: &Manifest, lock: &Lock, old: &Lock, mut prepared: HashMap<String, Fetched>) -> Result<()> {
+        self.preflight(m, lock, old)?;
         let s = &self.s;
         let old_managed = project::block_managed(s)?;
+        let old_block = project::read_block(s)?;
         let locked = locked_names(lock)?;
         let locals = project::local_names(s, &m.local)?;
-        for n in project::stale_local_links(s, &m.local, &locals) {
-            if locked.contains_key(&n) || old_managed.contains(&n) {
-                continue;
-            }
-            for t in &m.targets {
-                project::unlink(s, t, &n)?;
-            }
+        for n in project::stale_local_links(s, &m.local, &locals)? {
             project::unlink(s, STORE, &n)?;
         }
-        let hand = hand_written(s, lock, &old_managed, &locals)?;
+        let kept = kept(s, lock, old, &old_managed);
+        let hand = hand_written(s, lock, &old_managed.difference(&kept).cloned().collect(), &locals)?;
 
         let mut modes = project::read_modes(s);
         for p in &lock.packages {
@@ -410,19 +410,36 @@ impl Ctx {
             for t in &m.targets {
                 project::unlink(s, t, n)?;
             }
+            set_modes(&mut modes, n, &[]);
+            if kept.contains(n) {
+                eprintln!("warning: kept {}: modified or not installed by skillcask", s.show(&format!("{STORE}/{n}")));
+                continue;
+            }
             let dir = project::store_dir(s, n);
             if dir.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
                 std::fs::remove_file(&dir)?;
             } else if dir.is_dir() {
                 std::fs::remove_dir_all(dir)?;
             }
-            set_modes(&mut modes, n, &[]);
             println!("removed {n}");
         }
         project::write_modes(s, &modes)?;
 
+        let plan = link_plan(m, &locked, &hand, &locals);
+        if !s.global {
+            // In home skillcask links only locked skills; other links there are the user's.
+            let names: BTreeSet<&String> = plan.iter().map(|(_, _, n)| n).collect();
+            for t in &m.targets {
+                for e in std::fs::read_dir(s.root.join(t)).into_iter().flatten().flatten() {
+                    let n = e.file_name().to_string_lossy().into_owned();
+                    if !names.contains(&n) && project::made_by_skillcask(s, t, STORE, &n, &old_block) {
+                        project::unlink(s, t, &n)?;
+                    }
+                }
+            }
+        }
         let mut copies = BTreeSet::new();
-        for (at, source, n) in link_plan(m, &locked, &hand, &locals) {
+        for (at, source, n) in plan {
             if project::link(s, &at, source, &n)? && !locked.contains_key(&n) {
                 copies.insert(format!("/{at}/{n}"));
             }
@@ -581,6 +598,34 @@ fn link_plan<'a>(
         plan.extend(m.targets.iter().map(|t| (t.clone(), STORE, n.clone())));
     }
     plan
+}
+
+fn locked_skill<'a>(lock: &'a Lock, name: &str) -> Option<(&'a Package, &'a LockedSkill)> {
+    lock.skills().find(|(_, sk)| sk.name == name)
+}
+
+/// Whether installing `sk` over its existing store dir loses nothing but what skillcask installed.
+/// A dir matching the new or the old lock entry is skillcask's. Any other dir is a local edit,
+/// restored only when skillcask managed the name and its lock entry is unchanged: under a new or
+/// changed entry it may be the user's own skill.
+fn replaceable(s: &Scope, p: &Package, sk: &LockedSkill, old: &Lock, old_managed: &BTreeSet<String>) -> bool {
+    let Some(h) = tree_on_disk(s, &sk.name) else { return false };
+    h == sk.tree_sha256
+        || locked_skill(old, &sk.name).is_some_and(|(op, os)| {
+            h == os.tree_sha256 || (old_managed.contains(&sk.name) && op.version == p.version && os.tree_sha256 == sk.tree_sha256)
+        })
+}
+
+/// Managed names no longer locked whose store dir is not what the old lock installed: modified,
+/// or never installed by skillcask (the block is committed and shared). They are not deleted.
+fn kept(s: &Scope, lock: &Lock, old: &Lock, old_managed: &BTreeSet<String>) -> BTreeSet<String> {
+    old_managed
+        .iter()
+        .filter(|n| locked_skill(lock, n).is_none())
+        .filter(|n| project::store_dir(s, n).symlink_metadata().is_ok_and(|m| !m.file_type().is_symlink()))
+        .filter(|n| tree_on_disk(s, n) != locked_skill(old, n).map(|(_, sk)| sk.tree_sha256.clone()))
+        .cloned()
+        .collect()
 }
 
 fn installed_ok(s: &Scope, sk: &LockedSkill) -> bool {
@@ -788,14 +833,15 @@ fn finish_add(ctx: &Ctx, existed: bool, m: &Manifest, req: &SkillReq, repo: &Rep
     let mut prepared = HashMap::new();
     let pkg = ctx.lock_candidate(req, repo, c, &mut prepared)?;
     let mut lock = Lock::load(&ctx.s.config)?;
+    let old = lock.clone();
     lock.upsert(pkg);
     // skills.toml is written only after the checks pass; the prompt still needs to see the entry.
     let mut view = m.clone();
     view.skills.retain(|r| r.name != req.name);
     view.skills.push(req.clone());
-    let changed = ctx.settle_conflicts(&view, &mut lock, &prepared, &BTreeSet::from([req.name.clone()]), true)?;
+    let changed = ctx.settle_conflicts(&view, &mut lock, &old, &prepared, &BTreeSet::from([req.name.clone()]), true)?;
     let req = &changed.into_iter().find(|r| r.name == req.name).unwrap_or_else(|| req.clone());
-    ctx.preflight(&view, &lock)?;
+    ctx.preflight(&view, &lock, &old)?;
 
     if !existed {
         std::fs::create_dir_all(&ctx.s.config)?;
@@ -804,12 +850,13 @@ fn finish_add(ctx: &Ctx, existed: bool, m: &Manifest, req: &SkillReq, repo: &Rep
     manifest::write_skill(&ctx.s.config, ctx.s.global, req)?;
     lock.save(&ctx.s.config)?;
     println!("added {} = {:?} ({})", req.name, req.constraint, c.version);
-    ctx.materialize(&Manifest::load(&ctx.s.config, ctx.s.global)?, &lock, prepared)
+    ctx.materialize(&Manifest::load(&ctx.s.config, ctx.s.global)?, &lock, &old, prepared)
 }
 
 pub fn remove(ctx: &Ctx, names: &[String]) -> Result<()> {
     let m = Manifest::load(&ctx.s.config, ctx.s.global)?;
     let mut lock = Lock::load(&ctx.s.config)?;
+    let old = lock.clone();
     for n in names {
         if m.skill(n).is_none() && lock.get(n).is_none() {
             bail!(MANIFEST, "{n} is not in {} or {}", manifest::FILE, crate::lock::FILE);
@@ -818,12 +865,13 @@ pub fn remove(ctx: &Ctx, names: &[String]) -> Result<()> {
     manifest::remove_skills(&ctx.s.config, ctx.s.global, names)?;
     lock.packages.retain(|p| !names.contains(&p.name));
     lock.save(&ctx.s.config)?;
-    ctx.materialize(&Manifest::load(&ctx.s.config, ctx.s.global)?, &lock, HashMap::new())
+    ctx.materialize(&Manifest::load(&ctx.s.config, ctx.s.global)?, &lock, &old, HashMap::new())
 }
 
 pub fn install(ctx: &Ctx, frozen: bool) -> Result<()> {
     let mut m = Manifest::load(&ctx.s.config, ctx.s.global)?;
     let mut lock = Lock::load(&ctx.s.config)?;
+    let old = lock.clone();
     let (needs, stale, why) = reconcile(&m, &lock);
     let mut prepared = HashMap::new();
     if !why.is_empty() {
@@ -839,14 +887,15 @@ pub fn install(ctx: &Ctx, frozen: bool) -> Result<()> {
         }
         lock.packages.retain(|p| !stale.contains(&p.name));
         let newcomers = needs.iter().map(|r| r.name.clone()).collect();
-        m = settle_and_save(ctx, m, &mut lock, &prepared, &newcomers)?;
+        m = settle_and_save(ctx, m, &mut lock, &old, &prepared, &newcomers)?;
     }
-    ctx.materialize(&m, &lock, prepared)
+    ctx.materialize(&m, &lock, &old, prepared)
 }
 
 pub fn update(ctx: &Ctx, names: &[String]) -> Result<()> {
     let m = Manifest::load(&ctx.s.config, ctx.s.global)?;
     let mut lock = Lock::load(&ctx.s.config)?;
+    let old = lock.clone();
     for n in names {
         if m.skill(n).is_none() {
             bail!(MANIFEST, "{n} is not in {}", manifest::FILE);
@@ -866,8 +915,8 @@ pub fn update(ctx: &Ctx, names: &[String]) -> Result<()> {
     }
     let (_, stale, _) = reconcile(&m, &lock);
     lock.packages.retain(|p| !stale.contains(&p.name));
-    let m = settle_and_save(ctx, m, &mut lock, &prepared, &newcomers)?;
-    ctx.materialize(&m, &lock, prepared)
+    let m = settle_and_save(ctx, m, &mut lock, &old, &prepared, &newcomers)?;
+    ctx.materialize(&m, &lock, &old, prepared)
 }
 
 /// Prompts for renames, then saves skills.toml and skills.lock only if no conflict is left.
@@ -875,11 +924,12 @@ fn settle_and_save(
     ctx: &Ctx,
     m: Manifest,
     lock: &mut Lock,
+    old: &Lock,
     prepared: &HashMap<String, Fetched>,
     newcomers: &BTreeSet<String>,
 ) -> Result<Manifest> {
-    let changed = ctx.settle_conflicts(&m, lock, prepared, newcomers, false)?;
-    ctx.preflight(&m, lock)?;
+    let changed = ctx.settle_conflicts(&m, lock, old, prepared, newcomers, false)?;
+    ctx.preflight(&m, lock, old)?;
     for r in &changed {
         manifest::write_skill(&ctx.s.config, ctx.s.global, r)?;
     }
