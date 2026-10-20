@@ -40,12 +40,9 @@ struct Auth(Vec<(String, Cred)>);
 impl Auth {
     fn load(config: &Path) -> Result<Auth> {
         let home = crate::scope::home();
-        let composer_home = std::env::var_os("COMPOSER_HOME").map(PathBuf::from);
-        let global = match (composer_home, home) {
-            (Some(c), _) => Some(c.join("auth.json")),
-            (None, Some(h)) => [h.join(".composer/auth.json"), h.join(".config/composer/auth.json")].into_iter().find(|p| p.exists()),
-            _ => None,
-        };
+        // Composer's Platform::isXdg(): any XDG_* variable, or a system XDG directory.
+        let xdg = std::env::vars_os().any(|(k, _)| k.to_string_lossy().starts_with("XDG_")) || Path::new("/etc/xdg").is_dir();
+        let global = global_auth_paths(|k| std::env::var_os(k), home.as_deref(), xdg).into_iter().find(|p| p.exists());
         let mut auth = Auth::default();
         if let Ok(env) = std::env::var("COMPOSER_AUTH") {
             auth.add(&env, "COMPOSER_AUTH")?;
@@ -58,7 +55,7 @@ impl Auth {
             }
         }
         let token = ["GITHUB_TOKEN", "GH_TOKEN"].iter().find_map(|k| std::env::var(k).ok().filter(|t| !t.is_empty()));
-        if let (Some(t), Some(host)) = (token, Url::parse(&crate::github::api()).ok().and_then(|u| u.host_str().map(String::from))) {
+        if let (Some(t), Some(host)) = (token, Url::parse(&crate::github::api()).ok().as_ref().and_then(auth_key)) {
             auth.0.push((host, Cred::Bearer(t)));
         }
         Ok(auth)
@@ -78,7 +75,13 @@ impl Auth {
             self.0.push((host.clone(), Cred::Bearer(c.as_str().ok_or_else(bad)?.into())));
         }
         for (host, c) in section("gitlab-token") {
-            self.0.push((host.clone(), Cred::PrivateToken(str_or(c, "token").ok_or_else(bad)?)));
+            let token = str_or(c, "token").ok_or_else(bad)?;
+            // As in Composer: with a username the token is a password for HTTP Basic.
+            let cred = match c.get("username").and_then(Value::as_str) {
+                Some(u) => Cred::Basic(u.into(), token),
+                None => Cred::PrivateToken(token),
+            };
+            self.0.push((host.clone(), cred));
         }
         for (host, c) in section("gitlab-oauth") {
             self.0.push((host.clone(), Cred::Bearer(str_or(c, "token").ok_or_else(bad)?)));
@@ -94,12 +97,56 @@ impl Auth {
         Ok(())
     }
 
+    /// `host:port` must match exactly; a bare host means port 443.
     fn lookup(&self, url: &Url) -> Option<&Cred> {
-        let host = url.host_str()?;
-        let with_port = url.port().map(|p| format!("{host}:{p}"));
-        let find = |h: &str| self.0.iter().find(|(k, _)| k.eq_ignore_ascii_case(h)).map(|(_, c)| c);
-        with_port.as_deref().and_then(find).or_else(|| find(host))
+        let key = auth_key(url)?;
+        let keys = if url.port().is_some() { vec![key] } else { vec![format!("{key}:443"), key] };
+        self.0.iter().find(|(k, _)| keys.iter().any(|x| k.eq_ignore_ascii_case(x))).map(|(_, c)| c)
     }
+}
+
+/// `host`, or `host:port` for a port other than the scheme's default.
+fn auth_key(url: &Url) -> Option<String> {
+    let host = url.host_str()?;
+    Some(url.port().map_or_else(|| host.to_string(), |p| format!("{host}:{p}")))
+}
+
+/// Candidates for the global `auth.json`, in Composer's home order: `COMPOSER_HOME`, else
+/// `%APPDATA%\Composer` on Windows, else the XDG config dir (when the system uses XDG) before
+/// `~/.composer`. `~/.config/composer` stays a fallback either way.
+fn global_auth_paths(var: impl Fn(&str) -> Option<std::ffi::OsString>, home: Option<&Path>, xdg: bool) -> Vec<PathBuf> {
+    let set = |k: &str| var(k).filter(|v| !v.is_empty()).map(PathBuf::from);
+    if let Some(c) = set("COMPOSER_HOME") {
+        return vec![c.join("auth.json")];
+    }
+    let mut dirs = Vec::new();
+    if cfg!(windows) {
+        dirs.extend(set("APPDATA").map(|a| a.join("Composer")));
+    } else if xdg {
+        dirs.extend(set("XDG_CONFIG_HOME").map(|x| x.join("composer")).or_else(|| home.map(|h| h.join(".config/composer"))));
+    }
+    if let Some(h) = home {
+        for d in [h.join(".composer"), h.join(".config/composer")] {
+            if !dirs.contains(&d) {
+                dirs.push(d);
+            }
+        }
+    }
+    dirs.into_iter().map(|d| d.join("auth.json")).collect()
+}
+
+/// `redact` for a string that is not a valid URL: everything up to the last `@` may be userinfo.
+fn redact_raw(s: &str) -> String {
+    let start = s.find("://").map_or(0, |i| i + 3);
+    let mut out = match s.rfind('@').filter(|&at| at >= start) {
+        Some(at) => format!("{}…@{}", &s[..start], &s[at + 1..]),
+        None => s.to_string(),
+    };
+    if let Some(q) = out.find(['?', '#']) {
+        out.truncate(q);
+        out.push_str("?…");
+    }
+    out
 }
 
 /// URL safe to print: no userinfo, no query (tokens sometimes travel there).
@@ -153,7 +200,7 @@ impl Http {
 
     /// `Ok(None)` on 404/410.
     pub fn get(&self, url: &str, max_bytes: u64) -> Result<Option<Vec<u8>>> {
-        let mut cur = Url::parse(url).map_err(|e| Error::new(NETWORK, format!("invalid URL {url:?}: {e}")))?;
+        let mut cur = Url::parse(url).map_err(|e| Error::new(NETWORK, format!("invalid URL {:?}: {e}", redact_raw(url))))?;
         for _ in 0..=MAX_REDIRECTS {
             if cur.scheme() != "https" {
                 bail!(NETWORK, "refusing non-HTTPS URL {}", redact(&cur));
@@ -192,6 +239,9 @@ impl Http {
                     cur = cur.join(loc).map_err(|e| Error::new(NETWORK, format!("{shown}: bad redirect: {e}")))?;
                 }
                 404 | 410 => return Ok(None),
+                403 if resp.headers().get("x-ratelimit-remaining").is_some_and(|v| v.as_bytes() == b"0") => {
+                    bail!(AUTH, "{shown}: HTTP 403: GitHub API rate limit reached; set GITHUB_TOKEN")
+                }
                 401 | 403 => bail!(
                     AUTH,
                     "{shown}: HTTP {status}; check auth.json / COMPOSER_AUTH for {} (GitHub: GITHUB_TOKEN, also for the anonymous rate limit)",
@@ -230,13 +280,53 @@ mod tests {
         assert_eq!(get("https://git.example.com/x"), Some(Cred::Basic("gitlab-ci-token".into(), "job".into())));
         assert_eq!(get("https://repo.example.com:8443/x"), Some(Cred::Bearer("b1".into())));
         assert_eq!(get("https://repo.example.com/x"), Some(Cred::Bearer("b2".into())));
-        assert_eq!(get("https://gl.example.com/x"), Some(Cred::PrivateToken("pt".into())));
+        assert_eq!(get("https://gl.example.com/x"), Some(Cred::Basic("u".into(), "pt".into())));
         assert_eq!(get("https://oa.example.com/x"), Some(Cred::Bearer("ot".into())));
         assert_eq!(get("https://api.github.com/repos/a/b"), Some(Cred::Bearer("gh".into())));
         assert_eq!(get("https://none.example.com/x"), None);
         assert_eq!(Cred::Basic("a".into(), "b".into()).header().1, "Basic YTpi");
         assert!(a.add("not json", "x").is_err());
         assert!(a.add(r#"{"bearer":{"h":5}}"#, "x").is_err());
+    }
+
+    #[test]
+    fn credentials_match_host_and_port() {
+        let mut a = Auth::default();
+        a.add(r#"{"bearer":{"bare.example.com":"b","p.example.com:443":"p443","h.example.com:8443":"h8443"},"gitlab-token":{"gl.example.com":"pt"}}"#, "x").unwrap();
+        let get = |u: &str| a.lookup(&Url::parse(u).unwrap()).cloned();
+        assert_eq!(get("https://bare.example.com/x"), Some(Cred::Bearer("b".into())));
+        assert_eq!(get("https://bare.example.com:443/x"), Some(Cred::Bearer("b".into())));
+        assert_eq!(get("https://bare.example.com:8443/x"), None, "a bare host is port 443 only");
+        assert_eq!(get("https://p.example.com/x"), Some(Cred::Bearer("p443".into())));
+        assert_eq!(get("https://h.example.com:8443/x"), Some(Cred::Bearer("h8443".into())));
+        assert_eq!(get("https://h.example.com/x"), None);
+        assert_eq!(get("https://127.0.0.1:9/x"), None);
+        assert_eq!(get("https://gl.example.com/x"), Some(Cred::PrivateToken("pt".into())));
+    }
+
+    #[test]
+    fn invalid_url_error_hides_userinfo_and_query() {
+        let http = Http::new(Path::new("/nonexistent"), false).unwrap();
+        let e = http.get("https://u:secret@bad host/x?token=abc", 10).unwrap_err();
+        assert_eq!(e.code, NETWORK);
+        assert!(e.msg.contains("invalid URL") && !e.msg.contains("secret") && !e.msg.contains("u:") && !e.msg.contains("abc"), "{}", e.msg);
+        assert!(e.msg.contains("bad host/x"), "{}", e.msg);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn global_auth_follows_composer_home_order() {
+        let env = |vars: &'static [(&'static str, &'static str)]| move |k: &str| vars.iter().find(|v| v.0 == k).map(|v| v.1.into());
+        let home = Path::new("/h");
+        let paths = |vars, xdg| global_auth_paths(env(vars), Some(home), xdg);
+        let p = |s: &str| PathBuf::from(s);
+        assert_eq!(paths(&[("COMPOSER_HOME", "/c"), ("XDG_CONFIG_HOME", "/x")], true), [p("/c/auth.json")]);
+        assert_eq!(
+            paths(&[("XDG_CONFIG_HOME", "/x")], true),
+            [p("/x/composer/auth.json"), p("/h/.composer/auth.json"), p("/h/.config/composer/auth.json")]
+        );
+        assert_eq!(paths(&[], true), [p("/h/.config/composer/auth.json"), p("/h/.composer/auth.json")]);
+        assert_eq!(paths(&[("COMPOSER_HOME", "")], false), [p("/h/.composer/auth.json"), p("/h/.config/composer/auth.json")]);
     }
 
     #[test]
