@@ -168,6 +168,7 @@ Every command except `publish` takes `-g, --global`.
 | `status` | Exit 1 when manifest, lock or installed files disagree. |
 | `doctor [--fix]` | Broken or committed links, stale gitignore block, modified skills. |
 | `search <query>` | Packagist (`type=ai-agent-skill`) and skill packages of the other repositories, GitLab included. |
+| `auth set\|remove <host>` | Keep a registry token in git's credential helper (Keychain, Credential Manager, libsecret). |
 | `publish --vendor v --base-url URL --out DIR [--inline] [--dist-url TPL] [paths…]` | Build a static Composer repository from a monorepo. |
 | `<other>` | Runs `skillcask-<other>` from `PATH`, like git and cargo plugins. |
 
@@ -236,7 +237,11 @@ what you picked.
   pushes for, falls back to commit dates, which the committer sets; reviewing what `add`/`update`
   change in `skills.lock` is the real check there.
 - Credentials come from Composer's `auth.json` / `COMPOSER_AUTH` (`http-basic`, `bearer`,
-  `gitlab-token`, `gitlab-oauth`) and are never printed. In GitLab CI use `http-basic` with the
+  `gitlab-token`, `gitlab-oauth`), then from git's credential helper, and are never printed.
+  `skillcask auth set git.example.com` keeps a token in the macOS Keychain, the Windows Credential
+  Manager or libsecret instead of a plain-text file (the default username `PRIVATE-TOKEN` sends
+  GitLab's header; `--username oauth2` a Bearer token). `SKILLCASK_GIT_CREDENTIALS=0` turns the
+  helper off. In GitLab CI use `http-basic` with the
   user `gitlab-ci-token` and the password `$CI_JOB_TOKEN`.
 
 ## Publishing skills

@@ -2,6 +2,7 @@
 
 mod archive;
 mod commands;
+mod credential;
 mod error;
 mod github;
 mod http;
@@ -51,6 +52,25 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+enum AuthCmd {
+    /// Store a token for a host; asked without echo, or read from stdin when piped.
+    Set {
+        /// host or host:port
+        host: String,
+        /// PRIVATE-TOKEN sends a GitLab PRIVATE-TOKEN header, oauth2 a Bearer token, any other
+        /// name HTTP Basic.
+        #[arg(long, default_value = credential::PRIVATE_TOKEN)]
+        username: String,
+    },
+    /// Remove the stored token of a host.
+    Remove {
+        host: String,
+        #[arg(long, default_value = credential::PRIVATE_TOKEN)]
+        username: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum Cmd {
     /// Create skills.toml with defaults.
     Init,
@@ -87,6 +107,9 @@ enum Cmd {
     },
     /// Search for skill packages.
     Search { query: String },
+    /// Keep a registry token in git's credential helper (Keychain, Credential Manager, libsecret).
+    #[command(subcommand)]
+    Auth(AuthCmd),
     /// Build a static Composer repository from SKILL.md files in a monorepo.
     Publish {
         #[arg(long)]
@@ -131,11 +154,14 @@ fn run(cli: Cli) -> Result<(), Error> {
         unpacked: cli.max_unpacked.unwrap_or(d.unpacked),
         files: cli.max_files.unwrap_or(d.files),
     };
-    if cli.global && matches!(cli.cmd, Cmd::External(_) | Cmd::Publish { .. }) {
+    if cli.global && matches!(cli.cmd, Cmd::External(_) | Cmd::Publish { .. } | Cmd::Auth(_)) {
         return Err(Error::new(MANIFEST, "--global does not apply to this command"));
     }
     if let Cmd::External(args) = &cli.cmd {
         return plugin(args);
+    }
+    if let Cmd::Auth(a) = &cli.cmd {
+        return auth(a);
     }
     let scope = if cli.global {
         Scope::global()?
@@ -162,7 +188,7 @@ fn run(cli: Cli) -> Result<(), Error> {
         Cmd::Status => commands::status(&ctx),
         Cmd::Doctor { fix } => commands::doctor(&ctx, fix),
         Cmd::Search { query } => commands::search(&ctx, &query),
-        Cmd::External(_) => unreachable!("handled above"),
+        Cmd::External(_) | Cmd::Auth(_) => unreachable!("handled above"),
         Cmd::Publish { vendor, base_url, dist_url, inline, out, paths } => {
             if vendor.is_empty() {
                 return Err(Error::new(MANIFEST, "--vendor must not be empty"));
@@ -170,6 +196,29 @@ fn run(cli: Cli) -> Result<(), Error> {
             publish::publish(&publish::PublishArgs { vendor, base_url, dist_url, inline, out, paths })
         }
     }
+}
+
+fn auth(cmd: &AuthCmd) -> Result<(), Error> {
+    let (AuthCmd::Set { host, username } | AuthCmd::Remove { host, username }) = cmd;
+    // Accepts a URL too; git's helpers key credentials by host and port.
+    let url = url::Url::parse(host).or_else(|_| url::Url::parse(&format!("https://{host}")));
+    let Some(key) = url
+        .ok()
+        .filter(|u| u.scheme() == "https")
+        .and_then(|u| Some(u.host_str()?.to_string() + &u.port().map(|p| format!(":{p}")).unwrap_or_default()))
+    else {
+        return Err(Error::new(MANIFEST, format!("invalid host {host:?}")));
+    };
+    match cmd {
+        AuthCmd::Set { .. } => {
+            let piped = !std::io::stdin().is_terminal();
+            let token = if piped { Some(std::io::read_to_string(std::io::stdin())?.trim().to_string()) } else { None };
+            credential::store(&key, username, token.as_deref())?;
+            eprintln!("stored a token for {key} in git's credential helper");
+        }
+        AuthCmd::Remove { .. } => credential::remove(&key, username)?,
+    }
+    Ok(())
 }
 
 /// Runs a user-installed `skillcask-<name>` executable. Packages never provide these.

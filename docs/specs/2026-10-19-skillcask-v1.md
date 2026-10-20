@@ -64,6 +64,7 @@ byte-identical skills to the ones committed in the lock, or a non-zero exit.
 | D13 | `--global` manages personal skills: store `~/.agents/skills`, links in `~/.claude/skills` etc., manifest and lock in `~/.config/skillcask`; a skill name clash inside one scope is solved with `rename`, a clash across scopes is a warning. | Agents read personal skills from home and skills have no namespaces. The design is in `docs/specs/2026-10-20-global-and-aliases.md`. |
 | D14 | `publish` records the tree hash of each new version in `extra.ai-agent-skill-tree`; without the published zip in `--out`, a version whose `shasum` differs counts as unchanged when its tree matches, and no zip is written for it. | CI that does not keep `dist/` must not fail on every published version when a `zip` or deflate update changes the bytes of the same tree. Downloading every old zip first would cost a request per version on each run. |
 | D15 | A repository may set its own `min-release-age`, which overrides `policy.min-release-age` for packages resolved there; GitHub sources keep the policy value. | Internal skills are reviewed in merge requests and published after every merge; a project-wide `"0"` would also drop the cooldown for public sources. |
+| D17 | A host no Composer source covers is asked from git's credential helper (`git credential fill`), on by default, off with `SKILLCASK_GIT_CREDENTIALS=0`; `skillcask auth set <host>` stores a token there. | Tokens then live in the macOS Keychain, the Windows Credential Manager or libsecret instead of a plain-text `auth.json`, with no new dependency: every developer machine has git and a helper. |
 
 ## Project files
 
@@ -259,7 +260,12 @@ Sources, first match per host: `COMPOSER_AUTH` (JSON), `./auth.json`, `$COMPOSER
 (default `~/.composer/auth.json` or `~/.config/composer/auth.json`). Supported keys:
 `http-basic`, `bearer`, `gitlab-token`, `gitlab-oauth`, `github-oauth` (a `github.com` token is
 also used for `api.github.com`). `GITHUB_TOKEN` or `GH_TOKEN` is the last fallback for the GitHub
-API host (`SKILLCASK_GITHUB_API`, default `https://api.github.com`). A GitLab CI job reads the registry with
+API host (`SKILLCASK_GITHUB_API`, default `https://api.github.com`). Then git's credential helper
+(D17): `git credential fill` once per remaining host, never interactive (no terminal prompt, no
+askpass, `GCM_INTERACTIVE=never`), off with `SKILLCASK_GIT_CREDENTIALS=0`. The username picks the
+header: `PRIVATE-TOKEN` the GitLab header, `oauth2` a Bearer token, any other HTTP Basic.
+`skillcask auth set <host> [--username U]` stores a token (asked by git without echo, or read from
+a pipe) and `auth remove` deletes only that username's entry. A GitLab CI job reads the registry with
 `http-basic` user `gitlab-ci-token`, password `$CI_JOB_TOKEN`. Tokens are never printed, including
 in `--verbose` URLs.
 

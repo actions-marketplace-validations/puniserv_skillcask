@@ -33,9 +33,10 @@ impl Cred {
     }
 }
 
-/// Entries in source priority order; the first entry for a host wins.
+/// Entries in source priority order; the first entry for a host wins. With `git`, a host none of
+/// them covers is asked from git's credential helper, once.
 #[derive(Debug, Default)]
-struct Auth(Vec<(String, Cred)>);
+struct Auth(Vec<(String, Cred)>, bool, std::cell::RefCell<Vec<(String, Option<Cred>)>>);
 
 impl Auth {
     fn load(config: &Path) -> Result<Auth> {
@@ -58,6 +59,7 @@ impl Auth {
         if let (Some(t), Some(host)) = (token, Url::parse(&crate::github::api()).ok().as_ref().and_then(auth_key)) {
             auth.0.push((host, Cred::Bearer(t)));
         }
+        auth.1 = crate::credential::enabled();
         Ok(auth)
     }
 
@@ -98,10 +100,26 @@ impl Auth {
     }
 
     /// `host:port` must match exactly; a bare host means port 443.
-    fn lookup(&self, url: &Url) -> Option<&Cred> {
+    fn lookup(&self, url: &Url) -> Option<Cred> {
         let key = auth_key(url)?;
-        let keys = if url.port().is_some() { vec![key] } else { vec![format!("{key}:443"), key] };
-        self.0.iter().find(|(k, _)| keys.iter().any(|x| k.eq_ignore_ascii_case(x))).map(|(_, c)| c)
+        let keys = if url.port().is_some() { vec![key.clone()] } else { vec![format!("{key}:443"), key.clone()] };
+        if let Some((_, c)) = self.0.iter().find(|(k, _)| keys.iter().any(|x| k.eq_ignore_ascii_case(x))) {
+            return Some(c.clone());
+        }
+        if !self.1 {
+            return None;
+        }
+        let mut seen = self.2.borrow_mut();
+        if let Some((_, c)) = seen.iter().find(|(k, _)| *k == key) {
+            return c.clone();
+        }
+        let c = crate::credential::fill(&key).map(|(user, pass)| match user.as_str() {
+            crate::credential::PRIVATE_TOKEN => Cred::PrivateToken(pass),
+            crate::credential::OAUTH2 => Cred::Bearer(pass),
+            _ => Cred::Basic(user, pass),
+        });
+        seen.push((key, c.clone()));
+        c
     }
 }
 
@@ -214,7 +232,7 @@ impl Http {
             let _ = cur.set_username("");
             let _ = cur.set_password(None);
             let mut req = self.agent.get(cur.as_str());
-            if let Some(c) = inline.as_ref().or_else(|| self.auth.lookup(&cur)) {
+            if let Some(c) = inline.or_else(|| self.auth.lookup(&cur)) {
                 let (k, v) = c.header();
                 req = req.header(k, v);
             }
@@ -280,7 +298,7 @@ mod tests {
         )
         .unwrap();
         a.add(r#"{"http-basic":{"git.example.com":{"username":"other","password":"x"}},"gitlab-token":{"gl.example.com":{"username":"u","token":"pt"}},"gitlab-oauth":{"oa.example.com":"ot"},"bearer":{"repo.example.com":"b2"},"github-oauth":{"github.com":"gh"}}"#, "file").unwrap();
-        let get = |u: &str| a.lookup(&Url::parse(u).unwrap()).cloned();
+        let get = |u: &str| a.lookup(&Url::parse(u).unwrap());
         assert_eq!(get("https://git.example.com/x"), Some(Cred::Basic("gitlab-ci-token".into(), "job".into())));
         assert_eq!(get("https://repo.example.com:8443/x"), Some(Cred::Bearer("b1".into())));
         assert_eq!(get("https://repo.example.com/x"), Some(Cred::Bearer("b2".into())));
@@ -297,7 +315,7 @@ mod tests {
     fn credentials_match_host_and_port() {
         let mut a = Auth::default();
         a.add(r#"{"bearer":{"bare.example.com":"b","p.example.com:443":"p443","h.example.com:8443":"h8443"},"gitlab-token":{"gl.example.com":"pt"}}"#, "x").unwrap();
-        let get = |u: &str| a.lookup(&Url::parse(u).unwrap()).cloned();
+        let get = |u: &str| a.lookup(&Url::parse(u).unwrap());
         assert_eq!(get("https://bare.example.com/x"), Some(Cred::Bearer("b".into())));
         assert_eq!(get("https://bare.example.com:443/x"), Some(Cred::Bearer("b".into())));
         assert_eq!(get("https://bare.example.com:8443/x"), None, "a bare host is port 443 only");

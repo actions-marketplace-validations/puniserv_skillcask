@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::sync::{Arc, Mutex};
 
 use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair, SanType};
@@ -307,6 +307,17 @@ impl Project {
     }
 
     pub fn run(&self, args: &[&str]) -> Output {
+        self.command(args).output().unwrap()
+    }
+
+    /// Runs with `input` piped to stdin.
+    pub fn run_input(&self, args: &[&str], input: &str) -> Output {
+        let mut child = self.command(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+        child.wait_with_output().unwrap()
+    }
+
+    fn command(&self, args: &[&str]) -> Command {
         let mut c = Command::new(env!("CARGO_BIN_EXE_skillcask"));
         c.args(args)
             .current_dir(self.cwd.as_deref().unwrap_or(self.path()))
@@ -318,11 +329,15 @@ impl Project {
             .env_remove("CI")
             .env_remove("SKILLCASK_LINK_MODE")
             .env_remove("SKILLCASK_HOME")
-            .env_remove("XDG_CONFIG_HOME");
+            .env_remove("XDG_CONFIG_HOME")
+            // HOME holds the only git config, so no system credential helper (Keychain) is asked.
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env_remove("GIT_CONFIG_GLOBAL")
+            .env_remove("SKILLCASK_GIT_CREDENTIALS");
         for (k, v) in &self.env {
             c.env(k, v);
         }
-        c.output().unwrap()
+        c
     }
 
     /// Runs and asserts the exit code; returns stdout + stderr.
