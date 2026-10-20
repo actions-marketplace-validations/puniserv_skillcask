@@ -210,6 +210,28 @@ fn install_keeps_the_locked_version_when_only_rename_or_selection_changed() {
 }
 
 #[test]
+fn a_rename_on_a_0_1_2_github_lock_keeps_the_locked_tag() {
+    let s = Server::start();
+    tagged(&s);
+    let p = with_github(Project::new(&s), &s);
+    p.manifest(&s, "\"acme/tagged\" = { github = true, version = \"^1.0\" }\n");
+    p.ok(&["install"]);
+    p.write("skills.lock", &p.read("skills.lock").replace("ref = false\n", ""));
+    let sha = "2".repeat(40);
+    s.put(
+        "/repos/acme/tagged/tags",
+        json!([{ "name": "1.1.0", "commit": { "sha": sha } }, { "name": "1.0.0", "commit": { "sha": "1".repeat(40) } }]).to_string(),
+    );
+    s.put(&format!("/repos/acme/tagged/commits/{sha}"), gh_commit(&sha, 240).to_string());
+    s.put(&format!("/repos/acme/tagged/zipball/{sha}"), zipball(&[("SKILL.md", &skill_md("tagged"))]));
+
+    p.manifest(&s, "\"acme/tagged\" = { github = true, version = \"^1.0\", rename = { tagged = \"acme-tagged\" } }\n");
+    p.ok(&["install"]);
+    let lock = p.read("skills.lock");
+    assert!(lock.contains("version = \"1.0.0\"") && lock.contains("ref = false\n"), "{lock}");
+}
+
+#[test]
 fn add_without_constraint_keeps_the_existing_one() {
     let s = Server::start();
     let z = || zipball(&[("SKILL.md", &skill_md("one"))]);

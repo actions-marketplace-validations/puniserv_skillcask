@@ -138,7 +138,9 @@ impl Ctx {
         let c = match req.github {
             Some(g) => {
                 let same_ref = g == GitHub::Ref && p.constraint == req.constraint;
-                if p.git_ref != Some(g == GitHub::Ref) || !(same_ref || g == GitHub::Tags && fits()) {
+                // A lock without `ref` (0.1.2) kept the mode as long as the constraint is unchanged, as in `drift`.
+                let same_mode = p.git_ref.map_or(p.constraint == req.constraint, |r| r == (g == GitHub::Ref));
+                if !same_mode || !(same_ref || g == GitHub::Tags && fits()) {
                     return Ok(None);
                 }
                 Candidate {
