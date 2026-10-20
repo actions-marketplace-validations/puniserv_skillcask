@@ -98,7 +98,9 @@ packagist = true           # false: drop the implicit Packagist repository
 ```
 
 - A skill entry without `repository` is looked up in declared repositories in order, then
-  Packagist. The repository that served it is written to the lock.
+  Packagist. The repository that served it is written to the lock. Once locked, `install`, `update` and `add` look
+  for it only in that repository; if it is gone from there, they fail rather than take a package
+  with the same name from another repository. Setting `repository` moves it on purpose.
 - `skills = [...]` selects skills from a package that ships several; default: all.
 - `policy.allow-ranges = false` is for organisations whose standard forbids ranges even with a
   lock; `add` then writes the resolved exact version.
@@ -205,10 +207,10 @@ mismatch (exit 4) rather than installing unverified content.
 |---|---|
 | `init` | Create `skills.toml` with defaults. |
 | `add github:<owner/repo>[/skill][@version-or-ref]` | GitHub entry; `/skill` adds to `skills = [...]`. `@x` is a version constraint when it parses as one, else a ref. Without `@`: version tags if the repository has any (`^<major.minor>`), else the default branch. |
-| `add <vendor/name>[@constraint] [--repository r]` | Resolve first (typo or no match leaves files untouched), write manifest and lock, install. No constraint: `^<major.minor>` of the resolved version, or exact with `allow-ranges = false`. |
+| `add <vendor/name>[@constraint] [--repository r]` | Resolve first (typo or no match leaves files untouched), write manifest and lock, install. No constraint: the existing entry's constraint, else `^<major.minor>` of the resolved version, or the exact `x.y.z` with `allow-ranges = false`. |
 | `remove <vendor/name>…` | Drop from manifest and lock; remove installed directories, links and gitignore lines. |
-| `install [--frozen]` | Install exactly the lock: download dist, verify `dist-sha256`, unpack to a temp dir, verify every `tree-sha256`, move into place, link, rewrite the gitignore block. Entries in the manifest that do not match the lock (missing, or a changed constraint, repository, GitHub mode, `skills` selection or `rename`) are resolved and locked; with `--frozen` (implied when `CI` is set) that is exit 1 instead. Already-installed skills whose tree hash matches are skipped. |
-| `update [vendor/name…]` | Re-resolve within constraints (cooldown applies), rewrite the lock, install. |
+| `install [--frozen]` | Install exactly the lock: download dist, verify `dist-sha256`, unpack to a temp dir, verify every `tree-sha256`, move into place, link, rewrite the gitignore block. Entries in the manifest that do not match the lock (missing, or a changed constraint, repository, GitHub mode, `skills` selection or `rename`) are resolved and locked; with `--frozen` (implied when `CI` is set) that is exit 1 instead. When only `skills` or `rename` changed, or the locked version still satisfies a changed constraint, the locked version is kept. Already-installed skills whose tree hash matches are skipped. |
+| `update [vendor/name…]` | Re-resolve within constraints (cooldown applies), rewrite the lock, install. Entries not locked yet are resolved too; other drifted entries get a warning. |
 | `outdated` | Per package: locked, newest within constraint, newest overall, eligible date under cooldown. |
 | `status` | Manifest vs lock (every reason `install --frozen` checks, and a skill name provided by two packages) vs installed (hash) per skill. Exit 1 on any mismatch. |
 | `doctor [--fix]` | Broken or committed managed links, stale gitignore block, modified installed skills (tree hash). `--fix` repairs without downloading. |

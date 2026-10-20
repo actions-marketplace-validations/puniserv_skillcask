@@ -72,6 +72,63 @@ fn a_changed_repository_url_is_drift() {
     assert!(p.expect(&["status"], 1).contains("repository changed"));
 }
 
+/// A second repository at `/pub/packages.json` with inline metadata.
+fn public(s: &Server, name: &str, version: &str, skill: &str) {
+    let dist = format!("/pub/{name}/{version}.zip");
+    s.put(&dist, zipball(&[("SKILL.md", &skill_md(skill))]));
+    s.put(
+        "/pub/packages.json",
+        json!({ "packages": { name: { version: {
+            "name": name, "version": version, "version_normalized": format!("{version}.0"), "type": "ai-agent-skill",
+            "time": ago(240), "dist": { "type": "zip", "url": s.url(&dist) },
+        } } } })
+        .to_string(),
+    );
+}
+
+fn two_repos(p: &Project, s: &Server, skills: &str) {
+    p.write(
+        "skills.toml",
+        &format!(
+            "[repositories]\nfix = {{ url = \"{}\" }}\npub = {{ url = \"{}\" }}\n\n[skills]\n{skills}\n[policy]\npackagist = false\n",
+            s.url("/packages.json"),
+            s.url("/pub/packages.json")
+        ),
+    );
+}
+
+#[test]
+fn a_locked_package_is_resolved_only_in_its_locked_repository() {
+    let s = Server::start();
+    s.simple("acme/one", "1.0.0", "one");
+    public(&s, "acme/one", "9.0.0", "one");
+    let p = Project::new(&s);
+    two_repos(&p, &s, "\"acme/one\" = \"*\"\n");
+    p.ok(&["install"]);
+    assert!(p.read("skills.lock").contains("version = \"1.0.0\""));
+
+    s.respond("/p2/acme/one.json", 404, &[], "");
+    let (toml, lock) = (p.read("skills.toml"), p.read("skills.lock"));
+    let out = p.expect(&["update"], 1);
+    assert!(out.contains("acme/one: not found in its locked repository") && !out.contains("9.0.0"), "{out}");
+    assert_eq!((p.read("skills.toml"), p.read("skills.lock")), (toml.clone(), lock.clone()));
+    p.write("skills.toml", &toml.replace("\"*\"", "\">=1.0\""));
+    assert!(p.expect(&["install"], 1).contains("not found in its locked repository"));
+    assert_eq!(p.read("skills.lock"), lock);
+
+    // Moving it on purpose is allowed.
+    p.write("skills.toml", &toml.replace("\"*\"", "{ version = \"*\", repository = \"pub\" }"));
+    p.ok(&["install"]);
+    assert!(p.read("skills.lock").contains("version = \"9.0.0\""));
+
+    // Unlocked packages are still searched in order.
+    let q = Project::new(&s);
+    public(&s, "acme/two", "1.0.0", "two");
+    two_repos(&q, &s, "");
+    q.ok(&["add", "acme/two"]);
+    assert!(q.read("skills.lock").contains("/pub/packages.json"));
+}
+
 #[test]
 fn github_version_to_ref_with_the_same_string_is_drift() {
     let s = Server::start();
@@ -116,6 +173,97 @@ fn status_reports_every_drift_reason() {
     q.write("skills.lock", &q.read("skills.lock").replace("name = \"two\"", "name = \"one\""));
     let out = q.expect(&["status"], 1);
     assert!(out.contains("skill \"one\" is provided by both acme/one and acme/two"), "{out}");
+}
+
+#[test]
+fn install_keeps_the_locked_version_when_only_rename_or_selection_changed() {
+    let s = Server::start();
+    let z = |n: &str| zipball(&[("skills/alpha/SKILL.md", &skill_md("alpha")), ("skills/beta/SKILL.md", &skill_md(n))]);
+    let paths = || Some(json!(["skills/alpha", "skills/beta"]));
+    s.package("acme/multi", vec![Ver { version: "1.0.0", time: Some(ago(240)), zip: z("beta"), extra: paths() }]);
+    let p = Project::new(&s);
+    p.manifest(&s, "\"acme/multi\" = { version = \"^1.0\", skills = [\"beta\"] }\n");
+    p.ok(&["install"]);
+    s.package(
+        "acme/multi",
+        vec![
+            Ver { version: "1.1.0", time: Some(ago(100)), zip: z("beta"), extra: paths() },
+            Ver { version: "1.0.0", time: Some(ago(240)), zip: z("beta"), extra: paths() },
+        ],
+    );
+
+    p.manifest(&s, "\"acme/multi\" = { version = \"^1.0\", skills = [\"beta\"], rename = { beta = \"acme-beta\" } }\n");
+    p.ok(&["install"]);
+    let lock = p.read("skills.lock");
+    assert!(lock.contains("version = \"1.0.0\"") && lock.contains("from = \"beta\""), "{lock}");
+    assert!(p.exists(".agents/skills/acme-beta"));
+
+    p.manifest(&s, "\"acme/multi\" = { version = \"^1.0\", rename = { beta = \"acme-beta\" } }\n");
+    p.ok(&["install"]);
+    assert!(p.read("skills.lock").contains("version = \"1.0.0\""));
+    assert!(p.exists(".agents/skills/alpha"));
+    p.ok(&["install", "--frozen"]);
+
+    p.manifest(&s, "\"acme/multi\" = { version = \"~1.1\", rename = { beta = \"acme-beta\" } }\n");
+    p.ok(&["install"]);
+    assert!(p.read("skills.lock").contains("version = \"1.1.0\""), "a constraint the locked version fails re-resolves");
+}
+
+#[test]
+fn strict_add_writes_a_full_exact_version() {
+    let s = Server::start();
+    s.package("acme/two", vec![Ver { version: "1.2", time: Some(ago(240)), zip: zipball(&[("SKILL.md", &skill_md("two"))]), extra: None }]);
+    let p = Project::new(&s);
+    p.manifest(&s, "");
+    p.write("skills.toml", &p.read("skills.toml").replace("packagist = false", "packagist = false\nallow-ranges = false"));
+    p.ok(&["add", "acme/two"]);
+    assert!(p.read("skills.toml").contains("\"acme/two\" = \"1.2.0\""), "{}", p.read("skills.toml"));
+    p.ok(&["install", "--frozen"]);
+}
+
+#[test]
+fn update_of_one_package_also_locks_new_entries() {
+    let s = Server::start();
+    s.simple("acme/one", "1.0.0", "one");
+    s.simple("acme/two", "1.0.0", "two");
+    let p = Project::new(&s);
+    p.manifest(&s, "\"acme/one\" = \"^1.0\"\n");
+    p.ok(&["install"]);
+    p.manifest(&s, "\"acme/one\" = \"^1.0\"\n\"acme/two\" = \"^1.0\"\n");
+    let out = p.ok(&["update", "acme/one"]);
+    assert!(out.contains("locked acme/two 1.0.0"), "{out}");
+    p.ok(&["install", "--frozen"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn update_reports_nothing_when_it_fails() {
+    let s = Server::start();
+    s.simple("acme/one", "1.0.0", "one");
+    let p = Project::new(&s);
+    p.manifest(&s, "\"acme/one\" = \"^1.0\"\n");
+    p.ok(&["install"]);
+    s.simple("acme/one", "1.1.0", "one");
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::rename(p.path().join(".junie"), outside.path().join("junie")).unwrap();
+    std::os::unix::fs::symlink(outside.path().join("junie"), p.path().join(".junie")).unwrap();
+    let out = p.expect(&["update"], 1);
+    assert!(!out.contains("updated"), "{out}");
+    assert!(p.read("skills.lock").contains("version = \"1.0.0\""));
+}
+
+#[test]
+fn add_of_a_missing_skill_fails_when_all_are_selected() {
+    let s = Server::start();
+    tagged(&s);
+    let p = with_github(Project::new(&s), &s);
+    p.manifest(&s, "\"acme/tagged\" = { github = true, version = \"^1.0\" }\n");
+    p.ok(&["install"]);
+    let (toml, lock) = (p.read("skills.toml"), p.read("skills.lock"));
+    let out = p.expect(&["add", "github:acme/tagged/nope"], 1);
+    assert!(out.contains("no skill \"nope\""), "{out}");
+    assert_eq!((p.read("skills.toml"), p.read("skills.lock")), (toml, lock));
+    p.ok(&["add", "github:acme/tagged/tagged"]);
 }
 
 #[test]

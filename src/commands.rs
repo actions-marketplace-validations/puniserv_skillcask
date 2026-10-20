@@ -105,19 +105,68 @@ impl Ctx {
         Ok((sha, Fetched { dir, entries: x.files, links: x.links }))
     }
 
-    fn resolve(&self, m: &Manifest, req: &SkillReq, prepared: &mut HashMap<String, Fetched>) -> Result<Package> {
+    /// `locked`: the entry's lock entry before this command, if any.
+    fn resolve(&self, m: &Manifest, req: &SkillReq, locked: Option<&Package>, prepared: &mut HashMap<String, Fetched>) -> Result<Package> {
         if req.github.is_some() {
             let c = github::resolve(self.http()?, req, m.policy.min_release_age, Timestamp::now())?;
-            return self.lock_candidate(req, &github::repository(&req.name), &c, prepared);
+            return self.lock_candidate(req, &github::repository(&req.name), &c, None, prepared);
         }
-        let reg = Registry::new(self.http()?);
-        let (repo, cands) = reg.find(&m.repositories, &req.name, req.repository.as_deref())?;
+        let (repo, cands) = find(&Registry::new(self.http()?), m, req, locked)?;
         let c = registry::select(&cands, &req.name, &req.constraint, m.policy.min_release_age, Timestamp::now())?;
-        self.lock_candidate(req, &repo, &c, prepared)
+        self.lock_candidate(req, &repo, &c, None, prepared)
     }
 
-    fn lock_candidate(&self, req: &SkillReq, repo: &Repository, c: &Candidate, prepared: &mut HashMap<String, Fetched>) -> Result<Package> {
-        let (sha, f) = self.fetch(&c.name, &c.dist, None, c.dist_shasum.as_deref())?;
+    /// The locked version again, with the entry's current selection and rename, when it still
+    /// satisfies the constraint and the source and GitHub mode are unchanged; else `None`.
+    fn relock(
+        &self,
+        m: &Manifest,
+        req: &SkillReq,
+        p: Option<&Package>,
+        prepared: &mut HashMap<String, Fetched>,
+    ) -> Result<Option<Package>> {
+        let Some(p) = p.filter(|p| !source_changed(m, req, p)) else { return Ok(None) };
+        let fits = || {
+            let c = Constraint::parse(&req.constraint).ok();
+            c.zip(version::Version::parse(&p.version)).is_some_and(|(c, v)| c.allows(&v))
+        };
+        let c = match req.github {
+            Some(g) => {
+                let same_ref = g == GitHub::Ref && p.constraint == req.constraint;
+                if p.git_ref != Some(g == GitHub::Ref) || !(same_ref || g == GitHub::Tags && fits()) {
+                    return Ok(None);
+                }
+                Candidate {
+                    name: p.name.clone(),
+                    version: p.version.clone(),
+                    parsed: version::Version::parse(&p.version).or_else(|| version::Version::parse("0.0.0")).expect("valid"),
+                    time: p.released,
+                    dist: p.dist.clone(),
+                    dist_shasum: None,
+                    skill_paths: Vec::new(),
+                }
+            }
+            None => {
+                let Some(repo) = locked_repository(m, req, Some(p)).filter(|_| fits()) else { return Ok(None) };
+                let found =
+                    Registry::new(self.http()?).versions(repo, &req.name)?.and_then(|cs| cs.into_iter().find(|c| c.version == p.version));
+                let Some(c) = found else { return Ok(None) };
+                Candidate { dist: p.dist.clone(), time: p.released, dist_shasum: None, ..c }
+            }
+        };
+        let repo = Repository { name: String::new(), url: p.repository.clone() };
+        self.lock_candidate(req, &repo, &c, Some(&p.dist_sha256), prepared).map(Some)
+    }
+
+    fn lock_candidate(
+        &self,
+        req: &SkillReq,
+        repo: &Repository,
+        c: &Candidate,
+        expected: Option<&str>,
+        prepared: &mut HashMap<String, Fetched>,
+    ) -> Result<Package> {
+        let (sha, f) = self.fetch(&c.name, &c.dist, expected, c.dist_shasum.as_deref())?;
         // GitHub repositories declare no skill paths; any SKILL.md counts.
         let discovered = c.skill_paths.is_empty();
         let paths = if discovered { github::discover(&f.entries) } else { c.skill_paths.clone() };
@@ -738,6 +787,45 @@ fn drift(m: &Manifest, req: &SkillReq, p: Option<&Package>) -> Option<String> {
     None
 }
 
+/// The repository a locked entry must be resolved in, unless its source changed. Searching the
+/// others would let a public package with the same name replace a private one.
+fn locked_repository<'a>(m: &'a Manifest, req: &SkillReq, locked: Option<&Package>) -> Option<&'a Repository> {
+    let p = locked.filter(|p| req.github.is_none() && !source_changed(m, req, p))?;
+    m.repositories.iter().find(|r| r.url == p.repository)
+}
+
+fn find(reg: &Registry, m: &Manifest, req: &SkillReq, locked: Option<&Package>) -> Result<(Repository, Vec<Candidate>)> {
+    let Some(repo) = locked_repository(m, req, locked) else {
+        return reg.find(&m.repositories, &req.name, req.repository.as_deref());
+    };
+    match reg.versions(repo, &req.name)? {
+        Some(c) if !c.is_empty() => Ok((repo.clone(), c)),
+        Some(_) => bail!(MANIFEST, "{} in repository {} has no installable ai-agent-skill versions", req.name, repo.name),
+        None => {
+            let url = url::Url::parse(&repo.url).map_or_else(|_| repo.name.clone(), |u| crate::http::redact(&u));
+            bail!(
+                MANIFEST,
+                "{}: not found in its locked repository {url}; if it moved on purpose, set repository = \"…\" in {}",
+                req.name,
+                manifest::FILE
+            )
+        }
+    }
+}
+
+/// The constraint `add` writes when none is given.
+fn default_constraint(c: &Candidate, allow_ranges: bool) -> String {
+    let v = c.version.trim_start_matches(['v', 'V']);
+    if allow_ranges {
+        c.parsed.major_minor()
+    } else if version::is_exact(v) {
+        v.to_string()
+    } else {
+        let [a, b, p, _] = c.parsed.parts;
+        format!("{a}.{b}.{p}")
+    }
+}
+
 fn source_changed(m: &Manifest, req: &SkillReq, p: &Package) -> bool {
     match (req.github, &req.repository) {
         // Only the path: the API base may differ between machines (GitHub Enterprise, a proxy).
@@ -780,27 +868,28 @@ pub fn add(ctx: &Ctx, spec: &str, repository: Option<String>) -> Result<()> {
     {
         bail!(MANIFEST, "unknown repository {r:?}; declare it under [repositories] in {}", manifest::FILE);
     }
+    let existing = m.skill(&name).cloned();
+    // Before the constraint check: `@main` is a valid ref for a GitHub entry.
+    if existing.as_ref().is_some_and(|e| e.github.is_some()) && repository.is_none() {
+        return add_github(ctx, spec);
+    }
     if let Some(c) = &constraint {
         Constraint::parse(c).map_err(|e| Error::new(MANIFEST, e))?;
         if !m.policy.allow_ranges && !version::is_exact(c) {
             bail!(MANIFEST, "policy.allow-ranges = false requires an exact version, got {c:?}");
         }
     }
-    let existing = m.skill(&name).cloned();
-    if existing.as_ref().is_some_and(|e| e.github.is_some()) && repository.is_none() {
-        return add_github(ctx, spec);
-    }
     let repository = repository.or_else(|| existing.as_ref().and_then(|e| e.repository.clone()));
+    let constraint = constraint.or_else(|| existing.as_ref().map(|e| e.constraint.clone()));
 
-    let reg = Registry::new(ctx.http()?);
-    let (repo, cands) = reg.find(&m.repositories, &name, repository.as_deref())?;
+    let lock = Lock::load(&ctx.s.config)?;
+    let probe = SkillReq { name: name.clone(), repository: repository.clone(), ..Default::default() };
+    let (repo, cands) = find(&Registry::new(ctx.http()?), &m, &probe, lock.get(&name))?;
     let c = registry::select(&cands, &name, constraint.as_deref().unwrap_or("*"), m.policy.min_release_age, Timestamp::now())?;
-    let constraint = constraint.unwrap_or_else(|| {
-        if m.policy.allow_ranges { c.parsed.major_minor() } else { c.version.trim_start_matches(['v', 'V']).to_string() }
-    });
+    let constraint = constraint.unwrap_or_else(|| default_constraint(&c, m.policy.allow_ranges));
     let (skills, rename) = existing.map(|e| (e.skills, e.rename)).unwrap_or_default();
     let req = SkillReq { name, constraint, repository, skills, rename, ..Default::default() };
-    finish_add(ctx, existed, &m, &req, &repo, &c)
+    finish_add(ctx, existed, &m, &req, &repo, &c, None)
 }
 
 /// `owner/repo[/skill][@constraint-or-ref]`, the form skills.sh shows as `owner/repo/skill`.
@@ -815,6 +904,7 @@ fn add_github(ctx: &Ctx, spec: &str) -> Result<()> {
         bail!(MANIFEST, "{spec:?}: expected github:owner/repo[/skill][@version-or-ref]");
     }
     let skill = parts.next().map(String::from);
+    let must_have = skill.clone();
     if let Some(s) = &skill
         && !skill::valid_name(s)
     {
@@ -860,18 +950,32 @@ fn add_github(ctx: &Ctx, spec: &str) -> Result<()> {
     let c = github::resolve(ctx.http()?, &req, m.policy.min_release_age, Timestamp::now())?;
     if given.is_none() {
         req.constraint = match (mode, m.policy.allow_ranges) {
-            (GitHub::Tags, true) => c.parsed.major_minor(),
-            (GitHub::Tags, false) => c.version.trim_start_matches(['v', 'V']).to_string(),
+            (GitHub::Tags, allow_ranges) => default_constraint(&c, allow_ranges),
             (GitHub::Ref, true) => manifest::DEFAULT_REF.into(),
             (GitHub::Ref, false) => c.dist.reference.clone().expect("GitHub candidates carry their sha"),
         };
     }
-    finish_add(ctx, existed, &m, &req, &github::repository(&req.name), &c)
+    finish_add(ctx, existed, &m, &req, &github::repository(&req.name), &c, must_have.as_deref())
 }
 
-fn finish_add(ctx: &Ctx, existed: bool, m: &Manifest, req: &SkillReq, repo: &Repository, c: &Candidate) -> Result<()> {
+/// `must_have`: a skill named on the command line, checked also when the entry selects all.
+fn finish_add(
+    ctx: &Ctx,
+    existed: bool,
+    m: &Manifest,
+    req: &SkillReq,
+    repo: &Repository,
+    c: &Candidate,
+    must_have: Option<&str>,
+) -> Result<()> {
     let mut prepared = HashMap::new();
-    let pkg = ctx.lock_candidate(req, repo, c, &mut prepared)?;
+    let pkg = ctx.lock_candidate(req, repo, c, None, &mut prepared)?;
+    if let Some(s) = must_have {
+        let have: Vec<&str> = pkg.skills.iter().map(|k| k.from.as_deref().unwrap_or(&k.name)).collect();
+        if !have.contains(&s) {
+            bail!(MANIFEST, "{}: no skill {s:?} in {} (it has: {})", req.name, c.version, have.join(", "));
+        }
+    }
     let mut lock = Lock::load(&ctx.s.config)?;
     let old = lock.clone();
     lock.upsert(pkg);
@@ -924,7 +1028,11 @@ pub fn install(ctx: &Ctx, frozen: bool) -> Result<()> {
             );
         }
         for req in &needs {
-            lock.upsert(ctx.resolve(&m, req, &mut prepared)?);
+            let p = match ctx.relock(&m, req, old.get(&req.name), &mut prepared)? {
+                Some(p) => p,
+                None => ctx.resolve(&m, req, old.get(&req.name), &mut prepared)?,
+            };
+            lock.upsert(p);
         }
         lock.packages.retain(|p| !stale.contains(&p.name));
         let newcomers = needs.iter().map(|r| r.name.clone()).collect();
@@ -971,19 +1079,29 @@ pub fn update(ctx: &Ctx, names: &[String]) -> Result<()> {
     }
     let mut prepared = HashMap::new();
     let mut newcomers = BTreeSet::new();
-    for req in m.skills.iter().filter(|r| names.is_empty() || names.contains(&r.name)) {
+    let mut report = Vec::new();
+    // Entries not locked yet are resolved too, so the lock is complete afterwards.
+    for req in m.skills.iter().filter(|r| names.is_empty() || names.contains(&r.name) || old.get(&r.name).is_none()) {
         newcomers.insert(req.name.clone());
-        let new = ctx.resolve(&m, req, &mut prepared)?;
-        match lock.get(&req.name) {
-            Some(old) if old.version == new.version && old.dist_sha256 == new.dist_sha256 => {}
-            Some(old) => println!("updated {} {} -> {}", new.name, old.version, new.version),
-            None => println!("locked {} {}", new.name, new.version),
+        let new = ctx.resolve(&m, req, old.get(&req.name), &mut prepared)?;
+        match old.get(&req.name) {
+            Some(o) if o.version == new.version && o.dist_sha256 == new.dist_sha256 => {}
+            Some(o) => report.push(format!("updated {} {} -> {}", new.name, o.version, new.version)),
+            None => report.push(format!("locked {} {}", new.name, new.version)),
         }
         lock.upsert(new);
+    }
+    for req in m.skills.iter().filter(|r| !newcomers.contains(&r.name)) {
+        if let Some(why) = drift(&m, req, old.get(&req.name)) {
+            eprintln!("warning: {}: {why}; `skillcask install` updates its lock entry", req.name);
+        }
     }
     let (_, stale, _) = reconcile(&m, &lock);
     lock.packages.retain(|p| !stale.contains(&p.name));
     let m = settle_and_save(ctx, m, &mut lock, &old, &prepared, &newcomers)?;
+    for r in report {
+        println!("{r}");
+    }
     ctx.materialize(&m, &lock, &old, prepared)
 }
 
@@ -1023,8 +1141,9 @@ pub fn outdated(ctx: &Ctx) -> Result<()> {
         let c = Constraint::parse(&req.constraint).map_err(|e| Error::new(MANIFEST, e))?;
         let within = registry::newest(&cands, Some(&c));
         let note = match within.and_then(|w| w.time.map(|t| (w, t))) {
-            Some((w, t)) if t > now - m.policy.min_release_age => {
-                format!("{} eligible {}", w.version, (t + m.policy.min_release_age).round(jiff::Unit::Second).unwrap_or(t))
+            Some((w, t)) if now.checked_sub(m.policy.min_release_age).ok().is_none_or(|c| t > c) => {
+                let eligible = t.checked_add(m.policy.min_release_age).unwrap_or(Timestamp::MAX);
+                format!("{} eligible {}", w.version, eligible.round(jiff::Unit::Second).unwrap_or(eligible))
             }
             _ => String::new(),
         };
