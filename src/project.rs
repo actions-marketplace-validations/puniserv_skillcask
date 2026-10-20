@@ -93,7 +93,8 @@ pub fn write_atomic(path: &Path, text: &str) -> Result<()> {
     let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
     std::fs::create_dir_all(dir)?;
-    let mut tmp = tempfile::Builder::new().prefix(TMP).tempfile_in(dir)?;
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let mut tmp = tempfile::Builder::new().prefix(&format!(".{name}{TMP}")).tempfile_in(dir)?;
     tmp.write_all(text.as_bytes())?;
     match std::fs::metadata(&path) {
         Ok(m) => tmp.as_file().set_permissions(m.permissions())?,
@@ -367,9 +368,10 @@ pub fn block_lines(managed: &BTreeSet<String>, targets: &[String], copies: &BTre
         }
     }
     lines.extend(copies.iter().cloned());
-    // The modes file and temp dirs a crashed run left behind.
+    // The modes file, the record, temp dirs and temp files (`write_atomic`) a crashed run left behind.
     if !lines.is_empty() {
         lines.insert(format!("/{STORE}/.skillcask-*"));
+        lines.insert(format!("/.*{TMP}*"));
     }
     lines.into_iter().collect()
 }
@@ -618,7 +620,7 @@ mod tests {
         assert_eq!(
             text,
             format!(
-                "/target\n\n{BEGIN}\n/.agents/skills/.skillcask-*\n/.agents/skills/a/\n/.agents/skills/b/\n/.claude/skills/a\n/.claude/skills/b\n{END}\n"
+                "/target\n\n{BEGIN}\n/.*.skillcask-tmp-*\n/.agents/skills/.skillcask-*\n/.agents/skills/a/\n/.agents/skills/b/\n/.claude/skills/a\n/.claude/skills/b\n{END}\n"
             )
         );
         assert!(!write_block(&s, &lines).unwrap());
@@ -628,7 +630,7 @@ mod tests {
         std::fs::write(root.join(".gitignore"), &text).unwrap();
 
         std::fs::write(root.join(".gitignore"), format!("{text}/after\n")).unwrap();
-        write_block(&s, &lines[1..2]).unwrap();
+        write_block(&s, &lines[2..3]).unwrap();
         let text = std::fs::read_to_string(root.join(".gitignore")).unwrap();
         assert_eq!(text, format!("/target\n\n{BEGIN}\n/.agents/skills/a/\n{END}\n/after\n"));
         write_block(&s, &[]).unwrap();

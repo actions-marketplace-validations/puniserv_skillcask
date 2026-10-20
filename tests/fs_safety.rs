@@ -187,6 +187,11 @@ fn leftover_temp_dirs_are_cleaned_and_ignored() {
     assert!(!p.exists(".agents/skills/.skillcask-tmp-abc") && !p.exists(".agents/skills/.skillcask-old-one-1"));
     assert!(p.exists(".agents/skills/.skillcask-tmp-fresh/x"), "a concurrent run's fresh temp dir was deleted");
     assert!(p.read(".gitignore").contains("/.agents/skills/.skillcask-*\n"), "{}", p.read(".gitignore"));
+    // What an interrupted write of skills.toml or skills.lock leaves behind.
+    for f in [".skills.lock.skillcask-tmp-Ab12cd", ".skills.toml.skillcask-tmp-Ab12cd"] {
+        p.write(f, "x");
+        git(p.path(), &["check-ignore", "-q", f]);
+    }
 }
 
 #[test]
