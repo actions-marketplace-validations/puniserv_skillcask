@@ -215,7 +215,7 @@ mismatch (exit 4) rather than installing unverified content.
 | `outdated` | Per package: locked, newest within constraint, newest overall, eligible date under cooldown. |
 | `status` | Manifest vs lock (every reason `install --frozen` checks, and a skill name provided by two packages) vs installed (hash) per skill. Exit 1 on any mismatch. |
 | `doctor [--fix]` | Broken or committed managed links, stale gitignore block, modified installed skills (tree hash). `--fix` repairs without downloading. |
-| `search <query>` | Packagist search API filtered by `type=ai-agent-skill`; for other repositories, a substring match over `available-packages` when the repository lists them. |
+| `search <query>` | Packagist search API filtered by `type=ai-agent-skill`; for other repositories, a substring match over the names in `available-packages`, inline `packages` or `provider-includes` (GitLab), then the metadata of up to 30 matches to keep skill packages and show their description. A failing repository is a warning unless all fail. |
 | `<other>` | Runs `skillcask-<other>` from `PATH` with the remaining arguments and exits with its code (git/cargo-style plugins). Only executables the user installed; packages never provide them. Migrations from other manifest formats live in plugins, not in the core. |
 | `publish` | See Publishing. |
 
@@ -350,4 +350,5 @@ artefact attestations. The crate name `skillcask` was free on crates.io on 2026-
    per project), GitLab Pages (cookie auth, a CLI cannot authenticate), `p2/` in the Generic
    Package Registry (no `/` in file names), an object store behind a token proxy (new
    infrastructure).
-2. Whether `search` should query several Composer repositories at once or only Packagist.
+2. ~~Whether `search` should query several Composer repositories at once or only Packagist.~~ It
+   queries all of them; see `search` above.

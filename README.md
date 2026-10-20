@@ -165,7 +165,7 @@ Every command except `publish` takes `-g, --global`.
 | `outdated` | Newer versions, and when cooled-down ones become eligible. |
 | `status` | Exit 1 when manifest, lock or installed files disagree. |
 | `doctor [--fix]` | Broken or committed links, stale gitignore block, modified skills. |
-| `search <query>` | Packagist (`type=ai-agent-skill`) and listed private packages. |
+| `search <query>` | Packagist (`type=ai-agent-skill`) and skill packages of the other repositories, GitLab included. |
 | `publish --vendor v --base-url URL --out DIR [--inline] [--dist-url TPL] [paths…]` | Build a static Composer repository from a monorepo. |
 | `<other>` | Runs `skillcask-<other>` from `PATH`, like git and cargo plugins. |
 

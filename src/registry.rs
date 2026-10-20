@@ -27,6 +27,10 @@ pub struct Candidate {
     pub skill_paths: Vec<String>,
 }
 
+const SEARCH_LIMIT: usize = 30;
+
+type Versions = Vec<Map<String, Value>>;
+
 pub struct Registry<'a> {
     http: &'a Http,
     roots: RefCell<HashMap<String, Rc<(Url, Value)>>>,
@@ -198,15 +202,20 @@ impl<'a> Registry<'a> {
     }
 
     pub fn versions(&self, repo: &Repository, package: &str) -> Result<Option<Vec<Candidate>>> {
+        Ok(self.metadata(repo, package)?.map(|(list, base)| candidates(package, list, &base)))
+    }
+
+    /// Every version's metadata, expanded, and the URL relative dist URLs resolve against.
+    fn metadata(&self, repo: &Repository, package: &str) -> Result<Option<(Versions, Url)>> {
         let root = self.root(repo)?;
         if let Some(list) = inline(&root.1, package) {
-            return Ok(Some(candidates(package, expand(&list, false), &root.0)));
+            return Ok(Some((expand(&list, false), root.0.clone())));
         }
         let Some(meta) = metadata_url(&root.1, &root.0, package)? else { return Ok(None) };
         let Some(p2) = self.http.get_json(meta.as_str())? else { return Ok(None) };
         let Some(list) = p2.get("packages").and_then(|p| p.get(package)).and_then(Value::as_array) else { return Ok(None) };
         let minified = p2.get("minified").and_then(Value::as_str) == Some("composer/2.0");
-        Ok(Some(candidates(package, expand(list, minified), &meta)))
+        Ok(Some((expand(list, minified), meta)))
     }
 
     pub fn find(&self, repos: &[Repository], package: &str, only: Option<&str>) -> Result<(Repository, Vec<Candidate>)> {
@@ -226,39 +235,92 @@ impl<'a> Registry<'a> {
         bail!(MANIFEST, "package {package} not found in repositories {}", names.join(", "))
     }
 
+    /// (name, description) of skill packages whose name contains `query`, or that Packagist's
+    /// search finds. A repository that fails is skipped with a warning; all failing is an error.
     pub fn search(&self, repos: &[Repository], query: &str) -> Result<Vec<(String, String)>> {
         let mut out: Vec<(String, String)> = Vec::new();
-        let q = query.to_lowercase();
+        let (mut failed, mut errors) = (None, 0);
         for repo in repos {
-            if is_packagist(repo) {
-                let mut url = Url::parse_with_params("https://packagist.org/search.json", [("q", query), ("type", "ai-agent-skill")])
-                    .map_err(|e| Error::new(NETWORK, e.to_string()))?
-                    .to_string();
-                for _ in 0..3 {
-                    let Some(page) = self.http.get_json(&url)? else { break };
-                    for r in page.get("results").and_then(Value::as_array).into_iter().flatten() {
-                        if let Some(n) = r.get("name").and_then(Value::as_str) {
-                            out.push((n.to_string(), r.get("description").and_then(Value::as_str).unwrap_or("").to_string()));
-                        }
-                    }
-                    match page.get("next").and_then(Value::as_str) {
-                        Some(n) => url = n.to_string(),
-                        None => break,
-                    }
-                }
-            } else {
-                let root = self.root(repo)?;
-                let listed = root.1.get("available-packages").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str);
-                let inline = root.1.get("packages").and_then(Value::as_object).into_iter().flat_map(|m| m.keys().map(String::as_str));
-                for n in listed.chain(inline) {
-                    if n.contains(&q) {
-                        out.push((n.to_string(), String::new()));
-                    }
+            let found = if is_packagist(repo) { self.search_packagist(query) } else { self.search_names(repo, query) };
+            match found {
+                Ok(f) => out.extend(f),
+                Err(e) => {
+                    eprintln!("warning: repository {}: {}", repo.name, e.msg);
+                    (failed, errors) = (Some(e), errors + 1);
                 }
             }
         }
+        if let Some(e) = failed.filter(|_| errors == repos.len()) {
+            return Err(e);
+        }
         let mut seen = std::collections::HashSet::new();
         out.retain(|(n, _)| seen.insert(n.clone()));
+        Ok(out)
+    }
+
+    fn search_packagist(&self, query: &str) -> Result<Vec<(String, String)>> {
+        let mut out = Vec::new();
+        let mut url = Url::parse_with_params("https://packagist.org/search.json", [("q", query), ("type", "ai-agent-skill")])
+            .map_err(|e| Error::new(NETWORK, e.to_string()))?
+            .to_string();
+        for _ in 0..3 {
+            let Some(page) = self.http.get_json(&url)? else { break };
+            for r in page.get("results").and_then(Value::as_array).into_iter().flatten() {
+                if let Some(n) = r.get("name").and_then(Value::as_str) {
+                    out.push((n.to_string(), r.get("description").and_then(Value::as_str).unwrap_or("").to_string()));
+                }
+            }
+            match page.get("next").and_then(Value::as_str) {
+                Some(n) => url = n.to_string(),
+                None => break,
+            }
+        }
+        Ok(out)
+    }
+
+    /// Names come from `available-packages`, inline `packages` or, on GitLab, `provider-includes`;
+    /// each match's metadata is read to keep skill packages only.
+    fn search_names(&self, repo: &Repository, query: &str) -> Result<Vec<(String, String)>> {
+        let root = self.root(repo)?;
+        let q = query.to_lowercase();
+        let mut names: Vec<String> = root
+            .1
+            .get("available-packages")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(String::from)
+            .collect();
+        names.extend(root.1.get("packages").and_then(Value::as_object).into_iter().flat_map(|m| m.keys().cloned()));
+        for (tpl, h) in root.1.get("provider-includes").and_then(Value::as_object).into_iter().flatten() {
+            let Some(hash) = h.get("sha256").and_then(Value::as_str) else { continue };
+            let url = root
+                .0
+                .join(&tpl.replace("%hash%", hash))
+                .map_err(|e| Error::new(NETWORK, format!("bad provider-includes {tpl:?}: {e}")))?;
+            let providers = self.http.get_json(url.as_str())?;
+            names.extend(providers.as_ref().and_then(|p| p.get("providers")?.as_object()).into_iter().flat_map(|m| m.keys().cloned()));
+        }
+        names.sort();
+        names.dedup();
+        names.retain(|n| n.contains(&q));
+        // ponytail: one metadata request per match, capped; a server-side search would lift the cap.
+        if names.len() > SEARCH_LIMIT {
+            eprintln!("warning: repository {}: {} packages match; only the first {SEARCH_LIMIT} are checked", repo.name, names.len());
+            names.truncate(SEARCH_LIMIT);
+        }
+        let mut out = Vec::new();
+        for n in names {
+            let Some((list, _)) = self.metadata(repo, &n)? else { continue };
+            let skill = list.iter().find(|m| {
+                m.get("type").and_then(Value::as_str) == Some("ai-agent-skill")
+                    || m.get("extra").and_then(|e| e.get("ai-agent-skill")).is_some()
+            });
+            if let Some(m) = skill {
+                out.push((n, m.get("description").and_then(Value::as_str).unwrap_or("").to_string()));
+            }
+        }
         Ok(out)
     }
 }
