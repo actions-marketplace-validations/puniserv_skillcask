@@ -173,6 +173,17 @@ fn dangling_project_link_in_the_store_does_not_break_add() {
 }
 
 #[test]
+fn leftover_temp_dirs_are_cleaned_and_ignored() {
+    let s = Server::start();
+    let p = one(&s);
+    p.write(".agents/skills/.skillcask-tmp-abc/x", "x");
+    p.write(".agents/skills/.skillcask-old-one-1/SKILL.md", "x");
+    p.ok(&["install"]);
+    assert!(!p.exists(".agents/skills/.skillcask-tmp-abc") && !p.exists(".agents/skills/.skillcask-old-one-1"));
+    assert!(p.read(".gitignore").contains("/.agents/skills/.skillcask-*\n"), "{}", p.read(".gitignore"));
+}
+
+#[test]
 fn deleted_hand_written_skill_loses_its_links() {
     let s = Server::start();
     let p = Project::new(&s);

@@ -16,6 +16,8 @@ const END: &str = "# <<< skillcask managed block";
 pub const COPY_MARKER: &str = ".skillcask-copy";
 /// Exec bits of installed files as `<skill>/<path>` lines, for filesystems without them (Windows).
 const MODES: &str = ".skillcask-modes";
+const TMP: &str = ".skillcask-tmp-";
+const OLD: &str = ".skillcask-old-";
 
 /// Nearest ancestor holding `skills.toml`, else the current directory.
 pub fn find_root() -> Result<PathBuf> {
@@ -78,7 +80,7 @@ pub fn temp_dir(s: &Scope) -> Result<tempfile::TempDir> {
     no_symlink(s, STORE)?;
     let store = s.root.join(STORE);
     std::fs::create_dir_all(&store)?;
-    Ok(tempfile::Builder::new().prefix(".skillcask-tmp-").tempdir_in(store)?)
+    Ok(tempfile::Builder::new().prefix(TMP).tempdir_in(store)?)
 }
 
 /// Copies `src` into a fresh temp dir, then swaps it into the store by rename.
@@ -86,7 +88,10 @@ pub fn place(s: &Scope, name: &str, src: &Path) -> Result<()> {
     let staged = temp_dir(s)?;
     copy_dir(src, staged.path())?;
     let dest = store_dir(s, name);
-    let old = s.root.join(STORE).join(format!(".skillcask-old-{name}-{}", std::process::id()));
+    let old = s.root.join(STORE).join(format!("{OLD}{name}-{}", std::process::id()));
+    if old.symlink_metadata().is_ok() {
+        std::fs::remove_dir_all(&old)?;
+    }
     // symlink_metadata: a dangling link must be moved away too, and exists() follows links.
     if dest.symlink_metadata().is_ok() {
         std::fs::rename(&dest, &old)?;
@@ -101,6 +106,19 @@ pub fn place(s: &Scope, name: &str, src: &Path) -> Result<()> {
     }
     if old.symlink_metadata().is_ok() {
         std::fs::remove_dir_all(&old)?;
+    }
+    Ok(())
+}
+
+/// Removes temp dirs that a crashed or interrupted run left in the store, except `keep`.
+pub fn clean_leftovers(s: &Scope, keep: &[&Path]) -> Result<()> {
+    let Ok(rd) = std::fs::read_dir(s.root.join(STORE)) else { return Ok(()) };
+    for e in rd.flatten() {
+        let n = e.file_name().to_string_lossy().into_owned();
+        let p = e.path();
+        if (n.starts_with(TMP) || n.starts_with(OLD)) && !keep.contains(&p.as_path()) {
+            if e.file_type()?.is_dir() { std::fs::remove_dir_all(p)? } else { std::fs::remove_file(p)? }
+        }
     }
     Ok(())
 }
@@ -306,9 +324,6 @@ pub fn rel(root: &Path, p: &Path) -> String {
 /// Lines of the managed block: store dirs and links of locked skills, plus copies of hand-written ones.
 pub fn block_lines(managed: &BTreeSet<String>, targets: &[String], copies: &BTreeSet<String>) -> Vec<String> {
     let mut lines = BTreeSet::new();
-    if !managed.is_empty() {
-        lines.insert(format!("/{STORE}/{MODES}"));
-    }
     for n in managed {
         lines.insert(format!("/{STORE}/{n}/"));
         for t in targets {
@@ -316,6 +331,10 @@ pub fn block_lines(managed: &BTreeSet<String>, targets: &[String], copies: &BTre
         }
     }
     lines.extend(copies.iter().cloned());
+    // The modes file and temp dirs a crashed run left behind.
+    if !lines.is_empty() {
+        lines.insert(format!("/{STORE}/.skillcask-*"));
+    }
     lines.into_iter().collect()
 }
 
@@ -497,7 +516,7 @@ mod tests {
         assert_eq!(
             text,
             format!(
-                "/target\n\n{BEGIN}\n/.agents/skills/.skillcask-modes\n/.agents/skills/a/\n/.agents/skills/b/\n/.claude/skills/a\n/.claude/skills/b\n{END}\n"
+                "/target\n\n{BEGIN}\n/.agents/skills/.skillcask-*\n/.agents/skills/a/\n/.agents/skills/b/\n/.claude/skills/a\n/.claude/skills/b\n{END}\n"
             )
         );
         assert!(!write_block(&s, &lines).unwrap());
@@ -512,6 +531,22 @@ mod tests {
         assert_eq!(text, format!("/target\n\n{BEGIN}\n/.agents/skills/a/\n{END}\n/after\n"));
         write_block(&s, &[]).unwrap();
         assert_eq!(std::fs::read_to_string(root.join(".gitignore")).unwrap(), "/target\n\n/after\n");
+    }
+
+    #[test]
+    fn place_survives_a_stale_old_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = Scope::project(dir.path().to_path_buf());
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join(SKILL_MD), "new").unwrap();
+        std::fs::create_dir_all(store_dir(&s, "x")).unwrap();
+        let stale = s.root.join(STORE).join(format!("{OLD}x-{}", std::process::id()));
+        std::fs::create_dir_all(&stale).unwrap();
+        std::fs::write(stale.join("f"), "").unwrap();
+        place(&s, "x", &src).unwrap();
+        assert_eq!(std::fs::read_to_string(store_dir(&s, "x").join(SKILL_MD)).unwrap(), "new");
+        assert!(!stale.exists());
     }
 
     #[cfg(unix)]

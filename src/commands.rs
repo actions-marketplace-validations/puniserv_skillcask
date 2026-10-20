@@ -373,6 +373,7 @@ impl Ctx {
     fn materialize(&self, m: &Manifest, lock: &Lock, old: &Lock, mut prepared: HashMap<String, Fetched>) -> Result<()> {
         self.preflight(m, lock, old)?;
         let s = &self.s;
+        project::clean_leftovers(s, &prepared.values().map(|f| f.dir.path()).collect::<Vec<_>>())?;
         let old_managed = project::block_managed(s)?;
         let old_block = project::read_block(s)?;
         let locked = locked_names(lock)?;
