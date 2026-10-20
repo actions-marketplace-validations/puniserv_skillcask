@@ -866,7 +866,7 @@ fn global_targets_may_be_named_like_the_project_local_dir() {
 fn global_init_names_the_config_path() {
     let s = Server::start();
     let p = Project::new(&s);
-    let path = p.home().join(".config/skillcask/skills.toml");
+    let path = p.home().join(".config").join("skillcask").join("skills.toml");
     assert!(p.global(&["init"], 0).contains(&format!("created {}", path.display())));
     assert!(p.global(&["init"], 1).contains(&format!("{} already exists", path.display())));
     assert!(p.ok(&["init"]).contains("created skills.toml\n"));
