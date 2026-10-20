@@ -861,7 +861,6 @@ pub fn add(ctx: &Ctx, spec: &str, repository: Option<String>) -> Result<()> {
     if !manifest::valid_package_name(&name) {
         bail!(MANIFEST, "{name:?} is not a valid package name (vendor/name, lowercase)");
     }
-    let existed = ctx.s.config.join(manifest::FILE).exists();
     let m = ctx.manifest_or_default()?;
     if let Some(r) = &repository
         && m.repository(r).is_none()
@@ -889,7 +888,7 @@ pub fn add(ctx: &Ctx, spec: &str, repository: Option<String>) -> Result<()> {
     let constraint = constraint.unwrap_or_else(|| default_constraint(&c, m.policy.allow_ranges));
     let (skills, rename) = existing.map(|e| (e.skills, e.rename)).unwrap_or_default();
     let req = SkillReq { name, constraint, repository, skills, rename, ..Default::default() };
-    finish_add(ctx, existed, &m, &req, &repo, &c, None)
+    finish_add(ctx, &m, &req, &repo, &c, None)
 }
 
 /// `owner/repo[/skill][@constraint-or-ref]`, the form skills.sh shows as `owner/repo/skill`.
@@ -910,7 +909,6 @@ fn add_github(ctx: &Ctx, spec: &str) -> Result<()> {
     {
         bail!(MANIFEST, "{s:?} is not a valid skill name ([a-z0-9][a-z0-9-]*)");
     }
-    let existed = ctx.s.config.join(manifest::FILE).exists();
     let m = ctx.manifest_or_default()?;
     let existing = m.skill(&name).filter(|e| e.github.is_some()).cloned();
     let skills = match (skill, existing.as_ref().map(|e| e.skills.clone())) {
@@ -955,19 +953,11 @@ fn add_github(ctx: &Ctx, spec: &str) -> Result<()> {
             (GitHub::Ref, false) => c.dist.reference.clone().expect("GitHub candidates carry their sha"),
         };
     }
-    finish_add(ctx, existed, &m, &req, &github::repository(&req.name), &c, must_have.as_deref())
+    finish_add(ctx, &m, &req, &github::repository(&req.name), &c, must_have.as_deref())
 }
 
 /// `must_have`: a skill named on the command line, checked also when the entry selects all.
-fn finish_add(
-    ctx: &Ctx,
-    existed: bool,
-    m: &Manifest,
-    req: &SkillReq,
-    repo: &Repository,
-    c: &Candidate,
-    must_have: Option<&str>,
-) -> Result<()> {
+fn finish_add(ctx: &Ctx, m: &Manifest, req: &SkillReq, repo: &Repository, c: &Candidate, must_have: Option<&str>) -> Result<()> {
     let mut prepared = HashMap::new();
     let pkg = ctx.lock_candidate(req, repo, c, None, &mut prepared)?;
     if let Some(s) = must_have {
@@ -987,10 +977,6 @@ fn finish_add(
     let req = &changed.into_iter().find(|r| r.name == req.name).unwrap_or_else(|| req.clone());
     ctx.preflight(&view, &lock, &old)?;
 
-    if !existed {
-        std::fs::create_dir_all(&ctx.s.config)?;
-        std::fs::write(ctx.s.config.join(manifest::FILE), manifest::template(ctx.s.global))?;
-    }
     manifest::write_skill(&ctx.s.config, ctx.s.global, req)?;
     lock.save(&ctx.s.config)?;
     println!("added {} = {:?} ({})", req.name, req.constraint, c.version);
@@ -1006,8 +992,11 @@ pub fn remove(ctx: &Ctx, names: &[String]) -> Result<()> {
             bail!(MANIFEST, "{n} is not in {} or {}", manifest::FILE, crate::lock::FILE);
         }
     }
-    manifest::remove_skills(&ctx.s.config, ctx.s.global, names)?;
     lock.packages.retain(|p| !names.contains(&p.name));
+    let mut view = m.clone();
+    view.skills.retain(|r| !names.contains(&r.name));
+    ctx.preflight(&view, &lock, &old)?;
+    manifest::remove_skills(&ctx.s.config, ctx.s.global, names)?;
     lock.save(&ctx.s.config)?;
     ctx.materialize(&Manifest::load(&ctx.s.config, ctx.s.global)?, &lock, &old, HashMap::new())
 }

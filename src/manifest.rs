@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use jiff::SignedDuration;
-use toml_edit::{DocumentMut, InlineTable, Item, Value};
+use toml_edit::{DocumentMut, InlineTable, Item, TableLike, Value};
 
 use crate::bail;
 use crate::error::{Context, MANIFEST, Result};
@@ -319,48 +319,80 @@ pub fn parse_age(s: &str) -> Result<SignedDuration> {
     }
 }
 
-fn edit(root: &Path, global: bool, f: impl FnOnce(&mut DocumentMut)) -> Result<()> {
+fn edit(root: &Path, global: bool, f: impl FnOnce(&mut DocumentMut) -> Result<()>) -> Result<()> {
     let path = root.join(FILE);
-    let text = std::fs::read_to_string(&path).ctx(FILE)?;
+    // A missing manifest starts as the template and is created only if the edit succeeds.
+    let text = if path.exists() { std::fs::read_to_string(&path).ctx(FILE)? } else { template(global).to_string() };
     let mut doc: DocumentMut = text.parse().map_err(bad)?;
-    f(&mut doc);
+    f(&mut doc)?;
     parse(&doc.to_string(), global)?;
     crate::project::write_atomic(&path, &doc.to_string())
 }
 
+/// Adds or updates the entry of `req`, keeping its comments and its form (string, inline table,
+/// dotted keys or a `[skills."vendor/name"]` table).
 pub fn write_skill(root: &Path, global: bool, req: &SkillReq) -> Result<()> {
     edit(root, global, |doc| {
-        let skills = doc.entry("skills").or_insert(toml_edit::table());
-        let item = if req.repository.is_none() && req.skills.is_none() && req.github.is_none() && req.rename.is_empty() {
-            toml_edit::value(req.constraint.as_str())
-        } else {
-            let mut t = InlineTable::new();
-            match req.github {
-                None => {
-                    t.insert("version", req.constraint.as_str().into());
-                }
-                Some(g) => {
-                    t.insert("github", true.into());
-                    if g == GitHub::Tags {
-                        t.insert("version", req.constraint.as_str().into());
-                    } else if req.constraint != DEFAULT_REF {
-                        t.insert("ref", req.constraint.as_str().into());
-                    }
-                }
+        let skills = doc.entry("skills").or_insert(toml_edit::table()).as_table_like_mut().ok_or_else(|| bad("skills must be a table"))?;
+        let simple = req.repository.is_none() && req.skills.is_none() && req.github.is_none() && req.rename.is_empty();
+        let fresh = || {
+            if simple {
+                Value::from(req.constraint.as_str())
+            } else {
+                let mut t = InlineTable::new();
+                set_keys(&mut t, req);
+                Value::InlineTable(t)
             }
-            if let Some(r) = &req.repository {
-                t.insert("repository", r.as_str().into());
-            }
-            if let Some(s) = &req.skills {
-                t.insert("skills", Value::Array(s.iter().map(String::as_str).collect()));
-            }
-            if !req.rename.is_empty() {
-                t.insert("rename", Value::InlineTable(req.rename.iter().map(|(k, v)| (k.as_str(), Value::from(v.as_str()))).collect()));
-            }
-            Item::Value(Value::InlineTable(t))
         };
-        skills[req.name.as_str()] = item;
+        match skills.get_mut(&req.name) {
+            Some(item) if item.is_table_like() => {
+                set_keys(item.as_table_like_mut().expect("checked"), req);
+                // Spacing around removed and appended keys; the comment after `}` is the value's.
+                if let Some(t) = item.as_inline_table_mut() {
+                    t.fmt();
+                }
+            }
+            Some(Item::Value(old)) => {
+                let mut new = fresh();
+                *new.decor_mut() = old.decor().clone();
+                *old = new;
+            }
+            _ => {
+                skills.insert(&req.name, Item::Value(fresh()));
+            }
+        }
+        Ok(())
     })
+}
+
+fn set_keys(t: &mut dyn TableLike, req: &SkillReq) {
+    let c = req.constraint.as_str();
+    let (github, version, git_ref) = match req.github {
+        None => (None, Some(c), None),
+        Some(GitHub::Tags) => (Some(true), Some(c), None),
+        Some(GitHub::Ref) => (Some(true), None, Some(c).filter(|c| *c != DEFAULT_REF)),
+    };
+    set(t, "github", github.map(Value::from));
+    set(t, "version", version.map(Value::from));
+    set(t, "ref", git_ref.map(Value::from));
+    set(t, "repository", req.repository.as_deref().map(Value::from));
+    set(t, "skills", req.skills.as_ref().map(|s| Value::Array(s.iter().map(String::as_str).collect())));
+    let rename = (!req.rename.is_empty()).then(|| req.rename.iter().map(|(k, v)| (k.as_str(), Value::from(v.as_str()))).collect());
+    set(t, "rename", rename.map(Value::InlineTable));
+}
+
+/// Sets `k` keeping the old value's comments, or removes it for `None`.
+fn set(t: &mut dyn TableLike, k: &str, v: Option<Value>) {
+    let Some(mut v) = v else {
+        t.remove(k);
+        return;
+    };
+    if let Some(Item::Value(old)) = t.get_mut(k) {
+        *v.decor_mut() = old.decor().clone();
+        *old = v;
+        return;
+    }
+    t.insert(k, Item::Value(v));
 }
 
 pub fn remove_skills(root: &Path, global: bool, names: &[String]) -> Result<()> {
@@ -370,6 +402,7 @@ pub fn remove_skills(root: &Path, global: bool, names: &[String]) -> Result<()> 
                 t.remove(n);
             }
         }
+        Ok(())
     })
 }
 
@@ -470,5 +503,42 @@ min-release-age = "12h"
         assert_eq!(parse(&text, false).unwrap().skills, [renamed]);
         remove_skills(dir.path(), false, &["a/b".into()]).unwrap();
         assert!(parse(&std::fs::read_to_string(dir.path().join(FILE)).unwrap(), false).unwrap().skills.is_empty());
+    }
+
+    #[test]
+    fn edits_keep_the_entry_form_and_drop_keys_that_no_longer_apply() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE);
+        let gh = SkillReq { name: "a/b".into(), constraint: "main".into(), github: Some(GitHub::Ref), ..Default::default() };
+        for (before, after) in [
+            (
+                "[skills.\"a/b\"]\n# inner\ngithub = true\nversion = \"^1.0\"   # tags\nskills = [\"x\"]\n",
+                "[skills.\"a/b\"]\n# inner\ngithub = true\nref = \"main\"\n",
+            ),
+            ("[skills]\n\"a/b\".github = true\n\"a/b\".version = \"^1.0\"\n", "[skills]\n\"a/b\".github = true\n\"a/b\".ref = \"main\"\n"),
+            (
+                "[skills]\n\"a/b\" = { github = true, version = \"^1.0\" }   # why\n",
+                "[skills]\n\"a/b\" = { github = true, ref = \"main\" }   # why\n",
+            ),
+        ] {
+            std::fs::write(&path, before).unwrap();
+            write_skill(dir.path(), false, &gh).unwrap();
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), after);
+        }
+        std::fs::write(&path, "[skills]\n\"a/b\" = \"^1.0\"   # why\n").unwrap();
+        write_skill(dir.path(), false, &gh).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "[skills]\n\"a/b\" = { github = true, ref = \"main\" }   # why\n");
+    }
+
+    #[test]
+    fn a_failed_first_edit_creates_no_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let bad = SkillReq { name: "a/b".into(), constraint: "^^1".into(), ..Default::default() };
+        assert!(write_skill(dir.path(), false, &bad).is_err());
+        assert!(!dir.path().join(FILE).exists());
+        let ok = SkillReq { constraint: "^1.0".into(), ..bad };
+        write_skill(dir.path(), true, &ok).unwrap();
+        let text = std::fs::read_to_string(dir.path().join(FILE)).unwrap();
+        assert!(text.starts_with("# skillcask global manifest") && text.contains("\"a/b\" = \"^1.0\""), "{text}");
     }
 }

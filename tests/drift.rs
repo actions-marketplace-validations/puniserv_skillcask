@@ -210,6 +210,71 @@ fn install_keeps_the_locked_version_when_only_rename_or_selection_changed() {
 }
 
 #[test]
+fn add_without_constraint_keeps_the_existing_one() {
+    let s = Server::start();
+    let z = || zipball(&[("SKILL.md", &skill_md("one"))]);
+    s.package(
+        "acme/one",
+        vec![
+            Ver { version: "2.0.0", time: Some(ago(240)), zip: z(), extra: None },
+            Ver { version: "1.0.5", time: Some(ago(240)), zip: z(), extra: None },
+        ],
+    );
+    let p = Project::new(&s);
+    p.manifest(&s, "\"acme/one\" = \"~1.0\"   # pinned: 2.x drops X\n");
+    p.ok(&["add", "acme/one"]);
+    assert!(p.read("skills.toml").contains("\"acme/one\" = \"~1.0\"   # pinned: 2.x drops X\n"), "{}", p.read("skills.toml"));
+    assert!(p.read("skills.lock").contains("version = \"1.0.5\""));
+}
+
+#[test]
+fn manifest_edits_keep_comments_and_table_forms() {
+    let s = Server::start();
+    s.simple("acme/one", "1.0.0", "one");
+    s.simple("acme/two", "1.0.0", "two");
+    s.simple("acme/three", "1.0.0", "three");
+    let p = Project::new(&s);
+    p.manifest(&s, "# above one\n\"acme/one\" = \"^1.0\"   # why one\n# above two\n\"acme/two\".version = \"^1.0\"   # why two\n\n# above three\n[skills.\"acme/three\"]\n# inner\nversion = \"^1.0\"   # why three\n\n");
+    p.ok(&["install"]);
+    for n in ["one", "two", "three"] {
+        p.ok(&["add", &format!("acme/{n}@~1.0")]);
+    }
+    let t = p.read("skills.toml");
+    assert!(t.contains("# above one\n\"acme/one\" = \"~1.0\"   # why one\n"), "{t}");
+    assert!(t.contains("# above two\n\"acme/two\".version = \"~1.0\"   # why two\n"), "{t}");
+    assert!(t.contains("# above three\n[skills.\"acme/three\"]\n# inner\nversion = \"~1.0\"   # why three\n"), "{t}");
+    p.ok(&["install", "--frozen"]);
+
+    p.ok(&["remove", "acme/two"]);
+    let t = p.read("skills.toml");
+    assert!(!t.contains("acme/two") && !t.contains("why two"), "{t}");
+    assert!(t.contains("# why one") && t.contains("# above three") && t.contains("# inner"), "{t}");
+    p.ok(&["remove", "acme/three"]);
+    let t = p.read("skills.toml");
+    assert!(!t.contains("acme/three") && t.contains("# why one") && t.contains("packagist = false"), "{t}");
+    p.ok(&["remove", "acme/one"]);
+    let t = p.read("skills.toml");
+    assert!(!t.contains("acme/one") && t.contains("[policy]"), "{t}");
+}
+
+#[cfg(unix)]
+#[test]
+fn remove_writes_nothing_when_preflight_fails() {
+    let s = Server::start();
+    s.simple("acme/one", "1.0.0", "one");
+    let p = Project::new(&s);
+    p.manifest(&s, "\"acme/one\" = \"^1.0\"   # keep\n");
+    p.ok(&["install"]);
+    let (toml, lock) = (p.read("skills.toml"), p.read("skills.lock"));
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::rename(p.path().join(".junie"), outside.path().join("junie")).unwrap();
+    std::os::unix::fs::symlink(outside.path().join("junie"), p.path().join(".junie")).unwrap();
+    assert!(p.expect(&["remove", "acme/one"], 1).contains(".junie is a symlink"));
+    assert_eq!(p.read("skills.toml"), toml);
+    assert_eq!(p.read("skills.lock"), lock);
+}
+
+#[test]
 fn strict_add_writes_a_full_exact_version() {
     let s = Server::start();
     s.package("acme/two", vec![Ver { version: "1.2", time: Some(ago(240)), zip: zipball(&[("SKILL.md", &skill_md("two"))]), extra: None }]);
@@ -250,6 +315,18 @@ fn update_reports_nothing_when_it_fails() {
     let out = p.expect(&["update"], 1);
     assert!(!out.contains("updated"), "{out}");
     assert!(p.read("skills.lock").contains("version = \"1.0.0\""));
+}
+
+#[test]
+fn add_of_a_ref_for_an_existing_github_entry() {
+    let s = Server::start();
+    tagged(&s);
+    let p = with_github(Project::new(&s), &s);
+    p.manifest(&s, "\"acme/tagged\" = { github = true, version = \"^1.0\" }   # tags\n");
+    p.ok(&["add", "acme/tagged@main"]);
+    let t = p.read("skills.toml");
+    assert!(t.contains("\"acme/tagged\" = { github = true, ref = \"main\" }   # tags\n"), "{t}");
+    p.ok(&["install", "--frozen"]);
 }
 
 #[test]
