@@ -172,6 +172,15 @@ fn dangling_project_link_in_the_store_does_not_break_add() {
     p.ok(&["status"]);
 }
 
+fn backdate(dir: &std::path::Path, t: std::time::SystemTime) {
+    let mut o = std::fs::OpenOptions::new();
+    o.read(true);
+    // Windows opens a directory handle only with FILE_FLAG_BACKUP_SEMANTICS, and needs write access to set times.
+    #[cfg(windows)]
+    std::os::windows::fs::OpenOptionsExt::custom_flags(o.write(true), 0x0200_0000);
+    o.open(dir).unwrap().set_modified(t).unwrap();
+}
+
 #[test]
 fn leftover_temp_dirs_are_cleaned_and_ignored() {
     let s = Server::start();
@@ -181,16 +190,25 @@ fn leftover_temp_dirs_are_cleaned_and_ignored() {
     p.write(".agents/skills/.skillcask-tmp-fresh/x", "x");
     let two_hours_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
     for d in [".skillcask-tmp-abc", ".skillcask-old-one-1"] {
-        let mut o = std::fs::OpenOptions::new();
-        o.read(true);
-        // Windows opens a directory handle only with FILE_FLAG_BACKUP_SEMANTICS, and needs write access to set times.
-        #[cfg(windows)]
-        std::os::windows::fs::OpenOptionsExt::custom_flags(o.write(true), 0x0200_0000);
-        o.open(p.path().join(".agents/skills").join(d)).unwrap().set_modified(two_hours_ago).unwrap();
+        backdate(&p.path().join(".agents/skills").join(d), two_hours_ago);
+    }
+    // A live run (its lock held) owns its dirs however old; a dead run's go at once.
+    p.write(".agents/skills/.skillcask-tmp-4001-ab/x", "x");
+    p.write(".agents/skills/.skillcask-old-one-4001/SKILL.md", "x");
+    p.write(".agents/skills/.skillcask-run-4001", "");
+    p.write(".agents/skills/.skillcask-tmp-4002-cd/x", "x");
+    p.write(".agents/skills/.skillcask-run-4002", "");
+    let live = std::fs::File::open(p.path().join(".agents/skills/.skillcask-run-4001")).unwrap();
+    live.lock().unwrap();
+    for d in [".skillcask-tmp-4001-ab", ".skillcask-old-one-4001"] {
+        backdate(&p.path().join(".agents/skills").join(d), two_hours_ago);
     }
     p.ok(&["install"]);
     assert!(!p.exists(".agents/skills/.skillcask-tmp-abc") && !p.exists(".agents/skills/.skillcask-old-one-1"));
     assert!(p.exists(".agents/skills/.skillcask-tmp-fresh/x"), "a concurrent run's fresh temp dir was deleted");
+    assert!(p.exists(".agents/skills/.skillcask-tmp-4001-ab/x") && p.exists(".agents/skills/.skillcask-old-one-4001/SKILL.md"));
+    assert!(!p.exists(".agents/skills/.skillcask-tmp-4002-cd") && !p.exists(".agents/skills/.skillcask-run-4002"));
+    drop(live);
     assert!(p.read(".gitignore").contains("/.agents/skills/.skillcask-*\n"), "{}", p.read(".gitignore"));
     // What an interrupted write of skills.toml or skills.lock leaves behind.
     for f in [".skills.lock.skillcask-tmp-Ab12cd", ".skills.toml.skillcask-tmp-Ab12cd"] {

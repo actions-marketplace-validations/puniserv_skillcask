@@ -2,7 +2,7 @@
 name = "skillcask"
 version = "0.2.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 description = "A lockfile-first package manager for AI agent skills (SKILL.md), backed by Composer repositories"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/puniserv/skillcask"

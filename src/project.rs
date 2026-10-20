@@ -18,6 +18,10 @@ pub const COPY_MARKER: &str = ".skillcask-copy";
 const MODES: &str = ".skillcask-modes";
 const TMP: &str = ".skillcask-tmp-";
 const OLD: &str = ".skillcask-old-";
+/// `<store>/.skillcask-run-<pid>`, locked while that run lives: temp dirs named with its pid are its own.
+const RUN: &str = ".skillcask-run-";
+
+static RUNS: std::sync::Mutex<Vec<(PathBuf, std::fs::File)>> = std::sync::Mutex::new(Vec::new());
 
 /// Nearest ancestor holding `skills.toml`, else the current directory.
 pub fn find_root() -> Result<PathBuf> {
@@ -115,7 +119,13 @@ pub fn temp_dir(s: &Scope) -> Result<tempfile::TempDir> {
     no_symlink(s, STORE)?;
     let store = s.root.join(STORE);
     std::fs::create_dir_all(&store)?;
-    Ok(tempfile::Builder::new().prefix(TMP).tempdir_in(store)?)
+    let mut runs = RUNS.lock().unwrap_or_else(|e| e.into_inner());
+    if !runs.iter().any(|(p, _)| *p == store) {
+        let f = std::fs::File::create(store.join(format!("{RUN}{}", std::process::id())))?;
+        f.lock()?;
+        runs.push((store.clone(), f));
+    }
+    Ok(tempfile::Builder::new().prefix(&format!("{TMP}{}-", std::process::id())).tempdir_in(store)?)
 }
 
 /// Copies `src` into a fresh temp dir, then swaps it into the store by rename.
@@ -147,15 +157,37 @@ pub fn place(s: &Scope, name: &str, src: &Path) -> Result<()> {
 
 /// Removes temp dirs that a crashed or interrupted run left in the store, except `keep`.
 pub fn clean_leftovers(s: &Scope, keep: &[&Path]) -> Result<()> {
-    let Ok(rd) = std::fs::read_dir(s.root.join(STORE)) else { return Ok(()) };
+    let store = s.root.join(STORE);
+    let Ok(rd) = std::fs::read_dir(&store) else { return Ok(()) };
+    let me = std::process::id().to_string();
+    // The run lock of `pid` is free: no live process owns its dirs.
+    let gone = |pid: &str| std::fs::File::open(store.join(format!("{RUN}{pid}"))).ok().map(|f| f.try_lock().is_ok());
+    let mut runs = Vec::new();
     for e in rd.flatten() {
         let n = e.file_name().to_string_lossy().into_owned();
         let p = e.path();
-        // A fresh one may belong to a skillcask running at the same time.
-        let stale = e.metadata()?.modified()?.elapsed().is_ok_and(|age| age > std::time::Duration::from_secs(3600));
-        if (n.starts_with(TMP) || n.starts_with(OLD)) && stale && !keep.contains(&p.as_path()) {
+        if let Some(pid) = n.strip_prefix(RUN) {
+            if pid != me && gone(pid) == Some(true) {
+                runs.push(p);
+            }
+            continue;
+        }
+        let pid = match (n.strip_prefix(TMP), n.strip_prefix(OLD)) {
+            (Some(rest), _) => rest.split('-').next(),
+            (_, Some(rest)) => rest.rsplit('-').next(),
+            _ => continue,
+        };
+        if keep.contains(&p.as_path()) || pid == Some(me.as_str()) {
+            continue;
+        }
+        // Without a run lock (left by an older skillcask), only an old one is surely not in use.
+        let stale = || e.metadata().and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().is_ok_and(|age| age.as_secs() > 3600));
+        if pid.and_then(gone).unwrap_or_else(stale) {
             if e.file_type()?.is_dir() { std::fs::remove_dir_all(p)? } else { std::fs::remove_file(p)? }
         }
+    }
+    for p in runs {
+        std::fs::remove_file(p)?;
     }
     Ok(())
 }

@@ -225,7 +225,9 @@ Exit codes: 0 ok; 1 manifest/lock/status problems or drift under `--frozen`; 2 a
 ## Installing and linking
 
 - Store: `.agents/skills/<name>/`, replaced atomically (unpack to a sibling temp dir, verify,
-  rename).
+  rename). Temp dirs carry the pid of their run, which holds a lock on
+  `.agents/skills/.skillcask-run-<pid>` while it lives; `install` removes the ones whose run is
+  gone (without a run lock, from older versions: those older than an hour).
 - Each target in `agents.targets` gets `<target>/<name>` → relative path to the store.
 - Managed skills (present in the lock) and their links are listed in a marked `.gitignore` block,
   regenerated on every `install`, `update`, `remove`. A managed link found in the git index is
