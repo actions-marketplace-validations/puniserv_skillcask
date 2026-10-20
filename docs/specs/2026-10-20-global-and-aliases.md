@@ -141,7 +141,7 @@ Install it as mattpocock-code-review? [Y/n/<other name>]
 
   ```
   error: skill "code-review" is both a project skill in .skills and provided by mattpocock/skills
-    to install it under another name, add to its entry in skills.toml:
+    to install it under another name, set in its entry in skills.toml:
     rename = { code-review = "mattpocock-code-review" }
   ```
 
