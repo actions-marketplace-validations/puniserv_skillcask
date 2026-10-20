@@ -362,7 +362,7 @@ jobs:
           merge-multiple: true
       # No registry-url: setup-node would then export a placeholder NODE_AUTH_TOKEN that npm sends
       # instead of exchanging the OIDC token, and the publish fails with E404.
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.x'
       # An exact npm, at least 3 days old (supply chain cooldown); trusted publishing needs >= 11.5.1.
