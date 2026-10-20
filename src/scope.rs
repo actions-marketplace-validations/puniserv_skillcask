@@ -11,7 +11,6 @@ pub struct Scope {
     pub root: PathBuf,
     /// Holds skills.toml, skills.lock and auth.json: the project root, or the config dir.
     pub config: PathBuf,
-    #[allow(dead_code)] // used from Task 3/4 (--global)
     pub global: bool,
 }
 

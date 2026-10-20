@@ -49,8 +49,12 @@ pub fn store_names(s: &Scope) -> Result<Vec<String>> {
 
 /// Refuses when `sub` or any of its parents below `root` is a symlink. A repository can commit
 /// `.agents/skills -> ~/.config`, and skillcask would then write and delete outside the project.
+/// Skipped in the global scope: home belongs to the user, and dotfile managers symlink `~/.claude`.
 pub fn no_symlink(s: &Scope, sub: &str) -> Result<()> {
-    let mut p = s.root.to_path_buf();
+    if s.global {
+        return Ok(());
+    }
+    let mut p = s.root.clone();
     for c in Path::new(sub).components() {
         p.push(c);
         if p.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) {
@@ -110,8 +114,15 @@ pub fn copy_dir(src: &Path, dst: &Path) -> Result<()> {
 }
 
 /// Relative link from `<at>/<name>` to `<source>/<name>`, e.g. `../../.agents/skills/<name>` for
-/// `.claude/skills`. Built segment by segment: Windows does not resolve `/` in link targets.
-pub fn link_target(_s: &Scope, at: &str, source: &str, name: &str) -> PathBuf {
+/// `.claude/skills`; absolute in the global scope, where `~/.claude` may be a symlink into dotfiles.
+/// Built segment by segment: Windows does not resolve `/` in link targets.
+pub fn link_target(s: &Scope, at: &str, source: &str, name: &str) -> PathBuf {
+    if s.global {
+        let mut p = s.root.clone();
+        p.extend(source.split('/'));
+        p.push(name);
+        return p;
+    }
     let depth = Path::new(at).components().count();
     let mut p: PathBuf = std::iter::repeat_n("..", depth).collect();
     p.extend(source.split('/'));
@@ -133,7 +144,12 @@ pub fn link_state(s: &Scope, at: &str, source: &str, name: &str) -> LinkState {
     let path = s.root.join(at).join(name);
     let Ok(meta) = path.symlink_metadata() else { return LinkState::Missing };
     if meta.file_type().is_symlink() {
-        let ok = std::fs::read_link(&path).is_ok_and(|t| t == link_target(s, at, source, name)) && path.join(SKILL_MD).is_file();
+        let to_store = if s.global {
+            matches!((std::fs::canonicalize(&path), std::fs::canonicalize(s.root.join(source).join(name))), (Ok(a), Ok(b)) if a == b)
+        } else {
+            std::fs::read_link(&path).is_ok_and(|t| t == link_target(s, at, source, name))
+        };
+        let ok = to_store && path.join(SKILL_MD).is_file();
         return if ok { LinkState::Ok } else { LinkState::Wrong };
     }
     if meta.is_dir() && path.join(COPY_MARKER).is_file() {
@@ -179,6 +195,9 @@ pub fn link(s: &Scope, at: &str, source: &str, name: &str) -> Result<bool> {
 /// Project skills: directories with a SKILL.md under `local` (default `.skills`).
 pub fn local_names(s: &Scope, local: &str) -> Result<BTreeSet<String>> {
     let mut out = BTreeSet::new();
+    if s.global {
+        return Ok(out);
+    }
     let Ok(rd) = std::fs::read_dir(s.root.join(local)) else { return Ok(out) };
     for e in rd {
         let e = e?;
@@ -196,6 +215,9 @@ pub fn local_names(s: &Scope, local: &str) -> Result<BTreeSet<String>> {
 
 /// Store links (or copies) of project skills that are gone from `local`.
 pub fn stale_local_links(s: &Scope, local: &str, live: &BTreeSet<String>) -> Vec<String> {
+    if s.global {
+        return Vec::new();
+    }
     let Ok(rd) = std::fs::read_dir(s.root.join(STORE)) else { return Vec::new() };
     rd.flatten()
         .filter_map(|e| {
@@ -280,8 +302,12 @@ struct Gitignore {
     block: Vec<String>,
 }
 
+fn ignore_file(s: &Scope) -> PathBuf {
+    if s.global { s.config.join("installed") } else { s.root.join(".gitignore") }
+}
+
 fn read_gitignore(s: &Scope) -> Result<Gitignore> {
-    let text = std::fs::read_to_string(s.root.join(".gitignore")).unwrap_or_default();
+    let text = std::fs::read_to_string(ignore_file(s)).unwrap_or_default();
     let (mut kept, mut block) = (Vec::new(), Vec::new());
     let mut inside = false;
     let mut at = None;
@@ -326,7 +352,7 @@ pub fn block_managed(s: &Scope) -> Result<BTreeSet<String>> {
 /// Rewrites the block in place (or appends it); drops it when empty. Returns true if the file changed.
 pub fn write_block(s: &Scope, lines: &[String]) -> Result<bool> {
     no_symlink(s, ".gitignore")?;
-    let path = s.root.join(".gitignore");
+    let path = ignore_file(s);
     let Gitignore { text, mut kept, at, .. } = read_gitignore(s)?;
     let mut block = Vec::new();
     if !lines.is_empty() {
@@ -351,13 +377,16 @@ pub fn write_block(s: &Scope, lines: &[String]) -> Result<bool> {
     if new == text || (new.is_empty() && !path.exists()) {
         return Ok(false);
     }
+    if s.global {
+        std::fs::create_dir_all(&s.config)?;
+    }
     std::fs::write(&path, new)?;
     Ok(true)
 }
 
 /// Tracked paths among `paths` (relative, `/`-separated). Empty outside a git work tree.
 pub fn git_tracked(s: &Scope, paths: &[String]) -> Vec<String> {
-    if paths.is_empty() {
+    if s.global || paths.is_empty() {
         return Vec::new();
     }
     let out = Command::new("git").arg("-C").arg(&s.root).args(["ls-files", "-z", "--"]).args(paths).output();
@@ -369,7 +398,7 @@ pub fn git_tracked(s: &Scope, paths: &[String]) -> Vec<String> {
 
 /// `git rm --cached`: drops paths from the index, never from the working tree.
 pub fn git_untrack(s: &Scope, paths: &[String]) -> Result<()> {
-    if paths.is_empty() {
+    if s.global || paths.is_empty() {
         return Ok(());
     }
     let st = Command::new("git").arg("-C").arg(&s.root).args(["rm", "--cached", "-r", "-q", "--"]).args(paths).status()?;
@@ -437,5 +466,45 @@ mod tests {
         assert!(link(&s, ".junie/skills", STORE, "x").is_err());
         unlink(&s, ".claude/skills", "x").unwrap();
         assert_eq!(link_state(&s, ".claude/skills", STORE, "x"), LinkState::Missing);
+    }
+
+    fn global_scope(home: &Path) -> Scope {
+        Scope { root: home.to_path_buf(), config: home.join(".config/skillcask"), global: true }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn global_links_are_absolute_and_survive_symlinked_parents() {
+        let home = tempfile::tempdir().unwrap();
+        let s = global_scope(home.path());
+        std::fs::create_dir_all(store_dir(&s, "x")).unwrap();
+        std::fs::write(store_dir(&s, "x").join(SKILL_MD), "s").unwrap();
+        let dotfiles = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(dotfiles.path(), home.path().join(".claude")).unwrap();
+        no_symlink(&s, ".claude/skills").unwrap();
+        assert!(!link(&s, ".claude/skills", STORE, "x").unwrap());
+        assert_eq!(std::fs::read_link(home.path().join(".claude/skills/x")).unwrap(), home.path().join(".agents/skills/x"));
+        assert_eq!(link_state(&s, ".claude/skills", STORE, "x"), LinkState::Ok);
+        assert_eq!(std::fs::read_to_string(dotfiles.path().join("skills/x/SKILL.md")).unwrap(), "s");
+
+        // A relative link made by another tool that reaches the same store dir is fine too.
+        std::fs::create_dir_all(home.path().join(".junie/skills")).unwrap();
+        std::os::unix::fs::symlink("../../.agents/skills/x", home.path().join(".junie/skills/x")).unwrap();
+        assert_eq!(link_state(&s, ".junie/skills", STORE, "x"), LinkState::Ok);
+    }
+
+    #[test]
+    fn global_block_lives_in_the_config_dir() {
+        let home = tempfile::tempdir().unwrap();
+        let s = global_scope(home.path());
+        let managed: BTreeSet<String> = ["a".to_string()].into();
+        assert!(write_block(&s, &block_lines(&managed, &[".claude/skills".into()], &BTreeSet::new())).unwrap());
+        assert!(!home.path().join(".gitignore").exists());
+        assert!(std::fs::read_to_string(home.path().join(".config/skillcask/installed")).unwrap().contains("/.agents/skills/a/"));
+        assert_eq!(block_managed(&s).unwrap(), managed);
+        assert!(git_tracked(&s, &["x".into()]).is_empty());
+        std::fs::create_dir_all(home.path().join("p")).unwrap();
+        std::fs::write(home.path().join("p/SKILL.md"), "").unwrap();
+        assert!(local_names(&s, "").unwrap().is_empty(), "the global scope has no project skills");
     }
 }

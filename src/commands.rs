@@ -287,7 +287,7 @@ fn locked_names(lock: &Lock) -> Result<BTreeMap<String, (&Package, &LockedSkill)
 }
 
 fn hand_written(s: &Scope, lock: &Lock, old_managed: &BTreeSet<String>, locals: &BTreeSet<String>) -> Result<BTreeSet<String>> {
-    let locked: BTreeSet<&str> = lock.skills().map(|(_, s)| s.name.as_str()).collect();
+    let locked: BTreeSet<&str> = lock.skills().map(|(_, sk)| sk.name.as_str()).collect();
     Ok(project::store_names(s)?
         .into_iter()
         .filter(|n| !locked.contains(n.as_str()) && !old_managed.contains(n) && !locals.contains(n))
@@ -614,13 +614,13 @@ pub fn status(ctx: &Ctx) -> Result<()> {
             None => row(&mut rows, &req.name, "-", "-", "not locked"),
             Some(p) if p.constraint != req.constraint => row(&mut rows, &req.name, &p.version, "-", "constraint changed"),
             Some(p) => {
-                for s in &p.skills {
-                    let state = match tree_on_disk(&ctx.s, &s.name) {
+                for sk in &p.skills {
+                    let state = match tree_on_disk(&ctx.s, &sk.name) {
                         None => "not installed",
-                        Some(h) if h != s.tree_sha256 => "modified",
+                        Some(h) if h != sk.tree_sha256 => "modified",
                         Some(_) => "ok",
                     };
-                    row(&mut rows, &p.name, &p.version, &s.name, state);
+                    row(&mut rows, &p.name, &p.version, &sk.name, state);
                 }
             }
         }
