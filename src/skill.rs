@@ -41,27 +41,31 @@ pub fn frontmatter(text: &str) -> BTreeMap<String, String> {
 }
 
 /// Sets the frontmatter `name:` value, keeping every other byte. No frontmatter or no `name:`
-/// line: unchanged, since the directory name then names the skill.
+/// line: unchanged, since the directory name then names the skill. Picks the line `frontmatter`
+/// reads (the last top-level `name`); a block or empty value loses its indented continuation.
 pub fn rename_frontmatter(text: &str, to: &str) -> String {
     let body = text.strip_prefix('\u{feff}').unwrap_or(text);
     let bom = &text[..text.len() - body.len()];
-    let mut lines = body.split_inclusive('\n');
-    if lines.next().map(str::trim_end) != Some("---") {
+    let lines: Vec<&str> = body.split_inclusive('\n').collect();
+    if lines.first().map(|l| l.trim_end()) != Some("---") {
         return text.to_string();
     }
-    let mut at = body.find('\n').map_or(body.len(), |i| i + 1);
-    for line in lines {
-        let content = line.trim_end_matches(['\n', '\r']);
-        if content.trim_end() == "---" {
-            break;
-        }
-        if content.starts_with("name:") {
-            let eol = &line[content.len()..];
-            return format!("{bom}{}name: {to}{eol}{}", &body[..at], &body[at + line.len()..]);
-        }
-        at += line.len();
+    let end = lines.iter().skip(1).position(|l| l.trim_end() == "---").map_or(lines.len(), |i| i + 1);
+    fn value(l: &str) -> Option<&str> {
+        let (k, v) = l.split_once(':')?;
+        (!l.starts_with([' ', '\t', '#', '-']) && k.trim() == "name").then(|| v.trim())
     }
-    text.to_string()
+    let Some(i) = (1..end).rev().find(|&i| value(lines[i]).is_some()) else {
+        return text.to_string();
+    };
+    let mut next = i + 1;
+    if value(lines[i]).is_some_and(|v| v.is_empty() || v.starts_with(['>', '|'])) {
+        while next < end && lines[next].starts_with([' ', '\t']) {
+            next += 1;
+        }
+    }
+    let eol = &lines[i][lines[i].trim_end_matches(['\n', '\r']).len()..];
+    format!("{bom}{}name: {to}{eol}{}", lines[..i].concat(), lines[next..].concat())
 }
 
 /// `[a-z0-9][a-z0-9-]*`: also the directory name under `.agents/skills/`.
@@ -163,6 +167,13 @@ mod tests {
         assert_eq!(rename_frontmatter(nested, "b"), nested);
         assert_eq!(rename_frontmatter("# no frontmatter", "b"), "# no frontmatter");
         assert_eq!(frontmatter(&rename_frontmatter(t, "mp-review"))["name"], "mp-review");
+        assert_eq!(rename_frontmatter("---\nname : one\n---\n", "b"), "---\nname: b\n---\n");
+        assert_eq!(rename_frontmatter("---\nname: one\nx: y\nname: two\n---\n", "b"), "---\nname: one\nx: y\nname: b\n---\n");
+        assert_eq!(rename_frontmatter("---\nname: >\n  Multi Line\nx: y\n---\n", "b"), "---\nname: b\nx: y\n---\n");
+        assert_eq!(rename_frontmatter("---\nname:\n  one\n---\n", "b"), "---\nname: b\n---\n");
+        for t in ["---\nname : one\n---\n", "---\nname: one\nname: two\n---\n", "---\nname: |-\n  x\n---\n"] {
+            assert_eq!(frontmatter(&rename_frontmatter(t, "b"))["name"], "b", "{t:?}");
+        }
     }
 
     #[test]

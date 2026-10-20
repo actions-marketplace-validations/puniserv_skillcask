@@ -250,13 +250,16 @@ fn collisions_are_errors() {
     p.manifest(&s, "\"acme/a\" = \"^1.0\"\n\"other/b\" = \"^1.0\"\n");
     let out = p.expect(&["install"], 1);
     assert!(out.contains("acme/a") && out.contains("other/b"), "{out}");
-    assert!(out.contains("rename = { same = \"other-same\" }"), "{out}");
+    assert!(
+        out.contains("to install it under another name, set in its entry in skills.toml:\n  rename = { same = \"other-same\" }"),
+        "{out}"
+    );
 
     p.manifest(&s, "");
     p.write(".agents/skills/mine/SKILL.md", &skill_md("mine-by-hand"));
     let before = p.read("skills.toml");
     let out = p.expect(&["add", "acme/c"], 1);
-    assert!(out.contains("not managed by skillcask"), "{out}");
+    assert!(out.contains("not managed by skillcask") && out.contains("rename = { mine = \"acme-mine\" }"), "{out}");
     assert_eq!(p.read(".agents/skills/mine/SKILL.md"), skill_md("mine-by-hand"));
     // A failed add used to leave acme/c in skills.toml and skills.lock, breaking every later install.
     assert_eq!(p.read("skills.toml"), before);
@@ -993,4 +996,102 @@ fn renamed_skill_installs_under_its_new_name() {
 
     p.manifest(&s, "\"acme/one\" = { version = \"^1.0\", rename = { nope = \"x\" } }\n");
     assert!(p.expect(&["install"], 1).contains("rename: no skill \"nope\""));
+}
+
+#[test]
+fn renamed_nested_skill_leaves_the_parent_tree_alone() {
+    let s = Server::start();
+    let renamed = skill_md("sub").replacen("name: sub", "name: acme-sub", 1);
+    for (pkg, paths, files) in [
+        ("acme/nest", json!(["a", "a/sub"]), vec![("a/SKILL.md", skill_md("a")), ("a/sub/SKILL.md", skill_md("sub"))]),
+        ("acme/flat", json!(["a/SKILL.md", "a/sub.md"]), vec![("a/SKILL.md", skill_md("a")), ("a/sub.md", skill_md("sub"))]),
+    ] {
+        let files: Vec<(&str, &str)> = files.iter().map(|(p, c)| (*p, c.as_str())).collect();
+        s.package(pkg, vec![Ver { version: "1.0.0", time: Some(ago(240)), zip: zipball(&files), extra: Some(paths) }]);
+        let p = Project::new(&s);
+        p.manifest(&s, &format!("\"{pkg}\" = {{ version = \"^1.0\", rename = {{ sub = \"acme-sub\" }} }}\n"));
+        p.ok(&["install"]);
+        assert_eq!(p.read(".agents/skills/a/SKILL.md"), skill_md("a"), "{pkg}");
+        assert!(p.exists(".agents/skills/acme-sub") && !p.exists(".agents/skills/sub"), "{pkg}");
+        if pkg == "acme/nest" {
+            assert_eq!(p.read(".agents/skills/a/sub/SKILL.md"), skill_md("sub"));
+            assert_eq!(p.read(".agents/skills/acme-sub/SKILL.md"), renamed);
+        }
+        p.ok(&["status"]);
+
+        let mut ci = clone_of(&p, &s);
+        ci.env.push(("CI".into(), "true".into()));
+        ci.ok(&["install"]);
+        assert_eq!(store_hash(&ci, "a"), store_hash(&p, "a"), "{pkg}");
+        assert_eq!(store_hash(&ci, "acme-sub"), store_hash(&p, "acme-sub"), "{pkg}");
+        ci.ok(&["status"]);
+    }
+}
+
+#[test]
+fn rename_with_selection_and_a_tampered_lock() {
+    let s = Server::start();
+    let zip = zipball(&[("skills/alpha/SKILL.md", &skill_md("alpha")), ("skills/beta/SKILL.md", &skill_md("beta"))]);
+    s.package("acme/multi", vec![Ver { version: "1.0.0", time: Some(ago(240)), zip, extra: Some(json!(["skills/alpha", "skills/beta"])) }]);
+    let p = Project::new(&s);
+    p.manifest(&s, "\"acme/multi\" = { version = \"^1.0\", skills = [\"beta\"], rename = { alpha = \"x\" } }\n");
+    let out = p.expect(&["install"], 1);
+    assert!(out.contains("acme/multi: rename: skill \"alpha\" is not in skills = [...]"), "{out}");
+
+    p.manifest(&s, "\"acme/multi\" = { version = \"^1.0\", skills = [\"beta\"], rename = { beta = \"acme-beta\" } }\n");
+    p.ok(&["install"]);
+    assert!(p.exists(".agents/skills/acme-beta") && !p.exists(".agents/skills/alpha"));
+    let mut ci = clone_of(&p, &s);
+    ci.env.push(("CI".into(), "true".into()));
+    ci.ok(&["install", "--frozen"]);
+    ci.ok(&["status"]);
+
+    let mut ci = clone_of(&p, &s);
+    ci.env.push(("CI".into(), "true".into()));
+    ci.write("skills.lock", &p.read("skills.lock").replace("from = \"beta\", ", ""));
+    assert!(ci.expect(&["install", "--frozen"], 1).contains("out of date"));
+    ci.manifest(&s, "\"acme/multi\" = { version = \"^1.0\", skills = [\"beta\"] }\n");
+    let out = ci.expect(&["install", "--frozen"], 1);
+    assert!(out.contains("skill selection changed"), "{out}");
+    ci.manifest(&s, "\"acme/multi\" = { version = \"^1.0\", skills = [\"acme-beta\"] }\n");
+    let out = ci.expect(&["install", "--frozen"], 4);
+    assert!(out.contains("tree-sha256"), "{out}");
+
+    p.write(".skills/alpha/SKILL.md", &skill_md("alpha"));
+    p.manifest(&s, "\"acme/multi\" = { version = \"^1.0\", rename = { beta = \"acme-beta\" } }\n");
+    let out = p.expect(&["update"], 1);
+    assert!(out.contains("set in its entry in skills.toml:\n  rename = { alpha = \"acme-alpha\", beta = \"acme-beta\" }"), "{out}");
+}
+
+#[test]
+fn rename_in_global_scope_and_kept_by_add() {
+    let s = Server::start();
+    s.simple("acme/one", "1.0.0", "one");
+    let p = Project::new(&s);
+    p.global_manifest(&s, "\"acme/one\" = { version = \"^1.0\", rename = { one = \"acme-one\" } }\n");
+    p.global(&["install"], 0);
+    assert!(p.home().join(".agents/skills/acme-one/SKILL.md").is_file());
+    let out = p.global(&["status"], 0);
+    assert!(out.lines().any(|l| l.contains(" acme-one ") && l.trim_end().ends_with("ok")), "{out}");
+
+    p.manifest(&s, "\"acme/one\" = { version = \"^1.0\", rename = { one = \"acme-one\" } }\n");
+    p.ok(&["add", "acme/one"]);
+    assert!(p.read("skills.toml").contains("rename = { one = \"acme-one\" }"), "{}", p.read("skills.toml"));
+    assert!(p.exists(".agents/skills/acme-one") && !p.exists(".agents/skills/one"));
+}
+
+#[test]
+fn rename_of_a_skill_without_a_name_line() {
+    let s = Server::start();
+    let sha = "c".repeat(40);
+    let md = "---\ndescription: no name\n---\n# plain\n";
+    s.put("/repos/acme/tools/tags", "[]");
+    s.put("/repos/acme/tools/commits/HEAD", gh_commit(&sha, 240).to_string());
+    s.put(&format!("/repos/acme/tools/zipball/{sha}"), zipball(&[("skills/plain/SKILL.md", md)]));
+    let p = with_github(Project::new(&s), &s);
+    p.manifest(&s, "\"acme/tools\" = { github = true, rename = { plain = \"acme-plain\" } }\n");
+    p.ok(&["install"]);
+    assert_eq!(p.read(".agents/skills/acme-plain/SKILL.md"), md);
+    assert!(!p.exists(".agents/skills/plain"));
+    p.ok(&["status"]);
 }

@@ -47,17 +47,15 @@ impl Fetched {
         Ok(archive::subtree(&self.entries, dir))
     }
 
-    /// The skill's files as installed under `to`: SKILL.md gets the new frontmatter name, on disk
-    /// too, so `place` copies the renamed file. Idempotent; `add` and `install` both call it.
-    fn renamed_files(&self, mut files: Vec<FileEntry>, dir: &str, to: &str) -> Result<Vec<FileEntry>> {
+    /// The skill's files as installed under `to`, and the renamed SKILL.md if it has one. The
+    /// extracted dir is left alone: nested skills and skills sharing a dir read the same files.
+    fn renamed_files(&self, mut files: Vec<FileEntry>, dir: &str, to: &str) -> Result<(Vec<FileEntry>, Option<String>)> {
         let Some(e) = files.iter_mut().find(|e| e.path == skill::SKILL_MD) else {
-            return Ok(files);
+            return Ok((files, None));
         };
-        let path = self.dir.path().join(dir).join(skill::SKILL_MD);
-        let new = skill::rename_frontmatter(&std::fs::read_to_string(&path)?, to);
-        std::fs::write(&path, &new)?;
+        let new = skill::rename_frontmatter(&std::fs::read_to_string(self.dir.path().join(dir).join(skill::SKILL_MD))?, to);
         *e = FileEntry::new(e.path.clone(), e.exec, new.as_bytes());
-        Ok(files)
+        Ok((files, Some(new)))
     }
 }
 
@@ -155,6 +153,15 @@ impl Ctx {
             };
             found.push((name, dir));
         }
+        for k in req.rename.keys() {
+            if !found.iter().any(|(n, _)| n == k) {
+                let have: Vec<&str> = found.iter().map(|(n, _)| n.as_str()).collect();
+                bail!(MANIFEST, "{}: rename: no skill {k:?} in {} (it has: {})", req.name, c.version, have.join(", "));
+            }
+            if req.skills.as_ref().is_some_and(|sel| !sel.contains(k)) {
+                bail!(MANIFEST, "{}: rename: skill {k:?} is not in skills = [...]", req.name);
+            }
+        }
         if let Some(sel) = &req.skills {
             for s in sel {
                 if !found.iter().any(|(n, _)| n == s) {
@@ -163,12 +170,6 @@ impl Ctx {
                 }
             }
             found.retain(|(n, _)| sel.contains(n));
-        }
-        for k in req.rename.keys() {
-            if !found.iter().any(|(n, _)| n == k) {
-                let have: Vec<&str> = found.iter().map(|(n, _)| n.as_str()).collect();
-                bail!(MANIFEST, "{}: rename: no skill {k:?} in {} (it has: {})", req.name, c.version, have.join(", "));
-            }
         }
         if found.is_empty() {
             bail!(MANIFEST, "{} {}: no skills found", c.name, c.version);
@@ -182,7 +183,7 @@ impl Ctx {
             }
             let mut files = f.skill_files(&c.name, &from, &dir)?;
             if to.is_some() {
-                files = f.renamed_files(files, &dir, &name)?;
+                files = f.renamed_files(files, &dir, &name)?.0;
             }
             let tree_sha256 = skill::tree_hash(&files);
             skills.push(LockedSkill { name, from: to.map(|_| from), path: dir, tree_sha256 });
@@ -207,7 +208,8 @@ impl Ctx {
             project::no_symlink(&self.s, p)?;
         }
         if let Some(c) = self.conflicts(m, lock, &BTreeSet::new())?.first() {
-            bail!(MANIFEST, "{}", hint(c, &self.taken_names(m, lock)?));
+            let renames = m.skill(&c.package).map(|r| r.rename.clone()).unwrap_or_default();
+            bail!(MANIFEST, "{}", hint(c, &self.taken_names(m, lock)?, &renames));
         }
         Ok(())
     }
@@ -285,7 +287,7 @@ impl Ctx {
         let f = prepared.get(pkg).expect("newcomers are prepared");
         let p = lock.packages.iter_mut().find(|p| p.name == pkg).expect("conflicts name locked packages");
         let s = p.skills.iter_mut().find(|s| s.from.as_deref().unwrap_or(&s.name) == upstream).expect("conflicts name locked skills");
-        let files = f.renamed_files(f.skill_files(pkg, upstream, &s.path)?, &s.path, to)?;
+        let (files, _) = f.renamed_files(f.skill_files(pkg, upstream, &s.path)?, &s.path, to)?;
         s.tree_sha256 = skill::tree_hash(&files);
         s.from = Some(upstream.to_string());
         s.name = to.to_string();
@@ -321,7 +323,7 @@ impl Ctx {
             if last.as_ref().is_some_and(|(p, u)| *p == c.package && *u == c.upstream) {
                 break;
             }
-            let Some(to) = ask(&format!("{} ({})", c.msg, c.package), suggest(&c.package, &c.upstream, &taken).as_deref(), &taken)? else {
+            let Some(to) = ask(&question(&c.msg, &c.package), suggest(&c.package, &c.upstream, &taken).as_deref(), &taken)? else {
                 break;
             };
             rename(lock, &c.package, &c.upstream, to)?;
@@ -334,8 +336,15 @@ impl Ctx {
                 let Some(w) = shadows(&self.s, m, [&s.name]).into_iter().next() else { continue };
                 let taken = self.taken_names(m, lock)?;
                 let upstream = s.from.clone().unwrap_or(s.name.clone());
-                if let Some(to) = ask(&format!("{w} ({p})"), suggest(&p, &upstream, &taken).as_deref(), &taken)? {
+                let mut suggestion = suggest(&p, &upstream, &taken);
+                while let Some(to) = ask(&question(&w, &p), suggestion.as_deref(), &taken)? {
+                    if let Some(why) = shadows(&self.s, m, [&to]).into_iter().next() {
+                        eprintln!("{why}");
+                        suggestion = None;
+                        continue;
+                    }
                     rename(lock, &p, &upstream, to)?;
+                    break;
                 }
             }
         }
@@ -372,8 +381,9 @@ impl Ctx {
             };
             for sk in need {
                 let mut files = f.skill_files(&p.name, sk.from.as_ref().unwrap_or(&sk.name), &sk.path)?;
+                let mut skill_md = None;
                 if sk.from.is_some() {
-                    files = f.renamed_files(files, &sk.path, &sk.name)?;
+                    (files, skill_md) = f.renamed_files(files, &sk.path, &sk.name)?;
                 }
                 let got = skill::tree_hash(&files);
                 if got != sk.tree_sha256 {
@@ -387,6 +397,10 @@ impl Ctx {
                     );
                 }
                 project::place(s, &sk.name, &f.dir.path().join(&sk.path))?;
+                if let Some(md) = skill_md {
+                    // Truncates in place, so the copied mode stays.
+                    std::fs::write(project::store_dir(s, &sk.name).join(skill::SKILL_MD), md)?;
+                }
                 set_modes(&mut modes, &sk.name, &files);
                 println!("installed {} ({} {})", sk.name, p.name, p.version);
             }
@@ -443,14 +457,17 @@ fn suggest(package: &str, upstream: &str, taken: &BTreeSet<String>) -> Option<St
     (skill::valid_name(&name) && !taken.contains(&name)).then_some(name)
 }
 
-fn hint(c: &Conflict, taken: &BTreeSet<String>) -> String {
+/// `renames`: the entry's current `rename`, shown merged so the line can replace it.
+fn hint(c: &Conflict, taken: &BTreeSet<String>, renames: &BTreeMap<String, String>) -> String {
     let to = suggest(&c.package, &c.upstream, taken).unwrap_or_else(|| "<new-name>".into());
-    format!(
-        "{}\n  to install it under another name, add to its entry in {}:\n  rename = {{ {} = \"{to}\" }}",
-        c.msg,
-        manifest::FILE,
-        c.upstream
-    )
+    let mut all = renames.clone();
+    all.insert(c.upstream.clone(), to);
+    let pairs: Vec<String> = all.iter().map(|(k, v)| format!("{k} = \"{v}\"")).collect();
+    format!("{}\n  to install it under another name, set in its entry in {}:\n  rename = {{ {} }}", c.msg, manifest::FILE, pairs.join(", "))
+}
+
+fn question(msg: &str, package: &str) -> String {
+    if msg.contains(package) { msg.to_string() } else { format!("{msg} ({package})") }
 }
 
 #[derive(Debug, PartialEq)]
@@ -1086,5 +1103,11 @@ mod tests {
         assert!(matches!(answer("", None, &taken), Answer::Retry(_)));
         assert!(matches!(answer("Bad Name", s, &taken), Answer::Retry(_)));
         assert!(matches!(answer("code-review", s, &taken), Answer::Retry(_)));
+
+        let c = Conflict { package: "acme/a".into(), upstream: "one".into(), msg: "skill \"one\" is provided by both x and acme/a".into() };
+        assert_eq!(question(&c.msg, &c.package), c.msg);
+        assert_eq!(question("one: ~/.claude/skills/one shadows", "acme/a"), "one: ~/.claude/skills/one shadows (acme/a)");
+        let renames = BTreeMap::from([("a".to_string(), "x".to_string())]);
+        assert!(hint(&c, &taken, &renames).ends_with("rename = { a = \"x\", one = \"acme-one\" }"), "{}", hint(&c, &taken, &renames));
     }
 }
