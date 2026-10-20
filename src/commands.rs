@@ -23,6 +23,8 @@ pub struct Ctx {
     pub s: Scope,
     pub verbose: bool,
     pub limits: Limits,
+    /// stdin and stderr are terminals and CI is unset: conflicts may prompt for a rename.
+    pub interactive: bool,
     http: OnceCell<Http>,
 }
 
@@ -60,8 +62,8 @@ impl Fetched {
 }
 
 impl Ctx {
-    pub fn new(s: Scope, verbose: bool, limits: Limits) -> Ctx {
-        Ctx { s, verbose, limits, http: OnceCell::new() }
+    pub fn new(s: Scope, verbose: bool, limits: Limits, interactive: bool) -> Ctx {
+        Ctx { s, verbose, limits, interactive, http: OnceCell::new() }
     }
 
     fn http(&self) -> Result<&Http> {
@@ -278,6 +280,68 @@ impl Ctx {
         Ok(out)
     }
 
+    /// Installs `upstream` of `pkg` as `to`: rewrites its lock entry from the prepared download.
+    fn rename_locked(&self, lock: &mut Lock, prepared: &HashMap<String, Fetched>, pkg: &str, upstream: &str, to: &str) -> Result<()> {
+        let f = prepared.get(pkg).expect("newcomers are prepared");
+        let p = lock.packages.iter_mut().find(|p| p.name == pkg).expect("conflicts name locked packages");
+        let s = p.skills.iter_mut().find(|s| s.from.as_deref().unwrap_or(&s.name) == upstream).expect("conflicts name locked skills");
+        let files = f.renamed_files(f.skill_files(pkg, upstream, &s.path)?, &s.path, to)?;
+        s.tree_sha256 = skill::tree_hash(&files);
+        s.from = Some(upstream.to_string());
+        s.name = to.to_string();
+        p.skills.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(())
+    }
+
+    /// Offers a rename for each conflict of a newly resolved package; returns the manifest entries
+    /// that changed. Without a terminal, does nothing: `preflight` then fails with the hint.
+    fn settle_conflicts(
+        &self,
+        m: &Manifest,
+        lock: &mut Lock,
+        prepared: &HashMap<String, Fetched>,
+        newcomers: &BTreeSet<String>,
+        shadows_too: bool,
+    ) -> Result<Vec<SkillReq>> {
+        if !self.interactive {
+            return Ok(Vec::new());
+        }
+        let mut changed: BTreeMap<String, SkillReq> = BTreeMap::new();
+        let mut rename = |lock: &mut Lock, pkg: &str, upstream: &str, to: String| -> Result<()> {
+            self.rename_locked(lock, prepared, pkg, upstream, &to)?;
+            let req = changed.entry(pkg.to_string()).or_insert_with(|| m.skill(pkg).cloned().expect("newcomers are in the manifest"));
+            req.rename.insert(upstream.to_string(), to);
+            Ok(())
+        };
+        let mut last: Option<(String, String)> = None;
+        loop {
+            let taken = self.taken_names(m, lock)?;
+            let Some(c) = self.conflicts(m, lock, newcomers)?.into_iter().find(|c| newcomers.contains(&c.package)) else { break };
+            // A rename to an untaken name clears the conflict; if it did not, asking again would loop.
+            if last.as_ref().is_some_and(|(p, u)| *p == c.package && *u == c.upstream) {
+                break;
+            }
+            let Some(to) = ask(&format!("{} ({})", c.msg, c.package), suggest(&c.package, &c.upstream, &taken).as_deref(), &taken)? else {
+                break;
+            };
+            rename(lock, &c.package, &c.upstream, to)?;
+            last = Some((c.package, c.upstream));
+        }
+        if shadows_too {
+            let news: Vec<(String, LockedSkill)> =
+                lock.skills().filter(|(p, _)| newcomers.contains(&p.name)).map(|(p, s)| (p.name.clone(), s.clone())).collect();
+            for (p, s) in news {
+                let Some(w) = shadows(&self.s, m, [&s.name]).into_iter().next() else { continue };
+                let taken = self.taken_names(m, lock)?;
+                let upstream = s.from.clone().unwrap_or(s.name.clone());
+                if let Some(to) = ask(&format!("{w} ({p})"), suggest(&p, &upstream, &taken).as_deref(), &taken)? {
+                    rename(lock, &p, &upstream, to)?;
+                }
+            }
+        }
+        Ok(changed.into_values().collect())
+    }
+
     /// Makes disk match the lock: store, links, gitignore block, git index.
     fn materialize(&self, m: &Manifest, lock: &Lock, mut prepared: HashMap<String, Fetched>) -> Result<()> {
         self.preflight(m, lock)?;
@@ -387,6 +451,49 @@ fn hint(c: &Conflict, taken: &BTreeSet<String>) -> String {
         manifest::FILE,
         c.upstream
     )
+}
+
+#[derive(Debug, PartialEq)]
+enum Answer {
+    Use(String),
+    Decline,
+    Retry(String),
+}
+
+fn answer(input: &str, suggestion: Option<&str>, taken: &BTreeSet<String>) -> Answer {
+    match input.trim() {
+        "" | "y" | "Y" | "yes" => match suggestion {
+            Some(s) => Answer::Use(s.into()),
+            None => Answer::Retry("type a name".into()),
+        },
+        "n" | "N" | "no" => Answer::Decline,
+        n if !skill::valid_name(n) => Answer::Retry(format!("{n:?} is not a valid skill name ([a-z0-9][a-z0-9-]*)")),
+        n if taken.contains(n) => Answer::Retry(format!("{n:?} is taken too")),
+        n => Answer::Use(n.into()),
+    }
+}
+
+/// Asks on stderr/stdin for an install name; None when declined or stdin is closed.
+fn ask(question: &str, suggestion: Option<&str>, taken: &BTreeSet<String>) -> Result<Option<String>> {
+    loop {
+        match suggestion {
+            Some(s) => eprint!("{question}\nInstall it as {s}? [Y/n/<other name>] "),
+            None => eprint!("{question}\nInstall it under which name? (empty line: no) "),
+        }
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line)? == 0 {
+            eprintln!();
+            return Ok(None);
+        }
+        if suggestion.is_none() && line.trim().is_empty() {
+            return Ok(None);
+        }
+        match answer(&line, suggestion, taken) {
+            Answer::Use(n) => return Ok(Some(n)),
+            Answer::Decline => return Ok(None),
+            Answer::Retry(why) => eprintln!("{why}"),
+        }
+    }
 }
 
 /// Personal skills with the same name as project ones. Claude Code runs the personal one;
@@ -665,7 +772,13 @@ fn finish_add(ctx: &Ctx, existed: bool, m: &Manifest, req: &SkillReq, repo: &Rep
     let pkg = ctx.lock_candidate(req, repo, c, &mut prepared)?;
     let mut lock = Lock::load(&ctx.s.config)?;
     lock.upsert(pkg);
-    ctx.preflight(m, &lock)?;
+    // skills.toml is written only after the checks pass; the prompt still needs to see the entry.
+    let mut view = m.clone();
+    view.skills.retain(|r| r.name != req.name);
+    view.skills.push(req.clone());
+    let changed = ctx.settle_conflicts(&view, &mut lock, &prepared, &BTreeSet::from([req.name.clone()]), true)?;
+    let req = &changed.into_iter().find(|r| r.name == req.name).unwrap_or_else(|| req.clone());
+    ctx.preflight(&view, &lock)?;
 
     if !existed {
         std::fs::create_dir_all(&ctx.s.config)?;
@@ -692,7 +805,7 @@ pub fn remove(ctx: &Ctx, names: &[String]) -> Result<()> {
 }
 
 pub fn install(ctx: &Ctx, frozen: bool) -> Result<()> {
-    let m = Manifest::load(&ctx.s.config, ctx.s.global)?;
+    let mut m = Manifest::load(&ctx.s.config, ctx.s.global)?;
     let mut lock = Lock::load(&ctx.s.config)?;
     let (needs, stale, why) = reconcile(&m, &lock);
     let mut prepared = HashMap::new();
@@ -708,8 +821,8 @@ pub fn install(ctx: &Ctx, frozen: bool) -> Result<()> {
             lock.upsert(ctx.resolve(&m, req, &mut prepared)?);
         }
         lock.packages.retain(|p| !stale.contains(&p.name));
-        ctx.preflight(&m, &lock)?;
-        lock.save(&ctx.s.config)?;
+        let newcomers = needs.iter().map(|r| r.name.clone()).collect();
+        m = settle_and_save(ctx, m, &mut lock, &prepared, &newcomers)?;
     }
     ctx.materialize(&m, &lock, prepared)
 }
@@ -723,7 +836,9 @@ pub fn update(ctx: &Ctx, names: &[String]) -> Result<()> {
         }
     }
     let mut prepared = HashMap::new();
+    let mut newcomers = BTreeSet::new();
     for req in m.skills.iter().filter(|r| names.is_empty() || names.contains(&r.name)) {
+        newcomers.insert(req.name.clone());
         let new = ctx.resolve(&m, req, &mut prepared)?;
         match lock.get(&req.name) {
             Some(old) if old.version == new.version && old.dist_sha256 == new.dist_sha256 => {}
@@ -734,9 +849,25 @@ pub fn update(ctx: &Ctx, names: &[String]) -> Result<()> {
     }
     let (_, stale, _) = reconcile(&m, &lock);
     lock.packages.retain(|p| !stale.contains(&p.name));
-    ctx.preflight(&m, &lock)?;
-    lock.save(&ctx.s.config)?;
+    let m = settle_and_save(ctx, m, &mut lock, &prepared, &newcomers)?;
     ctx.materialize(&m, &lock, prepared)
+}
+
+/// Prompts for renames, then saves skills.toml and skills.lock only if no conflict is left.
+fn settle_and_save(
+    ctx: &Ctx,
+    m: Manifest,
+    lock: &mut Lock,
+    prepared: &HashMap<String, Fetched>,
+    newcomers: &BTreeSet<String>,
+) -> Result<Manifest> {
+    let changed = ctx.settle_conflicts(&m, lock, prepared, newcomers, false)?;
+    ctx.preflight(&m, lock)?;
+    for r in &changed {
+        manifest::write_skill(&ctx.s.config, ctx.s.global, r)?;
+    }
+    lock.save(&ctx.s.config)?;
+    if changed.is_empty() { Ok(m) } else { Manifest::load(&ctx.s.config, ctx.s.global) }
 }
 
 pub fn outdated(ctx: &Ctx) -> Result<()> {
@@ -934,5 +1065,26 @@ fn print_table<const N: usize>(rows: &[[String; N]]) {
     for r in rows {
         let line: Vec<String> = r.iter().enumerate().map(|(i, c)| format!("{c:w$}", w = w[i])).collect();
         println!("{}", line.join("  ").trim_end());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn suggestion_and_answers() {
+        let taken: BTreeSet<String> = ["code-review".into(), "mattpocock-taken".into()].into();
+        assert_eq!(suggest("mattpocock/skills", "code-review", &taken).as_deref(), Some("mattpocock-code-review"));
+        assert_eq!(suggest("my_org.x/skills", "a", &taken).as_deref(), Some("my-org-x-a"));
+        assert_eq!(suggest("mattpocock/skills", "taken", &taken), None);
+        let s = Some("mp-x");
+        assert_eq!(answer("", s, &taken), Answer::Use("mp-x".into()));
+        assert_eq!(answer("Y", s, &taken), Answer::Use("mp-x".into()));
+        assert_eq!(answer("n", s, &taken), Answer::Decline);
+        assert_eq!(answer("mine", s, &taken), Answer::Use("mine".into()));
+        assert!(matches!(answer("", None, &taken), Answer::Retry(_)));
+        assert!(matches!(answer("Bad Name", s, &taken), Answer::Retry(_)));
+        assert!(matches!(answer("code-review", s, &taken), Answer::Retry(_)));
     }
 }

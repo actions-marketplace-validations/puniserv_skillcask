@@ -128,6 +128,7 @@ one project are an error. Install one of them under another name with `rename`:
 skillcask then installs `.agents/skills/mp-code-review` and changes the `name:` line in its
 `SKILL.md`; the lock records the original name and the hash of the renamed copy. Nothing else in
 the skill changes, so text that mentions the old name (`/code-review`) stays as it is.
+`add`, `install` and `update` offer the rename when they hit a conflict in a terminal.
 
 ### Personal skills (`--global`)
 

@@ -13,6 +13,7 @@ mod skill;
 mod version;
 
 use std::ffi::OsString;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
@@ -142,7 +143,8 @@ fn run(cli: Cli) -> Result<(), Error> {
             _ => project::find_root()?,
         })
     };
-    let ctx = Ctx::new(scope, cli.verbose, limits);
+    let interactive = !ci() && std::io::stdin().is_terminal() && std::io::stderr().is_terminal();
+    let ctx = Ctx::new(scope, cli.verbose, limits, interactive);
     match cli.cmd {
         Cmd::Init => commands::init(&ctx),
         Cmd::Add { package, repository } => commands::add(&ctx, &package, repository),
