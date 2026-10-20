@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
 
@@ -15,7 +15,11 @@ use crate::version::{Stability, Version};
 
 pub struct PublishArgs {
     pub vendor: String,
-    pub base_url: String,
+    pub base_url: Option<String>,
+    /// Dist URL with `{vendor}`, `{name}` and `{version}`; default `<base-url>/dist/{vendor}/{name}/{version}.zip`.
+    pub dist_url: Option<String>,
+    /// Write every package into `packages.json` (Composer v1) instead of `metadata-url` + `p2/`.
+    pub inline: bool,
     pub out: PathBuf,
     pub paths: Vec<PathBuf>,
 }
@@ -28,10 +32,21 @@ struct Found {
 }
 
 pub fn publish(args: &PublishArgs) -> Result<()> {
-    if !args.base_url.starts_with("https://") {
+    let base = args.base_url.as_deref().map(|b| b.trim_end_matches('/'));
+    if base.is_some_and(|b| !b.starts_with("https://")) {
         bail!(MANIFEST, "--base-url must be an https:// URL");
     }
-    let base = args.base_url.trim_end_matches('/');
+    if base.is_none() && !(args.inline && args.dist_url.is_some()) {
+        bail!(MANIFEST, "--base-url is required unless both --inline and --dist-url are given");
+    }
+    let dist_url = match (&args.dist_url, base) {
+        (Some(t), _) => t.clone(),
+        (None, Some(b)) => format!("{b}/dist/{{vendor}}/{{name}}/{{version}}.zip"),
+        (None, None) => unreachable!("checked above"),
+    };
+    if !dist_url.starts_with("https://") || !dist_url.contains("{name}") || !dist_url.contains("{version}") {
+        bail!(MANIFEST, "--dist-url must be an https:// URL containing {{name}} and {{version}}");
+    }
     std::fs::create_dir_all(&args.out)?;
     let out = args.out.canonicalize()?;
 
@@ -66,28 +81,46 @@ pub fn publish(args: &PublishArgs) -> Result<()> {
     }
 
     let index_path = out.join("packages.json");
-    let mut available: BTreeSet<String> = match std::fs::read(&index_path) {
-        Ok(b) => serde_json::from_slice::<Value>(&b)
-            .map_err(|e| Error::new(MANIFEST, format!("{}: {e}", index_path.display())))?
-            .get("available-packages")
-            .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-            .unwrap_or_default(),
-        Err(_) => BTreeSet::new(),
+    let index: Value = match std::fs::read(&index_path) {
+        Ok(b) => serde_json::from_slice(&b).map_err(|e| Error::new(MANIFEST, format!("{}: {e}", index_path.display())))?,
+        Err(_) => json!({}),
     };
+    let mut available: BTreeSet<String> = index
+        .get("available-packages")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    available.extend(index.get("packages").and_then(Value::as_object).into_iter().flat_map(|m| m.keys().cloned()));
+    // Earlier versions come from the inline index or the p2 file, so switching modes keeps them.
+    let load = |package: &str| -> Result<Vec<Value>> {
+        match index.get("packages").and_then(|p| p.get(package)) {
+            Some(Value::Object(m)) => return Ok(m.values().cloned().collect()),
+            Some(Value::Array(a)) => return Ok(a.clone()),
+            _ => {}
+        }
+        let p2_path = out.join("p2").join(format!("{package}.json"));
+        match std::fs::read(&p2_path) {
+            Ok(b) => serde_json::from_slice::<Value>(&b)
+                .ok()
+                .and_then(|v| v.get("packages")?.get(package)?.as_array().cloned())
+                .ok_or_else(|| Error::new(MANIFEST, format!("{}: not a Composer metadata file", p2_path.display()))),
+            Err(_) => Ok(Vec::new()),
+        }
+    };
+    let mut all: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    for package in &available {
+        all.insert(package.clone(), load(package)?);
+    }
 
     // Validate everything before writing, so an immutability error leaves `out` untouched.
     let mut writes: Vec<(PathBuf, Vec<u8>)> = Vec::new();
     let mut report = Vec::new();
     for (package, versions) in found {
-        let p2_path = out.join("p2").join(format!("{package}.json"));
-        let mut meta: Vec<Value> = match std::fs::read(&p2_path) {
-            Ok(b) => serde_json::from_slice::<Value>(&b)
-                .ok()
-                .and_then(|v| v.get("packages")?.get(&package)?.as_array().cloned())
-                .ok_or_else(|| Error::new(MANIFEST, format!("{}: not a Composer metadata file", p2_path.display())))?,
-            Err(_) => Vec::new(),
+        let mut meta = match all.remove(&package) {
+            Some(m) => m,
+            None => load(&package)?,
         };
+        let (vendor, name) = package.split_once('/').expect("valid package names contain /");
         for f in versions {
             let shasum = hex::encode(Sha1::digest(&f.zip));
             let normalized = f.normalized.to_string();
@@ -106,11 +139,15 @@ pub fn publish(args: &PublishArgs) -> Result<()> {
                         "extra": { "ai-agent-skill": SKILL_MD },
                         "dist": {
                             "type": "zip",
-                            "url": format!("{base}/dist/{package}/{}.zip", f.version),
+                            "url": dist_url.replace("{vendor}", vendor).replace("{name}", name).replace("{version}", &f.version),
                             "shasum": shasum,
                             "reference": hex::encode(Sha256::digest(&f.zip)),
                         },
-                        "time": jiff::Timestamp::now().round(jiff::Unit::Second).map_err(|e| Error::new(MANIFEST, e.to_string()))?.to_string(),
+                        // Truncate: rounding up would date the release in the future and fail a zero cooldown.
+                        "time": jiff::Timestamp::now()
+                            .round(jiff::TimestampRound::new().smallest(jiff::Unit::Second).mode(jiff::RoundMode::Trunc))
+                            .map_err(|e| Error::new(MANIFEST, e.to_string()))?
+                            .to_string(),
                     });
                     if let Some(d) = f.description {
                         m["description"] = d.into();
@@ -124,15 +161,28 @@ pub fn publish(args: &PublishArgs) -> Result<()> {
         }
         let key = |m: &Value| m.get("version_normalized").and_then(Value::as_str).and_then(Version::parse);
         meta.sort_by_key(|m| std::cmp::Reverse(key(m)));
-        writes.push((p2_path, pretty(&json!({ "packages": { package.clone(): meta } }))));
+        all.insert(package.clone(), meta);
         available.insert(package);
     }
 
-    let index = json!({
-        "packages": {},
-        "metadata-url": format!("{base}/p2/%package%.json"),
-        "available-packages": available,
-    });
+    let index = match base.filter(|_| !args.inline) {
+        Some(base) => {
+            for (package, meta) in all.iter().filter(|(_, m)| !m.is_empty()) {
+                writes.push((out.join("p2").join(format!("{package}.json")), pretty(&json!({ "packages": { package: meta } }))));
+            }
+            json!({
+                "packages": {},
+                "metadata-url": format!("{base}/p2/%package%.json"),
+                "available-packages": available,
+            })
+        }
+        None => {
+            let by_version = |meta: Vec<Value>| -> Map<String, Value> {
+                meta.into_iter().filter_map(|m| Some((m.get("version")?.as_str()?.to_string(), m))).collect()
+            };
+            json!({ "packages": all.into_iter().map(|(p, m)| (p, Value::Object(by_version(m)))).collect::<Map<_, _>>() })
+        }
+    };
     writes.push((index_path, pretty(&index)));
     for (path, bytes) in &writes {
         write_if_changed(path, bytes)?;
@@ -216,7 +266,9 @@ mod tests {
         std::fs::write(src.path().join("skills/noversion/SKILL.md"), "---\nname: nov\n---\n").unwrap();
         let args = PublishArgs {
             vendor: "acme".into(),
-            base_url: "https://example.com/repo/".into(),
+            base_url: Some("https://example.com/repo/".into()),
+            dist_url: None,
+            inline: false,
             out: out.path().into(),
             paths: vec![src.path().into()],
         };
@@ -255,7 +307,9 @@ mod tests {
         let out = tempfile::tempdir().unwrap();
         let args = |base: &str| PublishArgs {
             vendor: "acme".into(),
-            base_url: base.into(),
+            base_url: Some(base.into()),
+            dist_url: None,
+            inline: false,
             out: out.path().into(),
             paths: vec![src.path().into()],
         };
@@ -267,5 +321,45 @@ mod tests {
         skill(src.path(), "a", "ok", "1.0.0", "");
         skill(src.path(), "b", "ok", "1.0.0", "other");
         assert!(publish(&args("https://x")).unwrap_err().msg.contains("defined twice"));
+        let no_base = PublishArgs { base_url: None, ..args("https://x") };
+        assert!(publish(&no_base).unwrap_err().msg.contains("--base-url is required"));
+        let bad_tpl = PublishArgs { inline: true, dist_url: Some("https://x/{name}.zip".into()), ..no_base };
+        assert!(publish(&bad_tpl).unwrap_err().msg.contains("{version}"));
+    }
+
+    #[test]
+    fn publishes_inline_with_dist_template() {
+        let src = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        skill(src.path(), "a", "alpha", "1.0.0", "a");
+        let mut args = PublishArgs {
+            vendor: "acme".into(),
+            base_url: Some("https://example.com/repo".into()),
+            dist_url: None,
+            inline: false,
+            out: out.path().into(),
+            paths: vec![src.path().into()],
+        };
+        publish(&args).unwrap();
+        // Switching to inline keeps versions published through p2.
+        args.base_url = None;
+        args.inline = true;
+        args.dist_url = Some("https://git.example.com/generic/{vendor}-{name}/{version}/{name}-{version}.zip".into());
+        skill(src.path(), "a", "alpha", "1.1.0", "a2");
+        skill(src.path(), "b", "beta", "2.0.0", "b");
+        publish(&args).unwrap();
+        let index: Value = serde_json::from_slice(&std::fs::read(out.path().join("packages.json")).unwrap()).unwrap();
+        assert!(index.get("metadata-url").is_none());
+        let alpha = &index["packages"]["acme/alpha"];
+        assert_eq!(alpha["1.0.0"]["dist"]["url"], "https://example.com/repo/dist/acme/alpha/1.0.0.zip", "published URLs are immutable");
+        assert_eq!(alpha["1.1.0"]["dist"]["url"], "https://git.example.com/generic/acme-alpha/1.1.0/alpha-1.1.0.zip");
+        assert_eq!(index["packages"]["acme/beta"]["2.0.0"]["version_normalized"], "2.0.0.0");
+        assert!(out.path().join("dist/acme/beta/2.0.0.zip").exists());
+
+        let before = std::fs::read(out.path().join("packages.json")).unwrap();
+        publish(&args).unwrap();
+        assert_eq!(std::fs::read(out.path().join("packages.json")).unwrap(), before);
+        skill(src.path(), "b", "beta", "2.0.0", "changed");
+        assert!(publish(&args).unwrap_err().msg.contains("acme/beta 2.0.0"));
     }
 }

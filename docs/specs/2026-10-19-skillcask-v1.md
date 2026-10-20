@@ -50,7 +50,7 @@ byte-identical skills to the ones committed in the lock, or a non-zero exit.
 | # | Decision | Why |
 |---|---|---|
 | D1 | Rust, single static binary. | No runtime in the target repository (PHP, Ruby, .NET, JS alike); one artefact to sign and verify. |
-| D2 | Composer repository protocol v2 is the only backend. | Packagist (public), GitLab Composer registry, Satis and Private Packagist (private) all speak it; one client covers them. |
+| D2 | Composer repository protocol v2 is the only backend (plus inline `packages`, D12). | Packagist (public), GitLab Composer registry, Satis and Private Packagist (private) all speak it; one client covers them. |
 | D3 | Package convention from netresearch: `"type": "ai-agent-skill"`, `extra.ai-agent-skill`. | Existing packages install unchanged; no competing convention. |
 | D4 | Manifest `skills.toml`, lock `skills.lock`, both TOML, project root. | Language-neutral, comments allowed, familiar from Cargo. |
 | D5 | Canonical install directory `.agents/skills/<name>`; other agents get relative symlinks. | Codex reads `.agents/skills` directly; Vercel uses the same canonical place; one copy on disk. |
@@ -60,6 +60,7 @@ byte-identical skills to the ones committed in the lock, or a non-zero exit.
 | D9 | Publishing supports both one-repo-per-skill (standard Composer) and monorepos (`skillcask publish` builds a static Composer repository). | Many skills live in monorepos; GitLab's Composer registry accepts one package per project. |
 | D10 | MIT OR Apache-2.0, no telemetry. | Usual Rust dual licence; nothing leaves the machine except registry requests. |
 | D11 | GitHub repositories are a second source (`github = true`), resolved through the GitHub REST API; the lock format is unchanged. | Most public skills (the ones skills.sh lists) live in GitHub repositories without Composer metadata. Pinning the commit sha plus both hashes keeps D6. skills.sh itself is not used: its API needs a Vercel OIDC token. |
+| D12 | Repositories may carry every package inline in `packages.json` (Composer v1/Satis format) instead of `metadata-url`; `publish --inline` writes it, `--dist-url` places the zips. | Private monorepos can then be hosted on GitLab with no new infrastructure: `packages.json` lives in git and is read through the raw files API, zips go to the Generic Package Registry, whose file names cannot contain `/`. One file stays small for a few hundred skills. |
 
 ## Project files
 
@@ -150,8 +151,10 @@ is the frontmatter `name`; it must match `[a-z0-9][a-z0-9-]*` and is the directo
 
 ## Resolution
 
-1. Read `packages.json` of each repository; follow `metadata-url` (`/p2/%package%.json`) per
-   package. Expand Composer's minified format (`"minified": "composer/2.0"`: each version inherits
+1. Read `packages.json` of each repository (a URL ending in `.json` or carrying a query string is
+   used as given, otherwise `/packages.json` is appended). Take the package from the inline
+   `packages` map when it is there (Composer v1: version → metadata), else follow `metadata-url`
+   (`/p2/%package%.json`). Expand Composer's minified format (`"minified": "composer/2.0"`: each version inherits
    fields from the previous one; `"__unset"` removes a field).
 2. Keep versions whose type is `ai-agent-skill` or that carry `extra.ai-agent-skill`.
 3. Stability: stable only (`version_normalized` without a stability suffix) unless the
@@ -262,8 +265,20 @@ every `SKILL.md` with frontmatter `name` and `version`, and writes a static Comp
   the same `shasum`, which `publish` writes into the metadata.
 - Versions are immutable: `--out` may hold a previous run; an existing version with a different
   hash is an error, an identical one is kept.
-- `time` is the publish time of the version, set once.
-- Hosting the output directory is the publisher's choice (see open question 1).
+- `time` is the publish time of the version, set once, truncated to the second.
+- `--dist-url <template>` sets the zip URL of new versions with `{vendor}`, `{name}` and
+  `{version}`; default `<base-url>/dist/{vendor}/{name}/{version}.zip`. Zips are written to
+  `dist/` either way; uploading them to the template URL is the publisher's job.
+- `--inline` (D12) writes all packages into `packages.json` as `packages.<name>.<version>` and no
+  `p2/`; `--base-url` is then optional when `--dist-url` is given. Earlier versions are read from
+  either layout, so switching keeps them.
+
+**Private hosting on GitLab** (monorepo): CI runs `publish --inline` with a Generic Package
+Registry `--dist-url` (`.../packages/generic/{vendor}-{name}/{version}/{name}-{version}.zip`),
+uploads new zips, and commits `packages.json` to the repository, which also keeps the state the
+next run needs. Clients use the raw files API URL
+(`.../repository/files/<path-encoded>/raw?ref=<branch>`) as the repository `url`; a
+`gitlab-token` (sent as `PRIVATE-TOKEN`) for the host covers both requests.
 
 ## Testing
 
@@ -273,7 +288,7 @@ every `SKILL.md` with frontmatter `name` and `version`, and writes a static Comp
   install, frozen drift, hash mismatch (exit 4), cooldown, auth (`http-basic`, `bearer`),
   archive attacks (zip slip, symlink, size limit), collisions, Windows copy mode (on the Windows
   runner).
-- `publish` → `install` round trip against the generated static repository.
+- `publish` → `install` round trip against the generated static repository, in both layouts.
 - End to end against Packagist with `netresearch/agent-jira-skill`, `#[ignore]` by default.
 
 ## Distribution
@@ -298,10 +313,9 @@ artefact attestations. The crate name `skillcask` was free on crates.io on 2026-
 
 ## Open questions
 
-1. **Private static repository hosting for monorepos.** GitLab's Composer registry takes one
-   package per project. Candidates: GitLab Pages (access control is cookie-based, not token, so a
-   CLI cannot authenticate — likely unusable for private), the Generic Package Registry (file names
-   cannot contain `/`, so `metadata-url` needs a flat scheme such as `p2~%package%.json`, which
-   breaks the standard `/` path), an object store behind a token proxy, or splitting the monorepo
-   into one repository per skill in CI. Does not block v1 of the client.
+1. ~~Private static repository hosting for monorepos.~~ Decided in D12: inline `packages.json`
+   in git, zips in the Generic Package Registry. Rejected: GitLab's Composer registry (one package
+   per project), GitLab Pages (cookie auth, a CLI cannot authenticate), `p2/` in the Generic
+   Package Registry (no `/` in file names), an object store behind a token proxy (new
+   infrastructure).
 2. Whether `search` should query several Composer repositories at once or only Packagist.

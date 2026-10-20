@@ -128,7 +128,7 @@ Constraints follow Composer semantics: `^0.3` means `>=0.3.0 <0.4.0`, `~1.2` mea
 | `status` | Exit 1 when manifest, lock or installed files disagree. |
 | `doctor [--fix]` | Broken or committed links, stale gitignore block, modified skills. |
 | `search <query>` | Packagist (`type=ai-agent-skill`) and listed private packages. |
-| `publish --vendor v --base-url URL --out DIR [paths…]` | Build a static Composer repository from a monorepo. |
+| `publish --vendor v --base-url URL --out DIR [--inline] [--dist-url TPL] [paths…]` | Build a static Composer repository from a monorepo. |
 | `<other>` | Runs `skillcask-<other>` from `PATH`, like git and cargo plugins. |
 
 Exit codes: 0 ok, 1 manifest/lock/status problems, 2 authentication, 3 network, 4 hash mismatch,
@@ -210,6 +210,20 @@ skillcask publish --vendor acme --base-url https://skills.example.com --out publ
 This writes `packages.json`, `p2/acme/<name>.json` and deterministic zips under `dist/`. Published
 versions are immutable, and re-running on unchanged skills changes no file. Serve the directory
 over HTTPS.
+
+Hosts that cannot serve `/` inside file names (GitLab's Generic Package Registry) take a single
+file instead:
+
+```sh
+skillcask publish --inline --vendor acme --out composer/ skills/ \
+  --dist-url 'https://git.example.com/api/v4/projects/7/packages/generic/{vendor}-{name}/{version}/{name}-{version}.zip'
+```
+
+`--inline` puts every package into `packages.json` and writes no `p2/`. Upload each
+`dist/<vendor>/<name>/<version>.zip` to the URL the template gives, and commit `packages.json` to
+a repository. A repository `url` with a query string is used as given, so clients can read the
+file through the GitLab raw files API
+(`.../repository/files/composer%2Fpackages.json/raw?ref=main`) with a `gitlab-token`.
 
 ## Design
 

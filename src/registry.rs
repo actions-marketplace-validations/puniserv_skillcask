@@ -1,4 +1,5 @@
-//! Composer repository protocol v2 client: metadata, skill filtering, version selection.
+//! Composer repository client (v2 `metadata-url`, or v1 inline `packages`): metadata, skill
+//! filtering, version selection.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -32,7 +33,12 @@ pub struct Registry<'a> {
 }
 
 fn packages_url(repo: &Repository) -> Result<Url> {
-    let raw = if repo.url.ends_with(".json") { repo.url.clone() } else { format!("{}/packages.json", repo.url.trim_end_matches('/')) };
+    // A query string means an API endpoint (e.g. GitLab raw files `.../raw?ref=main`), used as given.
+    let raw = if repo.url.ends_with(".json") || repo.url.contains('?') {
+        repo.url.clone()
+    } else {
+        format!("{}/packages.json", repo.url.trim_end_matches('/'))
+    };
     Url::parse(&raw).map_err(|e| Error::new(MANIFEST, format!("repository {}: invalid url: {e}", repo.name)))
 }
 
@@ -51,10 +57,23 @@ fn metadata_url(root: &Value, base: &Url, package: &str) -> Result<Option<Url>> 
             return Ok(None);
         }
     }
-    let tpl = root.get("metadata-url").and_then(Value::as_str).ok_or_else(|| {
-        Error::new(MANIFEST, format!("{}: no metadata-url, only Composer repository v2 is supported", crate::http::redact(base)))
-    })?;
+    let Some(tpl) = root.get("metadata-url").and_then(Value::as_str) else {
+        if root.get("packages").is_some_and(Value::is_object) {
+            return Ok(None);
+        }
+        bail!(MANIFEST, "{}: no metadata-url and no inline packages", crate::http::redact(base));
+    };
     base.join(&tpl.replace("%package%", package)).map(Some).map_err(|e| Error::new(NETWORK, format!("bad metadata-url {tpl:?}: {e}")))
+}
+
+/// Composer v1 inline metadata: `packages.<name>` maps version to metadata (Satis); a list is
+/// accepted too.
+fn inline(root: &Value, package: &str) -> Option<Vec<Value>> {
+    match root.get("packages")?.get(package)? {
+        Value::Object(m) => Some(m.values().cloned().collect()),
+        Value::Array(a) => Some(a.clone()),
+        _ => None,
+    }
 }
 
 fn glob(pattern: &str, s: &str) -> bool {
@@ -163,6 +182,9 @@ impl<'a> Registry<'a> {
 
     pub fn versions(&self, repo: &Repository, package: &str) -> Result<Option<Vec<Candidate>>> {
         let root = self.root(repo)?;
+        if let Some(list) = inline(&root.1, package) {
+            return Ok(Some(candidates(package, expand(&list, false), &root.0)));
+        }
         let Some(meta) = metadata_url(&root.1, &root.0, package)? else { return Ok(None) };
         let Some(p2) = self.http.get_json(meta.as_str())? else { return Ok(None) };
         let Some(list) = p2.get("packages").and_then(|p| p.get(package)).and_then(Value::as_array) else { return Ok(None) };
@@ -209,7 +231,9 @@ impl<'a> Registry<'a> {
                 }
             } else {
                 let root = self.root(repo)?;
-                for n in root.1.get("available-packages").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str) {
+                let listed = root.1.get("available-packages").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str);
+                let inline = root.1.get("packages").and_then(Value::as_object).into_iter().flat_map(|m| m.keys().map(String::as_str));
+                for n in listed.chain(inline) {
                     if n.contains(&q) {
                         out.push((n.to_string(), String::new()));
                     }
@@ -323,6 +347,16 @@ mod tests {
     }
 
     #[test]
+    fn reads_inline_packages() {
+        let v = json!({"version": "1.0.0", "type": "ai-agent-skill", "dist": {"type": "zip", "url": "https://h/x.zip"}});
+        let root = json!({"packages": {"acme/x": {"1.0.0": v}, "acme/y": [v]}});
+        assert_eq!(inline(&root, "acme/x").unwrap(), std::slice::from_ref(&v));
+        assert_eq!(inline(&root, "acme/y").unwrap(), [v]);
+        assert!(inline(&root, "acme/z").is_none());
+        assert!(inline(&json!({"packages": []}), "acme/x").is_none());
+    }
+
+    #[test]
     fn resolves_metadata_url() {
         let base = Url::parse("https://git.example.com/api/v4/group/42/-/packages/composer/packages.json").unwrap();
         let root = json!({"metadata-url": "/api/v4/group/42/-/packages/composer/p2/%package%.json"});
@@ -337,9 +371,12 @@ mod tests {
         assert!(metadata_url(&root, &base, "other/y").unwrap().is_some());
         assert!(metadata_url(&root, &base, "acme/nope").unwrap().is_none());
         assert!(metadata_url(&json!({}), &base, "acme/x").is_err());
+        assert!(metadata_url(&json!({"packages": {"acme/y": {}}}), &base, "acme/x").unwrap().is_none());
         let packagist = Repository { name: "packagist".into(), url: crate::manifest::PACKAGIST_URL.into() };
         assert_eq!(packages_url(&packagist).unwrap().as_str(), "https://repo.packagist.org/packages.json");
         assert!(is_packagist(&packagist));
+        let raw = "https://git.example.com/api/v4/projects/7/repository/files/composer%2Fpackages.json/raw?ref=main";
+        assert_eq!(packages_url(&Repository { name: "r".into(), url: raw.into() }).unwrap().as_str(), raw);
         assert!(glob("a*c", "abbc") && glob("*", "x") && !glob("a*c", "abd") && glob("v/*", "v/x"));
     }
 }

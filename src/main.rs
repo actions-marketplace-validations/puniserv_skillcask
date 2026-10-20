@@ -85,7 +85,13 @@ enum Cmd {
         vendor: String,
         /// Public https:// URL the output directory will be served from.
         #[arg(long)]
-        base_url: String,
+        base_url: Option<String>,
+        /// Dist URL template with {vendor}, {name} and {version}.
+        #[arg(long)]
+        dist_url: Option<String>,
+        /// Write all packages into packages.json instead of metadata-url and p2/.
+        #[arg(long)]
+        inline: bool,
         #[arg(long)]
         out: PathBuf,
         paths: Vec<PathBuf>,
@@ -136,11 +142,11 @@ fn run(cli: Cli) -> Result<(), Error> {
         Cmd::Doctor { fix } => commands::doctor(&ctx, fix),
         Cmd::Search { query } => commands::search(&ctx, &query),
         Cmd::External(_) => unreachable!("handled above"),
-        Cmd::Publish { vendor, base_url, out, paths } => {
+        Cmd::Publish { vendor, base_url, dist_url, inline, out, paths } => {
             if vendor.is_empty() {
                 return Err(Error::new(MANIFEST, "--vendor must not be empty"));
             }
-            publish::publish(&publish::PublishArgs { vendor, base_url, out, paths })
+            publish::publish(&publish::PublishArgs { vendor, base_url, dist_url, inline, out, paths })
         }
     }
 }

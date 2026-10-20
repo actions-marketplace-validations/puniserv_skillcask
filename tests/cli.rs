@@ -647,3 +647,52 @@ fn github_tags_are_versions() {
     c.env.push(("GITHUB_TOKEN".into(), "ght0ken".into()));
     c.ok(&["install"]);
 }
+
+#[test]
+fn inline_repository_behind_raw_files_api() {
+    let s = Server::start();
+    let mono = tempfile::tempdir().unwrap();
+    for (n, v) in [("alpha", "1.0.0"), ("beta", "2.1.0")] {
+        let d = mono.path().join("skills").join(n);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("SKILL.md"), format!("---\nname: {n}\nversion: {v}\ndescription: {n} skill\n---\nbody\n")).unwrap();
+    }
+    let out = mono.path().join("composer");
+    let p = Project::new(&s);
+    let tpl = s.url("/generic/{vendor}-{name}/{version}/{name}-{version}.zip");
+    let text = p.ok(&[
+        "publish",
+        "--inline",
+        "--vendor",
+        "acme",
+        "--dist-url",
+        &tpl,
+        "--out",
+        out.to_str().unwrap(),
+        mono.path().to_str().unwrap(),
+    ]);
+    assert!(text.contains("published acme/alpha 1.0.0") && text.contains("published acme/beta 2.1.0"), "{text}");
+    assert!(!out.join("p2").exists());
+
+    // Paths as GitLab serves them: the raw files API with an encoded slash, flat generic packages.
+    let raw = "/api/v4/projects/7/repository/files/composer%2Fpackages.json/raw";
+    s.put(raw, std::fs::read(out.join("packages.json")).unwrap());
+    for (n, v) in [("alpha", "1.0.0"), ("beta", "2.1.0")] {
+        s.put(&format!("/generic/acme-{n}/{v}/{n}-{v}.zip"), std::fs::read(out.join(format!("dist/acme/{n}/{v}.zip"))).unwrap());
+    }
+    s.require_auth(Some("Bearer t0ken"));
+    let host = s.base.trim_start_matches("https://").to_string();
+    p.write("auth.json", &json!({ "bearer": { host: "t0ken" } }).to_string());
+    p.write(
+        "skills.toml",
+        &format!(
+            "[repositories]\nmono = {{ type = \"composer\", url = \"{}\" }}\n[skills]\n\"acme/alpha\" = \"^1.0\"\n\"acme/beta\" = \"^2.0\"\n[policy]\npackagist = false\nmin-release-age = \"0\"\n",
+            s.url(&format!("{raw}?ref=main"))
+        ),
+    );
+    p.ok(&["install"]);
+    assert!(p.exists(".agents/skills/alpha/SKILL.md") && p.exists(".agents/skills/beta/SKILL.md"));
+    assert!(s.log().iter().any(|l| l.starts_with(&format!("{raw}?ref=main auth=true"))), "{:?}", s.log());
+    let found = p.ok(&["search", "bet"]);
+    assert!(found.contains("acme/beta") && !found.contains("acme/alpha"), "{found}");
+}
