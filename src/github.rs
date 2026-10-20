@@ -1,7 +1,7 @@
 //! GitHub repositories as a skill source: semver tags as versions, or a branch, tag or commit
 //! pinned to its sha. Skills are found by their `SKILL.md`, see `discover`.
 
-use jiff::{SignedDuration, Timestamp};
+use jiff::{RoundMode, SignedDuration, Timestamp, TimestampRound, Unit};
 use serde_json::Value;
 
 use crate::bail;
@@ -35,8 +35,11 @@ pub fn is_sha(r: &str) -> bool {
 
 fn get(http: &Http, name: &str, path: &str) -> Result<Value> {
     let url = format!("{}{path}", repository(name).url);
-    http.get_json(&url)?
-        .ok_or_else(|| Error::new(MANIFEST, format!("GitHub: {name}: {path:?} not found (no such repository, ref or tag?)")))
+    http.get_json(&url)?.ok_or_else(|| {
+        // GitHub answers 404, not 401, for a private repository read without a token.
+        let hint = if http.has_credential(&url) { "" } else { "; private repositories need GITHUB_TOKEN" };
+        Error::new(MANIFEST, format!("GitHub: {name}: {path:?} not found (no such repository, ref or tag?{hint})"))
+    })
 }
 
 fn commit_of(v: &Value, name: &str) -> Result<(String, Timestamp)> {
@@ -68,6 +71,7 @@ fn candidate(name: &str, version: String, parsed: Version, sha: &str, time: Opti
 /// Tags that parse as versions, newest first, without release times.
 pub fn tags(http: &Http, name: &str) -> Result<Vec<Candidate>> {
     let mut out = Vec::new();
+    let mut full = false;
     for page in 1..=TAG_PAGES {
         let v = get(http, name, &format!("/tags?per_page=100&page={page}"))?;
         let list = v.as_array().ok_or_else(|| Error::new(NETWORK, format!("GitHub: {name}: unexpected tags response")))?;
@@ -80,9 +84,13 @@ pub fn tags(http: &Http, name: &str) -> Result<Vec<Candidate>> {
                 out.push(candidate(name, tag.to_string(), parsed, &sha.to_ascii_lowercase(), None));
             }
         }
-        if list.len() < 100 {
+        full = list.len() >= 100;
+        if !full {
             break;
         }
+    }
+    if full {
+        eprintln!("warning: {name}: more than {} tags; only the first {} were read", TAG_PAGES * 100, TAG_PAGES * 100);
     }
     out.sort_by(|a, b| b.parsed.cmp(&a.parsed));
     Ok(out)
@@ -120,12 +128,22 @@ pub fn resolve(http: &Http, req: &SkillReq, min_age: SignedDuration, now: Timest
                         "{name}: commit {r} is newer than policy.min-release-age ({min_age:#}); it becomes eligible at {eligible}"
                     );
                 }
-                let older =
-                    get(http, name, &format!("/commits?sha={r}&per_page=1&until={}", cutoff.round(jiff::Unit::Second).unwrap_or(cutoff)))?;
-                let first = older.as_array().and_then(|a| a.first()).ok_or_else(|| {
-                    Error::new(MANIFEST, format!("{name}: every commit on {r:?} is newer than policy.min-release-age ({min_age:#}); the newest becomes eligible at {eligible}"))
-                })?;
+                let until = cutoff.round(TimestampRound::new().smallest(Unit::Second).mode(RoundMode::Trunc)).unwrap_or(cutoff);
+                let older = get(http, name, &format!("/commits?sha={r}&per_page=1&until={until}"))?;
+                let none = || {
+                    Error::new(
+                        MANIFEST,
+                        format!(
+                            "{name}: every commit on {r:?} is newer than policy.min-release-age ({min_age:#}); the newest becomes eligible at {eligible}"
+                        ),
+                    )
+                };
+                let first = older.as_array().and_then(|a| a.first()).ok_or_else(none)?;
                 (sha, time) = commit_of(first, name)?;
+                // Do not trust `until` alone: the API (or a proxy) may ignore it.
+                if time > cutoff {
+                    return Err(none());
+                }
                 eprintln!("note: {name}: newer commits on {r:?} are within policy.min-release-age; using {}", &sha[..12]);
             }
             let parsed = Version::parse("0.0.0").expect("valid");

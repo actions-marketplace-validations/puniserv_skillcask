@@ -253,6 +253,10 @@ impl Http {
         bail!(NETWORK, "{}: more than {MAX_REDIRECTS} redirects", redact(&cur))
     }
 
+    pub fn has_credential(&self, url: &str) -> bool {
+        Url::parse(url).is_ok_and(|u| !u.username().is_empty() || self.auth.lookup(&u).is_some())
+    }
+
     pub fn get_json(&self, url: &str) -> Result<Option<Value>> {
         match self.get(url, JSON_LIMIT)? {
             None => Ok(None),

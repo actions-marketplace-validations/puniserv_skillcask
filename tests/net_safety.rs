@@ -103,3 +103,60 @@ fn github_rate_limit_is_named() {
     let out = p.expect(&["add", "github:acme/x"], 2);
     assert!(out.contains("GitHub API rate limit reached; set GITHUB_TOKEN"), "{out}");
 }
+
+#[test]
+fn ref_fallback_rejects_a_commit_newer_than_the_cutoff() {
+    let s = Server::start();
+    let (a, b) = ("a".repeat(40), "b".repeat(40));
+    s.put("/repos/acme/r/commits/main", gh_commit(&a, 1).to_string());
+    s.put("/repos/acme/r/commits", json!([gh_commit(&b, 2)]).to_string());
+    s.put(&format!("/repos/acme/r/zipball/{b}"), zipball(&[("SKILL.md", &skill_md("r"))]));
+    let p = with_github(Project::new(&s), &s);
+    p.manifest(&s, "");
+    let out = p.expect(&["add", "github:acme/r@main"], 1);
+    assert!(out.contains("min-release-age"), "{out}");
+    assert!(!p.exists("skills.lock"));
+}
+
+#[test]
+fn github_404_names_the_token_when_none_is_set() {
+    let s = Server::start();
+    let mut p = with_github(Project::new(&s), &s);
+    p.manifest(&s, "");
+    let out = p.expect(&["add", "github:acme/private"], 1);
+    assert!(out.contains("private repositories need GITHUB_TOKEN"), "{out}");
+    p.env.push(("GITHUB_TOKEN".into(), "t".into()));
+    let out = p.expect(&["add", "github:acme/private"], 1);
+    assert!(out.contains("not found") && !out.contains("GITHUB_TOKEN"), "{out}");
+}
+
+fn hundred_tags(sha: &str) -> String {
+    json!((0..100).map(|i| json!({ "name": format!("v1.0.{i}"), "commit": { "sha": sha } })).collect::<Vec<_>>()).to_string()
+}
+
+#[test]
+fn tags_on_a_second_page_are_read() {
+    let s = Server::start();
+    let (old, top) = ("1".repeat(40), "2".repeat(40));
+    s.respond("/repos/acme/p/tags?per_page=100&page=1", 200, &[], hundred_tags(&old));
+    s.respond("/repos/acme/p/tags?per_page=100&page=2", 200, &[], json!([{ "name": "v2.0.0", "commit": { "sha": top } }]).to_string());
+    s.put(&format!("/repos/acme/p/commits/{top}"), gh_commit(&top, 240).to_string());
+    s.put(&format!("/repos/acme/p/zipball/{top}"), zipball(&[("SKILL.md", &skill_md("p"))]));
+    let p = with_github(Project::new(&s), &s);
+    p.manifest(&s, "");
+    p.ok(&["add", "github:acme/p"]);
+    assert!(p.read("skills.lock").contains("version = \"v2.0.0\""), "{}", p.read("skills.lock"));
+}
+
+#[test]
+fn tags_beyond_the_page_limit_are_warned_about() {
+    let s = Server::start();
+    let sha = "1".repeat(40);
+    s.put("/repos/acme/many/tags", hundred_tags(&sha));
+    s.put(&format!("/repos/acme/many/commits/{sha}"), gh_commit(&sha, 240).to_string());
+    s.put(&format!("/repos/acme/many/zipball/{sha}"), zipball(&[("SKILL.md", &skill_md("many"))]));
+    let p = with_github(Project::new(&s), &s);
+    p.manifest(&s, "");
+    let out = p.ok(&["add", "github:acme/many"]);
+    assert!(out.contains("warning") && out.contains("1000 tags"), "{out}");
+}
