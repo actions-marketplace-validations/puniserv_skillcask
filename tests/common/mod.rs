@@ -19,6 +19,18 @@ struct State {
     /// Required value of the Authorization header, if any.
     auth: Option<String>,
     log: Vec<String>,
+    requests: Vec<Request>,
+    /// Canned responses by path, with or without the query string.
+    responses: HashMap<String, Canned>,
+}
+
+type Canned = (u16, Vec<(String, String)>, Vec<u8>);
+
+#[derive(Clone, Debug)]
+pub struct Request {
+    pub path: String,
+    /// Header names in lower case.
+    pub headers: HashMap<String, String>,
 }
 
 pub struct Server {
@@ -86,6 +98,20 @@ impl Server {
         self.state.lock().unwrap().log.clone()
     }
 
+    pub fn requests(&self) -> Vec<Request> {
+        self.state.lock().unwrap().requests.clone()
+    }
+
+    /// Answers `path` (matched with its query string first, then without) with a fixed response.
+    pub fn respond(&self, path: &str, status: u16, headers: &[(&str, &str)], body: impl Into<Vec<u8>>) {
+        let headers = headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        self.state.lock().unwrap().responses.insert(path.to_string(), (status, headers, body.into()));
+    }
+
+    pub fn redirect(&self, path: &str, location: &str) {
+        self.respond(path, 302, &[("Location", location)], "");
+    }
+
     pub fn url(&self, path: &str) -> String {
         format!("{}{path}", self.base)
     }
@@ -96,33 +122,36 @@ fn handle(s: &mut (impl Read + Write), st: &Mutex<State>) -> std::io::Result<()>
     let mut line = String::new();
     reader.read_line(&mut line)?;
     let path = line.split_whitespace().nth(1).unwrap_or("/").to_string();
-    let mut auth = None;
+    let mut headers = HashMap::new();
     loop {
         let mut h = String::new();
         if reader.read_line(&mut h)? == 0 || h == "\r\n" {
             break;
         }
-        if let Some((k, v)) = h.split_once(':')
-            && k.eq_ignore_ascii_case("authorization")
-        {
-            auth = Some(v.trim().to_string());
+        if let Some((k, v)) = h.split_once(':') {
+            headers.insert(k.trim().to_ascii_lowercase(), v.trim().to_string());
         }
     }
-    let (status, body) = {
+    let auth = headers.get("authorization").cloned();
+    let (status, extra, body) = {
         let mut st = st.lock().unwrap();
         st.log.push(format!("{path} auth={}", auth.is_some()));
+        st.requests.push(Request { path: path.clone(), headers });
         let path_only = path.split('?').next().unwrap_or("");
         if st.auth.is_some() && st.auth != auth {
-            (401, Vec::new())
+            (401, Vec::new(), Vec::new())
+        } else if let Some(r) = st.responses.get(&path).or_else(|| st.responses.get(path_only)) {
+            r.clone()
         } else if let Some(b) = st.files.get(path_only) {
-            (200, b.clone())
+            (200, Vec::new(), b.clone())
         } else if let Some(b) = st.dir.as_ref().and_then(|d| std::fs::read(d.join(path_only.trim_start_matches('/'))).ok()) {
-            (200, b)
+            (200, Vec::new(), b)
         } else {
-            (404, Vec::new())
+            (404, Vec::new(), Vec::new())
         }
     };
-    let head = format!("HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+    let extra: String = extra.iter().map(|(k, v)| format!("{k}: {v}\r\n")).collect();
+    let head = format!("HTTP/1.1 {status} X\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n", body.len());
     s.write_all(head.as_bytes())?;
     s.write_all(&body)?;
     s.flush()

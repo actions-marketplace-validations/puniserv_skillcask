@@ -253,7 +253,12 @@ pub fn select(cands: &[Candidate], name: &str, constraint: &str, min_age: Signed
         bail!(MANIFEST, "no version of {name} matches {constraint:?}{latest}");
     };
     let cutoff = now.checked_sub(min_age).unwrap_or(Timestamp::MIN);
-    let pick = cands.iter().filter(|x| c.allows(&x.parsed) && x.time.is_none_or(|t| t <= cutoff)).max_by(|a, b| a.parsed.cmp(&b.parsed));
+    // Equal versions (`v1.0.0` and `1.0.0`): prefer the timed, older one, so an untimed duplicate cannot skip the cooldown.
+    let age = |x: &Candidate| x.time.unwrap_or(Timestamp::MAX);
+    let pick = cands
+        .iter()
+        .filter(|x| c.allows(&x.parsed) && x.time.is_none_or(|t| t <= cutoff))
+        .max_by(|a, b| a.parsed.cmp(&b.parsed).then_with(|| age(b).cmp(&age(a))));
     match pick {
         Some(p) => {
             if p.time.is_none() {
@@ -344,6 +349,19 @@ mod tests {
         assert_eq!(select(&c, "acme/x", "1.0.0", SignedDuration::from_hours(100_000), now).unwrap().version, "v1.0.0");
         assert_eq!(newest(&c, None).unwrap().version, "v2.0.0");
         assert_eq!(newest(&c, Some(&Constraint::parse("~1.0").unwrap())).unwrap().version, "v1.1.0");
+    }
+
+    #[test]
+    fn equal_versions_prefer_the_timed_one() {
+        let now: Timestamp = "2026-10-19T12:00:00Z".parse().unwrap();
+        let mut c = cands();
+        c.truncate(2);
+        let mut untimed = c[1].clone();
+        untimed.version = "1.1.0".into();
+        untimed.time = None;
+        c.push(untimed);
+        let picked = select(&c, "acme/x", "^1.0", SignedDuration::from_hours(72), now).unwrap();
+        assert_eq!((picked.version.as_str(), picked.time.is_some()), ("v1.1.0", true));
     }
 
     #[test]

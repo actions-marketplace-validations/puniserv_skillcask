@@ -75,7 +75,8 @@ pub fn tags(http: &Http, name: &str) -> Result<Vec<Candidate>> {
             let (Some(tag), Some(sha)) = (t.get("name").and_then(Value::as_str), t.pointer("/commit/sha").and_then(Value::as_str)) else {
                 continue;
             };
-            if let Some(parsed) = Version::parse(tag).filter(|_| is_sha(sha)) {
+            // Keep the first of tags naming the same version: release times are fetched for one only.
+            if let Some(parsed) = Version::parse(tag).filter(|v| is_sha(sha) && !out.iter().any(|c: &Candidate| &c.parsed == v)) {
                 out.push(candidate(name, tag.to_string(), parsed, &sha.to_ascii_lowercase(), None));
             }
         }
