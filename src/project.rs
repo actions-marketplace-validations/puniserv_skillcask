@@ -127,7 +127,9 @@ pub fn clean_leftovers(s: &Scope, keep: &[&Path]) -> Result<()> {
     for e in rd.flatten() {
         let n = e.file_name().to_string_lossy().into_owned();
         let p = e.path();
-        if (n.starts_with(TMP) || n.starts_with(OLD)) && !keep.contains(&p.as_path()) {
+        // A fresh one may belong to a skillcask running at the same time.
+        let stale = e.metadata()?.modified()?.elapsed().is_ok_and(|age| age > std::time::Duration::from_secs(3600));
+        if (n.starts_with(TMP) || n.starts_with(OLD)) && stale && !keep.contains(&p.as_path()) {
             if e.file_type()?.is_dir() { std::fs::remove_dir_all(p)? } else { std::fs::remove_file(p)? }
         }
     }
@@ -394,12 +396,22 @@ pub fn block_file(s: &Scope) -> String {
     if s.global { s.show(&format!("{STORE}/{INSTALLED}")) } else { ".gitignore".into() }
 }
 
+/// Project scope: what skillcask placed in the store on this machine, unlike the committed block.
+/// The same file and format as the global managed list, holding only store lines.
+fn record_file(s: &Scope) -> (PathBuf, String) {
+    (s.root.join(STORE).join(INSTALLED), s.show(&format!("{STORE}/{INSTALLED}")))
+}
+
 fn read_gitignore(s: &Scope) -> Result<Gitignore> {
+    read_block_file(&ignore_file(s), &block_file(s))
+}
+
+fn read_block_file(path: &Path, shown: &str) -> Result<Gitignore> {
     // Treating an unreadable file as empty would rewrite it with only the block.
-    let text = match std::fs::read_to_string(ignore_file(s)) {
+    let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => bail!(IO, "{}: {e}; skillcask only rewrites a readable UTF-8 file", block_file(s)),
+        Err(e) => bail!(IO, "{shown}: {e}; skillcask only rewrites a readable UTF-8 file"),
     };
     let eol = if text.split_once('\n').is_some_and(|(l, _)| l.ends_with('\r')) { "\r\n" } else { "\n" };
     let (mut kept, mut block) = (Vec::new(), Vec::new());
@@ -422,7 +434,7 @@ fn read_gitignore(s: &Scope) -> Result<Gitignore> {
     }
     // Without END every user line after BEGIN would count as managed and be dropped on rewrite.
     if inside {
-        bail!(MANIFEST, "{}: the skillcask block has no end line {END:?}; restore it by hand", block_file(s));
+        bail!(MANIFEST, "{shown}: the skillcask block has no end line {END:?}; restore it by hand");
     }
     Ok(Gitignore { text, eol, kept, at, block })
 }
@@ -433,21 +445,49 @@ pub fn read_block(s: &Scope) -> Result<Vec<String>> {
 
 /// Skill names that the current block marks as managed.
 pub fn block_managed(s: &Scope) -> Result<BTreeSet<String>> {
+    Ok(store_lines(&read_block(s)?))
+}
+
+fn store_lines(block: &[String]) -> BTreeSet<String> {
     let prefix = format!("/{STORE}/");
     // The block is user-editable; only plain skill names may reach remove_dir_all.
-    Ok(read_block(s)?
+    block
         .iter()
         .filter_map(|l| l.strip_prefix(&prefix)?.strip_suffix('/'))
         .filter(|n| crate::skill::valid_name(n))
         .map(String::from)
-        .collect())
+        .collect()
+}
+
+/// Skills that skillcask installed on this machine. In global that is the managed list itself.
+pub fn installed_here(s: &Scope) -> Result<BTreeSet<String>> {
+    if s.global {
+        return block_managed(s);
+    }
+    let (path, shown) = record_file(s);
+    Ok(store_lines(&read_block_file(&path, &shown)?.block))
+}
+
+/// Records `names` as installed on this machine; in global `write_block` already does.
+pub fn write_installed_here(s: &Scope, names: &BTreeSet<String>) -> Result<()> {
+    if s.global {
+        return Ok(());
+    }
+    no_symlink(s, STORE)?;
+    let (path, shown) = record_file(s);
+    let lines: Vec<String> = names.iter().map(|n| format!("/{STORE}/{n}/")).collect();
+    write_block_file(&path, &shown, &lines)?;
+    Ok(())
 }
 
 /// Rewrites the block in place (or appends it); drops it when empty. Returns true if the file changed.
 pub fn write_block(s: &Scope, lines: &[String]) -> Result<bool> {
     no_symlink(s, ".gitignore")?;
-    let path = ignore_file(s);
-    let Gitignore { text, eol, mut kept, at, .. } = read_gitignore(s)?;
+    write_block_file(&ignore_file(s), &block_file(s), lines)
+}
+
+fn write_block_file(path: &Path, shown: &str, lines: &[String]) -> Result<bool> {
+    let Gitignore { text, eol, mut kept, at, .. } = read_block_file(path, shown)?;
     let mut block = Vec::new();
     if !lines.is_empty() {
         block.push(BEGIN.to_string());
@@ -471,10 +511,10 @@ pub fn write_block(s: &Scope, lines: &[String]) -> Result<bool> {
     if new == text || (new.is_empty() && !path.exists()) {
         return Ok(false);
     }
-    if s.global {
-        std::fs::create_dir_all(s.root.join(STORE))?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
     }
-    std::fs::write(&path, new)?;
+    std::fs::write(path, new)?;
     Ok(true)
 }
 

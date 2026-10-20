@@ -178,8 +178,14 @@ fn leftover_temp_dirs_are_cleaned_and_ignored() {
     let p = one(&s);
     p.write(".agents/skills/.skillcask-tmp-abc/x", "x");
     p.write(".agents/skills/.skillcask-old-one-1/SKILL.md", "x");
+    p.write(".agents/skills/.skillcask-tmp-fresh/x", "x");
+    let two_hours_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
+    for d in [".skillcask-tmp-abc", ".skillcask-old-one-1"] {
+        std::fs::File::open(p.path().join(".agents/skills").join(d)).unwrap().set_modified(two_hours_ago).unwrap();
+    }
     p.ok(&["install"]);
     assert!(!p.exists(".agents/skills/.skillcask-tmp-abc") && !p.exists(".agents/skills/.skillcask-old-one-1"));
+    assert!(p.exists(".agents/skills/.skillcask-tmp-fresh/x"), "a concurrent run's fresh temp dir was deleted");
     assert!(p.read(".gitignore").contains("/.agents/skills/.skillcask-*\n"), "{}", p.read(".gitignore"));
 }
 
@@ -260,4 +266,59 @@ fn plugin_edge_cases() {
     let out = p.expect(&[""], 1);
     assert!(out.contains("unknown command") && !out.contains("ran"), "{out}");
     p.expect(&["die"], 137);
+}
+
+const RECORD: &str = ".agents/skills/.skillcask-installed";
+
+#[test]
+fn a_clone_does_not_restore_a_hand_written_dir_the_block_lists() {
+    let s = Server::start();
+    let a = one(&s);
+    a.ok(&["install"]);
+    assert!(a.read(RECORD).contains("/.agents/skills/one/"), "{}", a.read(RECORD));
+    assert!(!a.read(".gitignore").contains(".skillcask-installed"), "covered by the .skillcask-* line");
+
+    let b = clone_of(&a, &s);
+    b.write(".agents/skills/one/SKILL.md", &skill_md("one"));
+    b.write(".agents/skills/one/notes.md", "keep");
+    let out = b.expect(&["install"], 1);
+    assert!(out.contains(".agents/skills/one exists and was not installed by skillcask on this machine; move it away"), "{out}");
+    assert!(out.contains("rename = { one = \"acme-one\" }"), "{out}");
+    assert_eq!(b.read(".agents/skills/one/notes.md"), "keep");
+}
+
+#[test]
+fn installs_without_a_record_adopt_intact_skills_only() {
+    let s = Server::start();
+    let p = one(&s);
+    p.ok(&["install"]);
+    std::fs::remove_file(p.path().join(RECORD)).unwrap();
+    let out = p.ok(&["install"]);
+    assert!(!out.contains("installed"), "{out}");
+    assert!(p.read(RECORD).contains("/.agents/skills/one/"), "an intact skill is adopted into the record");
+
+    std::fs::remove_file(p.path().join(RECORD)).unwrap();
+    p.write(".agents/skills/one/SKILL.md", "edited");
+    let out = p.expect(&["install"], 1);
+    assert!(out.contains("was not installed by skillcask on this machine"), "{out}");
+    assert_eq!(p.read(".agents/skills/one/SKILL.md"), "edited");
+}
+
+#[test]
+fn update_over_a_modified_skill_names_the_edit() {
+    let s = Server::start();
+    let p = one(&s);
+    p.ok(&["install"]);
+    p.write(".agents/skills/one/SKILL.md", "edited");
+    s.package(
+        "acme/one",
+        vec![
+            Ver { version: "1.1.0", time: Some(ago(240)), zip: zipball(&[("SKILL.md", &(skill_md("one") + "v2"))]), extra: None },
+            Ver { version: "1.0.0", time: Some(ago(300)), zip: zipball(&[("SKILL.md", &skill_md("one"))]), extra: None },
+        ],
+    );
+    let out = p.expect(&["update"], 1);
+    assert!(out.contains(".agents/skills/one was modified after skillcask installed it"), "{out}");
+    assert!(!out.contains("not managed"), "{out}");
+    assert_eq!(p.read(".agents/skills/one/SKILL.md"), "edited");
 }

@@ -823,7 +823,7 @@ fn global_synced_config_does_not_claim_hand_written_skills() {
     std::fs::create_dir_all(&mine).unwrap();
     std::fs::write(mine.join("SKILL.md"), "mine").unwrap();
     let out = b.global(&["install"], 1);
-    assert!(out.contains("~/.agents/skills/one exists and is not managed by skillcask"), "{out}");
+    assert!(out.contains("~/.agents/skills/one exists and was not installed by skillcask on this machine"), "{out}");
     assert_eq!(std::fs::read_to_string(mine.join("SKILL.md")).unwrap(), "mine");
 }
 

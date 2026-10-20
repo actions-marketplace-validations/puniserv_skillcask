@@ -260,14 +260,13 @@ impl Ctx {
         }
         let old_managed = project::block_managed(s)?;
         let stale = project::stale_local_links(s, &m.local, &locals)?;
+        let here = project::installed_here(s)?;
         for (n, (p, sk)) in &locked {
             let present = project::store_dir(s, n).symlink_metadata().is_ok();
-            if present && !stale.iter().any(|x| x == n) && !replaceable(s, p, sk, old, &old_managed) {
-                let msg = format!(
-                    "{} exists and is not managed by skillcask, but {} provides a skill with that name",
-                    s.show(&format!("{STORE}/{n}")),
-                    p.name
-                );
+            if present
+                && !stale.iter().any(|x| x == n)
+                && let Some(msg) = store_conflict(s, p, sk, old, &here)
+            {
                 out.push(conflict(p, sk, msg));
             }
         }
@@ -461,6 +460,8 @@ impl Ctx {
         }
         let managed: BTreeSet<String> = locked.keys().cloned().collect();
         project::write_block(s, &project::block_lines(&managed, &m.targets, &copies))?;
+        // Every locked skill now matches the lock: placed now, or found intact and adopted.
+        project::write_installed_here(s, &managed)?;
 
         let tracked = project::git_tracked(s, &managed_paths(&managed, &m.targets));
         if !tracked.is_empty() {
@@ -621,16 +622,28 @@ fn locked_skill<'a>(lock: &'a Lock, name: &str) -> Option<(&'a Package, &'a Lock
     lock.skills().find(|(_, sk)| sk.name == name)
 }
 
-/// Whether installing `sk` over its existing store dir loses nothing but what skillcask installed.
+/// Why installing `sk` over its existing store dir would lose something skillcask did not install.
 /// A dir matching the new or the old lock entry is skillcask's. Any other dir is a local edit,
-/// restored only when skillcask managed the name and its lock entry is unchanged: under a new or
-/// changed entry it may be the user's own skill.
-fn replaceable(s: &Scope, p: &Package, sk: &LockedSkill, old: &Lock, old_managed: &BTreeSet<String>) -> bool {
-    let Some(h) = tree_on_disk(s, &sk.name) else { return false };
-    h == sk.tree_sha256
-        || locked_skill(old, &sk.name).is_some_and(|(op, os)| {
-            h == os.tree_sha256 || (old_managed.contains(&sk.name) && op.version == p.version && os.tree_sha256 == sk.tree_sha256)
-        })
+/// restored only when skillcask installed it on this machine (`here`; the block is committed, so
+/// a clone has it too) and its lock entry is unchanged.
+fn store_conflict(s: &Scope, p: &Package, sk: &LockedSkill, old: &Lock, here: &BTreeSet<String>) -> Option<String> {
+    let shown = s.show(&format!("{STORE}/{}", sk.name));
+    let h = tree_on_disk(s, &sk.name);
+    if h.as_ref() == Some(&sk.tree_sha256) {
+        return None;
+    }
+    let (Some(h), Some((op, os))) = (h, locked_skill(old, &sk.name)) else {
+        return Some(format!("{shown} exists and is not managed by skillcask, but {} provides a skill with that name", p.name));
+    };
+    if h == os.tree_sha256 {
+        None
+    } else if !here.contains(&sk.name) {
+        Some(format!("{shown} exists and was not installed by skillcask on this machine; move it away"))
+    } else if op.version == p.version && os.tree_sha256 == sk.tree_sha256 {
+        None
+    } else {
+        Some(format!("{shown} was modified after skillcask installed it; move your changes away, then `skillcask install` restores it"))
+    }
 }
 
 /// Managed names no longer locked whose store dir is not what the old lock installed: modified,

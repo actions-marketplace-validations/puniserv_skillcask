@@ -75,6 +75,7 @@ skillcask status                             # manifest vs lock vs installed fil
 skills.toml                  # manifest, commit it
 skills.lock                  # lock, commit it
 .agents/skills/<name>/       # installed skill (gitignored)
+.agents/skills/.skillcask-installed  # what this machine installed (gitignored)
 .claude/skills/<name>  -> ../../.agents/skills/<name>
 .junie/skills/<name>   -> ../../.agents/skills/<name>
 .gitignore                   # managed block
