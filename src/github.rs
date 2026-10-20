@@ -89,7 +89,7 @@ pub fn tags(http: &Http, name: &str) -> Result<Vec<Candidate>> {
 
 pub fn resolve(http: &Http, req: &SkillReq, min_age: SignedDuration, now: Timestamp) -> Result<Candidate> {
     let name = &req.name;
-    let cutoff = now.checked_sub(min_age).unwrap_or(now);
+    let cutoff = now.checked_sub(min_age).unwrap_or(Timestamp::MIN);
     match req.github {
         Some(GitHub::Tags) => {
             let mut cands = tags(http, name)?;
@@ -112,7 +112,7 @@ pub fn resolve(http: &Http, req: &SkillReq, min_age: SignedDuration, now: Timest
             let r = &req.constraint;
             let (mut sha, mut time) = commit(http, name, r)?;
             if time > cutoff {
-                let eligible = time.checked_add(min_age).unwrap_or(time).round(jiff::Unit::Second).unwrap_or(time);
+                let eligible = time.checked_add(min_age).unwrap_or(Timestamp::MAX).round(jiff::Unit::Second).unwrap_or(time);
                 if is_sha(r) {
                     bail!(
                         MANIFEST,

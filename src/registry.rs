@@ -252,7 +252,7 @@ pub fn select(cands: &[Candidate], name: &str, constraint: &str, min_age: Signed
         let latest = cands.iter().max_by(|a, b| a.parsed.cmp(&b.parsed)).map(|c| format!(" (newest: {})", c.version)).unwrap_or_default();
         bail!(MANIFEST, "no version of {name} matches {constraint:?}{latest}");
     };
-    let cutoff = now.checked_sub(min_age).unwrap_or(now);
+    let cutoff = now.checked_sub(min_age).unwrap_or(Timestamp::MIN);
     let pick = cands.iter().filter(|x| c.allows(&x.parsed) && x.time.is_none_or(|t| t <= cutoff)).max_by(|a, b| a.parsed.cmp(&b.parsed));
     match pick {
         Some(p) => {
@@ -263,7 +263,7 @@ pub fn select(cands: &[Candidate], name: &str, constraint: &str, min_age: Signed
         }
         None => {
             let t = newest.time.expect("only timed versions are filtered out");
-            let eligible = t.checked_add(min_age).unwrap_or(t);
+            let eligible = t.checked_add(min_age).unwrap_or(Timestamp::MAX);
             bail!(
                 MANIFEST,
                 "{name}: every version matching {constraint:?} is newer than policy.min-release-age ({min_age:#}); newest {} was released {} and becomes eligible at {}",
@@ -344,6 +344,18 @@ mod tests {
         assert_eq!(select(&c, "acme/x", "1.0.0", SignedDuration::from_hours(100_000), now).unwrap().version, "v1.0.0");
         assert_eq!(newest(&c, None).unwrap().version, "v2.0.0");
         assert_eq!(newest(&c, Some(&Constraint::parse("~1.0").unwrap())).unwrap().version, "v1.1.0");
+    }
+
+    #[test]
+    fn huge_min_release_age_fails_closed() {
+        use crate::manifest::parse_age;
+        assert_eq!(parse_age("36525d").unwrap(), SignedDuration::from_hours(36525 * 24));
+        assert!(parse_age("36526d").is_err(), "over 100 years");
+        assert!(parse_age("9223372036854775807w").is_err(), "overflow");
+        let c = cands();
+        let now: Timestamp = "2026-10-19T12:00:00Z".parse().unwrap();
+        let e = select(&c, "acme/x", "^1.1", SignedDuration::MAX, now).unwrap_err();
+        assert!(e.msg.contains("min-release-age"), "{}", e.msg);
     }
 
     #[test]

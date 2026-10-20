@@ -311,7 +311,12 @@ pub fn parse_age(s: &str) -> Result<SignedDuration> {
         "w" => 7 * 86400,
         _ => return Err(bad(format!("invalid duration {s:?}, use s, m, h, d or w"))),
     };
-    Ok(SignedDuration::from_secs(n * secs))
+    // Past this the cutoff arithmetic in resolution could overflow and disable the cooldown.
+    const MAX: i64 = 36525 * 86400;
+    match n.checked_mul(secs) {
+        Some(total) if total <= MAX => Ok(SignedDuration::from_secs(total)),
+        _ => Err(bad(format!("duration {s:?} is longer than 100 years"))),
+    }
 }
 
 fn edit(root: &Path, global: bool, f: impl FnOnce(&mut DocumentMut)) -> Result<()> {
