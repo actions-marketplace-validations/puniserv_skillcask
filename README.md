@@ -93,10 +93,12 @@ Codex lists both.
 
 ```toml
 [repositories]
-# Packagist is the implicit last repository.
 acme = { type = "composer", url = "https://git.example.com/api/v4/group/42/-/packages/composer/packages.json" }
 # A repository you review yourself can skip the cooldown; the others keep it.
 own = { url = "https://git.example.com/own/packages.json", min-release-age = "0" }
+# Default sources, written by `init`; `= false` turns one off. Packagist is always searched last.
+packagist = { url = "https://repo.packagist.org" }
+github = { type = "github", url = "https://api.github.com" }   # GitHub Enterprise: its API URL
 
 [skills]
 "netresearch/agent-jira-skill" = "^3.34"
@@ -114,11 +116,40 @@ min-release-age = "3d"   # cooldown for add/update; "0" disables
 allow-ranges = true      # false: every version must be exact
 packagist = true         # false: drop the implicit Packagist repository
 github-requires = false  # true: dependencies may come from GitHub
+allow-sources = ["acme", "own", "packagist", "github"]   # only these sources; default: all
 ```
 
 Constraints follow Composer semantics: `^0.3` means `>=0.3.0 <0.4.0`, `~1.2` means
 `>=1.2 <2.0`, and pre-releases are only selected when the constraint names a stability
 (`^1.0@beta`).
+
+### Allowed sources and policy for every project
+
+`allow-sources` lists the only places skills may come from: repository names, `packagist`,
+`github`, or `https://` URL prefixes (`https://api.github.com/repos/acme/` allows one GitHub
+organisation). Other repositories get no request, and `install` refuses a lock entry from them,
+also with `--frozen`, so a committed lock cannot bring them back. Dependencies follow the same
+rule.
+
+Policy can also come from `config.toml` next to the global manifest (`~/.config/skillcask`) and
+from the environment. The first layer that sets a key wins:
+
+1. `SKILLCASK_ALLOW_SOURCES`, `SKILLCASK_MIN_RELEASE_AGE`, `SKILLCASK_ALLOW_RANGES`,
+   `SKILLCASK_PACKAGIST`, `SKILLCASK_GITHUB_REQUIRES`;
+2. keys `config.toml` lists in `enforce`: a project that sets them otherwise fails;
+3. `[policy]` in `skills.toml`;
+4. the other keys of `config.toml`, as defaults.
+
+```toml
+# ~/.config/skillcask/config.toml: only the company registry and GitHub, in every project
+[policy]
+allow-sources = ["https://gitlab.example.com/", "github"]
+enforce = ["allow-sources"]
+```
+
+`config.toml` and the environment take URL prefixes, not repository names, since a name means
+whatever a project calls it. `skillcask status` prints each key that is set and where it came
+from.
 
 ### Dependencies
 

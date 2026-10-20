@@ -1,6 +1,6 @@
 # Spec: source policy and default sources
 
-Date: 2026-10-20. Status: draft.
+Date: 2026-10-20. Status: implemented.
 
 ## Problem
 
@@ -32,7 +32,8 @@ first layer that sets a key wins:
    `SKILLCASK_GITHUB_REQUIRES`, `SKILLCASK_ALLOW_SOURCES` (comma-separated). Empty is unset.
 2. User config `config.toml` in the config dir of D13 (`$SKILLCASK_HOME`,
    `$XDG_CONFIG_HOME/skillcask`, `~/.config/skillcask`), keys listed in `enforce`. A project that
-   sets an enforced key to another value is exit 1 naming the key and the file.
+   sets an enforced key to another value is exit 1 naming the key and the file, unless the
+   environment sets the key: then the project's value is unused.
 3. `[policy]` of the project (or global) `skills.toml`.
 4. User config, keys not in `enforce`.
 5. Built-in defaults.
