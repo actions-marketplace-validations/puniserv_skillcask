@@ -10,62 +10,104 @@ use crate::error::{IO, Result};
 
 pub const SKILL_MD: &str = "SKILL.md";
 
-/// Top-level scalar keys of the YAML frontmatter; nested values are skipped.
+/// Top-level scalar keys of the YAML frontmatter; nested values are skipped. No closing `---`:
+/// no frontmatter.
 pub fn frontmatter(text: &str) -> BTreeMap<String, String> {
-    let mut out = BTreeMap::new();
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-    let mut lines = text.lines();
-    if lines.next().map(str::trim_end) != Some("---") {
-        return out;
-    }
-    for line in lines {
-        if line.trim_end() == "---" {
-            break;
-        }
-        if line.starts_with([' ', '\t', '#', '-']) {
-            continue;
-        }
-        if let Some((k, v)) = line.split_once(':') {
-            let v = v.trim();
-            let v = v
-                .strip_prefix('"')
-                .and_then(|v| v.strip_suffix('"'))
-                .or_else(|| v.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
-                .unwrap_or(v);
-            if !v.is_empty() {
-                out.insert(k.trim().to_string(), v.to_string());
-            }
-        }
-    }
-    out
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    fields(&lines).unwrap_or_default().into_iter().filter_map(|f| Some((f.key.to_string(), f.value?))).collect()
 }
 
 /// Sets the frontmatter `name:` value, keeping every other byte. No frontmatter or no `name:`
-/// line: unchanged, since the directory name then names the skill. Picks the line `frontmatter`
-/// reads (the last top-level `name`); a block or empty value loses its indented continuation.
+/// line: unchanged, since the directory name then names the skill. Picks the key `frontmatter`
+/// reads (the last top-level `name`) and replaces all lines of its value.
 pub fn rename_frontmatter(text: &str, to: &str) -> String {
     let body = text.strip_prefix('\u{feff}').unwrap_or(text);
     let bom = &text[..text.len() - body.len()];
     let lines: Vec<&str> = body.split_inclusive('\n').collect();
-    if lines.first().map(|l| l.trim_end()) != Some("---") {
-        return text.to_string();
-    }
-    let end = lines.iter().skip(1).position(|l| l.trim_end() == "---").map_or(lines.len(), |i| i + 1);
-    fn value(l: &str) -> Option<&str> {
-        let (k, v) = l.split_once(':')?;
-        (!l.starts_with([' ', '\t', '#', '-']) && k.trim() == "name").then(|| v.trim())
-    }
-    let Some(i) = (1..end).rev().find(|&i| value(lines[i]).is_some()) else {
+    let Some(f) = fields(&lines).and_then(|f| f.into_iter().rev().find(|f| f.key == "name")) else {
         return text.to_string();
     };
-    let mut next = i + 1;
-    if value(lines[i]).is_some_and(|v| v.is_empty() || v.starts_with(['>', '|'])) {
-        while next < end && lines[next].starts_with([' ', '\t']) {
-            next += 1;
+    let first = lines[f.lines.start];
+    let eol = &first[first.trim_end_matches(['\n', '\r']).len()..];
+    format!("{bom}{}name: {to}{eol}{}", lines[..f.lines.start].concat(), lines[f.lines.end..].concat())
+}
+
+struct Field<'a> {
+    key: &'a str,
+    /// `None` when empty, nested or an unterminated quote.
+    value: Option<String>,
+    lines: std::ops::Range<usize>,
+}
+
+/// Top-level keys of the frontmatter in `lines` (with line ends); `None` unless it opens and
+/// closes with `---`. Understands the YAML that decides which line is a key: quoted scalars
+/// spanning lines, block scalars and comments.
+fn fields<'a>(lines: &[&'a str]) -> Option<Vec<Field<'a>>> {
+    let line = |i: usize| lines.get(i).map(|l| l.trim_end_matches(['\n', '\r']));
+    let is_end = |l: &str| l.trim_end() == "---";
+    let indented = |l: &str| l.starts_with([' ', '\t']) || l.trim().is_empty();
+    if !line(0).is_some_and(is_end) {
+        return None;
+    }
+    let mut out = Vec::new();
+    let mut i = 1;
+    loop {
+        let l = line(i)?;
+        if is_end(l) {
+            return Some(out);
+        }
+        let start = i;
+        i += 1;
+        let Some((key, v)) = l.split_once(':').filter(|_| !l.starts_with([' ', '\t', '#', '-'])) else { continue };
+        let v = v.trim_start();
+        let mut value = None;
+        if let Some(q) = v.chars().next().filter(|c| matches!(c, '"' | '\'')) {
+            let (mut parts, mut rest) = (Vec::new(), &v[1..]);
+            loop {
+                if let Some(n) = closing_quote(rest, q) {
+                    parts.push(rest[..n].trim());
+                    value = Some(parts.join(" "));
+                    break;
+                }
+                parts.push(rest.trim());
+                match line(i) {
+                    Some(l) if !is_end(l) => (rest, i) = (l, i + 1),
+                    _ => break,
+                }
+            }
+        }
+        let body = i;
+        while line(i).is_some_and(indented) {
+            i += 1;
+        }
+        while i > body && line(i - 1).is_some_and(|l| l.trim().is_empty()) {
+            i -= 1;
+        }
+        if v.starts_with(['>', '|']) {
+            let sep = if v.starts_with('|') { "\n" } else { " " };
+            value = Some((body..i).filter_map(line).map(str::trim).collect::<Vec<_>>().join(sep));
+        } else if !v.starts_with(['"', '\'']) {
+            let cut = v.char_indices().find(|&(n, c)| c == '#' && v[..n].chars().next_back().is_none_or(char::is_whitespace));
+            value = Some(v[..cut.map_or(v.len(), |(n, _)| n)].trim().to_string());
+        }
+        out.push(Field { key: key.trim(), value: value.filter(|v| !v.is_empty()), lines: start..i });
+    }
+}
+
+fn closing_quote(s: &str, q: char) -> Option<usize> {
+    let mut chars = s.char_indices().peekable();
+    while let Some((n, c)) = chars.next() {
+        if q == '"' && c == '\\' {
+            chars.next();
+        } else if c == q {
+            if q == '\'' && chars.next_if(|&(_, c)| c == '\'').is_some() {
+                continue;
+            }
+            return Some(n);
         }
     }
-    let eol = &lines[i][lines[i].trim_end_matches(['\n', '\r']).len()..];
-    format!("{bom}{}name: {to}{eol}{}", lines[..i].concat(), lines[next..].concat())
+    None
 }
 
 /// `[a-z0-9][a-z0-9-]*`: also the directory name under `.agents/skills/`.
@@ -174,6 +216,37 @@ mod tests {
         for t in ["---\nname : one\n---\n", "---\nname: one\nname: two\n---\n", "---\nname: |-\n  x\n---\n"] {
             assert_eq!(frontmatter(&rename_frontmatter(t, "b"))["name"], "b", "{t:?}");
         }
+    }
+
+    #[test]
+    fn frontmatter_agrees_with_yaml() {
+        // Regression: a key-looking line inside a multi-line quoted scalar was read as a key.
+        for q in ['"', '\''] {
+            let t = format!("---\nname: code-review\ndescription: {q}x\nname: innocent\n  y{q}\n---\n");
+            let f = frontmatter(&t);
+            assert_eq!(f["name"], "code-review", "{t:?}");
+            assert_eq!(f["description"], "x name: innocent y");
+            let r = rename_frontmatter(&t, "b");
+            assert_eq!(r, t.replace("name: code-review", "name: b"));
+            assert_eq!(frontmatter(&r)["description"], "x name: innocent y");
+        }
+        let escaped = frontmatter("---\ndescription: \"a \\\" b\nname: c\"\nname: real\n---\n");
+        assert_eq!(escaped["name"], "real");
+        let doubled = frontmatter("---\ndescription: 'it''s\nname: c'\nname: real\n---\n");
+        assert_eq!(doubled["name"], "real");
+
+        let unclosed = "---\nname: a\ndescription: d\n";
+        assert!(frontmatter(unclosed).is_empty());
+        assert_eq!(rename_frontmatter(unclosed, "b"), unclosed);
+
+        let f = frontmatter("---\nname: a # c\nversion: \"1.0.0\" # c\nurl: x#y\nempty: # c\n---\n");
+        assert_eq!((f["name"].as_str(), f["version"].as_str(), f["url"].as_str()), ("a", "1.0.0", "x#y"));
+        assert!(!f.contains_key("empty"));
+        assert_eq!(rename_frontmatter("---\nname: a # c\n---\n", "b"), "---\nname: b\n---\n");
+
+        let f = frontmatter("---\nd1: >-\n  folded\n  text\nd2: |+\n  lit\n  eral\n\nd3: >\nname: n\n---\n");
+        assert_eq!((f["d1"].as_str(), f["d2"].as_str(), f["name"].as_str()), ("folded text", "lit\neral", "n"));
+        assert!(!f.contains_key("d3"));
     }
 
     #[test]
