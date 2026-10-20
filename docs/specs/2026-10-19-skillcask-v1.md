@@ -260,7 +260,10 @@ every `SKILL.md` with frontmatter `name` and `version`, and writes a static Comp
 <dir>/dist/acme/<name>/<version>.zip
 ```
 
-- Package name: frontmatter `package:` when set, else `<vendor>/<name>`.
+- Package name: frontmatter `package:` when set, else `<vendor>/<name>`. The directory a skill sits
+  in plays no part, so nested folders (`skills/team/lang/<name>`) give `<vendor>/<name>` too. One
+  package comes from one directory: two `SKILL.md` files with the same package name are an error,
+  fixed with `package:` in one of them.
 - Zips are deterministic (sorted entries, fixed mtime, fixed permissions), so the same tree gives
   the same `shasum`, which `publish` writes into the metadata.
 - Versions are immutable: `--out` may hold a previous run; an existing version with a different

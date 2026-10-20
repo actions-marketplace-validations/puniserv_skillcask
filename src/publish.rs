@@ -57,6 +57,7 @@ pub fn publish(args: &PublishArgs) -> Result<()> {
     }
 
     let mut found: BTreeMap<String, Vec<Found>> = BTreeMap::new();
+    let mut origin: BTreeMap<String, PathBuf> = BTreeMap::new();
     for dir in dirs {
         let fm = frontmatter(&std::fs::read_to_string(dir.join(SKILL_MD))?);
         let (Some(name), Some(version)) = (fm.get("name"), fm.get("version")) else { continue };
@@ -72,10 +73,12 @@ pub fn publish(args: &PublishArgs) -> Result<()> {
         if !valid_package_name(&package) {
             bail!(MANIFEST, "{at}: invalid package name {package:?}");
         }
-        let versions = found.entry(package.clone()).or_default();
-        if versions.iter().any(|f| f.normalized == normalized) {
-            bail!(MANIFEST, "{package} {version} is defined twice");
+        // Two skills with the same name in different namespaces would merge into one package.
+        let first = origin.entry(package.clone()).or_insert_with(|| dir.clone());
+        if *first != dir {
+            bail!(MANIFEST, "{package} is defined in both {} and {at}; set `package:` in one SKILL.md", first.display());
         }
+        let versions = found.entry(package.clone()).or_default();
         let description = fm.get("description").filter(|d| ![">", "|", ">-", "|-"].contains(&d.as_str())).cloned();
         versions.push(Found { zip: crate::archive::zip_dir(&dir).ctx(&at)?, version: version.clone(), normalized, description });
     }
@@ -319,8 +322,9 @@ mod tests {
         skill(src.path(), "a", "ok", "1.0.0-beta1", "");
         assert!(publish(&args("https://x")).is_err());
         skill(src.path(), "a", "ok", "1.0.0", "");
-        skill(src.path(), "b", "ok", "1.0.0", "other");
-        assert!(publish(&args("https://x")).unwrap_err().msg.contains("defined twice"));
+        skill(src.path(), "b/nested", "ok", "2.0.0", "other");
+        let e = publish(&args("https://x")).unwrap_err().msg;
+        assert!(e.contains("acme/ok is defined in both") && e.contains("package:"), "{e}");
         let no_base = PublishArgs { base_url: None, ..args("https://x") };
         assert!(publish(&no_base).unwrap_err().msg.contains("--base-url is required"));
         let bad_tpl = PublishArgs { inline: true, dist_url: Some("https://x/{name}.zip".into()), ..no_base };
