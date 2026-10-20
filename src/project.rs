@@ -121,7 +121,14 @@ pub fn temp_dir(s: &Scope) -> Result<tempfile::TempDir> {
     std::fs::create_dir_all(&store)?;
     let mut runs = RUNS.lock().unwrap_or_else(|e| e.into_inner());
     if !runs.iter().any(|(p, _)| *p == store) {
-        let f = std::fs::File::create(store.join(format!("{RUN}{}", std::process::id())))?;
+        // No live run has our pid, so whatever is there is stale, and a planted symlink must not
+        // make the create truncate its target.
+        let path = store.join(format!("{RUN}{}", std::process::id()));
+        match std::fs::remove_file(&path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
+            _ => {}
+        }
+        let f = std::fs::File::create_new(path)?;
         f.lock()?;
         runs.push((store.clone(), f));
     }
@@ -701,6 +708,21 @@ mod tests {
         assert!(link(&s, ".junie/skills", STORE, "x").is_err());
         unlink(&s, ".claude/skills", "x").unwrap();
         assert_eq!(link_state(&s, ".claude/skills", STORE, "x"), LinkState::Missing);
+    }
+
+    /// A repository may commit `.skillcask-run-<pid>` symlinks; creating the run lock once
+    /// truncated their targets.
+    #[cfg(unix)]
+    #[test]
+    fn a_planted_run_lock_symlink_leaves_its_target_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = Scope::project(dir.path().to_path_buf());
+        let victim = dir.path().join("victim");
+        std::fs::write(&victim, "precious").unwrap();
+        std::fs::create_dir_all(dir.path().join(STORE)).unwrap();
+        std::os::unix::fs::symlink(&victim, dir.path().join(STORE).join(format!("{RUN}{}", std::process::id()))).unwrap();
+        temp_dir(&s).unwrap();
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "precious");
     }
 
     fn global_scope(home: &Path) -> Scope {
