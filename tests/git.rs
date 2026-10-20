@@ -171,6 +171,32 @@ fn credentials_come_from_auth_json() {
 }
 
 #[test]
+fn github_token_goes_to_a_git_host_only_when_the_user_names_it() {
+    let s = Server::start();
+    let r = repo();
+    commit(r.path(), &[("SKILL.md", &skill_md("tool"))], 300, Some("v1.0.0"));
+    let url = served(&s, r.path());
+    let mut p = Project::new(&s);
+    p.env.push(("GITHUB_TOKEN".into(), "ght0ken".into()));
+    // The project names the git host as its GitHub API; that does not make it trusted.
+    p.write(
+        "skills.toml",
+        &format!(
+            "[repositories]\npackagist = false\ngithub = {{ type = \"github\", url = \"{}\" }}\n\n[agents]\ntargets = [\".claude/skills\"]\n",
+            s.url("/api")
+        ),
+    );
+    p.ok(&["add", &format!("git:{url}")]);
+    assert!(!s.log().is_empty() && s.log().iter().all(|l| l.ends_with("auth=false")), "{:?}", s.log());
+
+    // The user names it (GitHub Enterprise): the token goes along.
+    std::fs::remove_file(p.path().join("skills.lock")).unwrap();
+    p.env.push(("SKILLCASK_GITHUB_API".into(), s.url("/api")));
+    p.ok(&["update"]);
+    assert!(s.log().iter().any(|l| l.ends_with("auth=true")), "{:?}", s.log());
+}
+
+#[test]
 fn requires_and_info_take_a_git_target() {
     let s = Server::start();
     let r = repo();

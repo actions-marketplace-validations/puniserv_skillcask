@@ -238,6 +238,10 @@ pub fn remember_skills_sh(on: bool) -> Result<std::path::PathBuf> {
 /// Set once the environment-over-`enforce` warnings are printed: a run loads the manifest more than once.
 static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Layer names `resolve` records and `fixed` matches.
+pub const ENVIRONMENT: &str = "environment";
+pub const ENFORCED: &str = "config.toml, enforced";
+
 /// Merges the layers; a manifest value that differs from an enforced one is an error.
 pub fn resolve(project: &Layer, o: &Outer) -> Result<Effective> {
     let mut out = Effective::new();
@@ -261,9 +265,9 @@ pub fn resolve(project: &Layer, o: &Outer) -> Result<Effective> {
             )));
         }
         let pick = if let Some(v) = o.env.values.get(k) {
-            Some((v, "environment"))
+            Some((v, ENVIRONMENT))
         } else if let Some(v) = enforced {
-            Some((v, "config.toml, enforced"))
+            Some((v, ENFORCED))
         } else if let Some(v) = project.values.get(k) {
             Some((v, "skills.toml"))
         } else {
@@ -279,6 +283,11 @@ pub fn resolve(project: &Layer, o: &Outer) -> Result<Effective> {
         }
     }
     Ok(out)
+}
+
+/// Whether `k` comes from a layer the project cannot loosen: the environment or an enforced key.
+pub fn fixed(e: &Effective, k: &str) -> bool {
+    matches!(e.get(k), Some((_, ENVIRONMENT | ENFORCED)))
 }
 
 /// With `min-release-age` enforced, the shortest cooldown a project may give the repository at

@@ -95,6 +95,58 @@ fn github_token_goes_to_the_api_host_only() {
 }
 
 #[test]
+fn github_token_never_follows_a_github_url_from_the_manifest() {
+    let gh = Server::start();
+    let sha = "1".repeat(40);
+    gh.put("/repos/acme/t/tags", json!([{ "name": "v1.0.0", "commit": { "sha": sha } }]).to_string());
+    gh.put(&format!("/repos/acme/t/commits/{sha}"), gh_commit(&sha, 240).to_string());
+    gh.put(&format!("/repos/acme/t/zipball/{sha}"), zipball(&[("SKILL.md", &skill_md("t"))]));
+    let mut p = Project::new(&gh);
+    p.env.push(("GITHUB_TOKEN".into(), "ght0ken".into()));
+    p.write("skills.toml", &format!("[repositories]\npackagist = false\ngithub = {{ type = \"github\", url = \"{}\" }}\n", gh.base));
+    p.ok(&["add", "github:acme/t"]);
+    assert!(!gh.log().is_empty() && gh.log().iter().all(|l| l.ends_with("auth=false")), "{:?}", gh.log());
+    let e = p.expect(&["add", "github:acme/private"], 1);
+    assert!(e.contains("skillcask auth set") && !e.contains("GITHUB_TOKEN"), "{e}");
+
+    // GitHub Actions names its API (GitHub Enterprise on a GHE runner); that host gets the token.
+    std::fs::remove_file(p.path().join("skills.lock")).unwrap();
+    p.env.push(("GITHUB_API_URL".into(), gh.base.clone()));
+    p.ok(&["update"]);
+    assert!(gh.log().iter().any(|l| l.ends_with("auth=true")), "{:?}", gh.log());
+}
+
+#[test]
+fn an_enforced_github_source_is_not_widened_by_the_manifest() {
+    let gh = Server::start();
+    let p = Project::new(&gh);
+    p.config("[policy]\nallow-sources = [\"github\"]\nenforce = [\"allow-sources\"]\n");
+    p.write("skills.toml", &format!("[repositories]\npackagist = false\ngithub = {{ type = \"github\", url = \"{}\" }}\n", gh.base));
+    let e = p.expect(&["add", "github:acme/t"], 1);
+    assert!(e.contains("not in policy.allow-sources") && e.contains("\"github\" there means https://api.github.com"), "{e}");
+    assert!(gh.log().is_empty(), "{:?}", gh.log());
+}
+
+#[test]
+fn an_enforced_github_source_means_the_api_the_user_names() {
+    let gh = Server::start();
+    let sha = "1".repeat(40);
+    gh.put("/repos/acme/t/tags", json!([{ "name": "v1.0.0", "commit": { "sha": sha } }]).to_string());
+    gh.put(&format!("/repos/acme/t/commits/{sha}"), gh_commit(&sha, 240).to_string());
+    gh.put(&format!("/repos/acme/t/zipball/{sha}"), zipball(&[("SKILL.md", &skill_md("t"))]));
+    let p = with_github(Project::new(&gh), &gh);
+    p.config("[policy]\nallow-sources = [\"github\"]\nenforce = [\"allow-sources\"]\n");
+    p.write("skills.toml", "[repositories]\npackagist = false\n");
+    p.ok(&["add", "github:acme/t"]);
+    // A committed lock moves the repository to public GitHub, which the user did not name.
+    let lock = p.read("skills.lock").replace(&format!("{}/repos/acme/t", gh.base), "https://api.github.com/repos/acme/t");
+    assert!(lock.contains("https://api.github.com/repos/acme/t"), "{lock}");
+    p.write("skills.lock", &lock);
+    let e = p.expect(&["install", "--frozen"], 1);
+    assert!(e.contains("not in policy.allow-sources"), "{e}");
+}
+
+#[test]
 fn github_rate_limit_is_named() {
     let s = Server::start();
     s.respond("/repos/acme/x/tags", 403, &[("x-ratelimit-remaining", "0")], "");

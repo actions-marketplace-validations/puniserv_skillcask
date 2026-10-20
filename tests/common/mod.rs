@@ -319,6 +319,13 @@ impl Project {
         self.expect(&a, code)
     }
 
+    /// Writes the user `config.toml` (D18).
+    pub fn config(&self, text: &str) {
+        let dir = self.home().join(".config/skillcask");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.toml"), text).unwrap();
+    }
+
     pub fn global_manifest(&self, server: &Server, skills: &str) {
         let dir = self.home().join(".config/skillcask");
         std::fs::create_dir_all(&dir).unwrap();
@@ -386,6 +393,10 @@ impl Project {
             .env_remove("CLICOLOR_FORCE")
             .env_remove("SKILLCASK_HOME")
             .env_remove("XDG_CONFIG_HOME")
+            // Set by GitHub Actions and by developers; they decide which host gets a token.
+            .env_remove("GITHUB_API_URL")
+            .env_remove("GITHUB_TOKEN")
+            .env_remove("GH_TOKEN")
             // HOME holds the only git config, so no system credential helper (Keychain) is asked.
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env_remove("GIT_CONFIG_GLOBAL")
