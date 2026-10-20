@@ -61,11 +61,10 @@ A worklist over the manifest entries:
    it names, recording the requirer.
 3. For each required package: collect its constraints from all requirers and from its manifest
    entry, if any. Keep the locked version when it satisfies all of them and its source did not
-   change; else pick the highest version that satisfies all of them (each checked on its own, not
-   joined into one string, because `||` binds looser than `,`). None: exit 1, listing each
-   requirer and its constraint.
-4. Repeat for the new packages' own `requires:` until nothing changes. A cycle ends because a
-   package is resolved once per run.
+   change; else pick the highest version that satisfies their intersection (see Lock). None: exit 1,
+   listing each requirer and its constraint.
+4. Repeat for the new packages' own `requires:` until nothing drifts. A cycle settles after a
+   round; more than 50 rounds is exit 1 (`dependencies do not settle`).
 
 Sources:
 
@@ -85,7 +84,7 @@ Sources:
 
 ## Lock
 
-Two keys, written only when they apply:
+One new key, written only when it applies:
 
 ```toml
 [[package]]
@@ -98,21 +97,22 @@ requires = { "acme/gr-security-ssdlc-review" = "^1.0", "github:mattpocock/skills
 [[package]]
 name = "acme/gr-security-ssdlc-review"
 constraint = "^1.0"
-dependency = true
 version = "1.3.1"
 # …
 ```
 
 - `requires`: the union of `requires:` of the package's installed skills, sorted. It lets
   `install`, `status` and `remove` see the graph without downloading.
-- `dependency = true`: the package has no manifest entry. Its `constraint` is the distinct
-  constraints of its requirers, sorted, joined with `, `, for display; drift is decided by
-  checking the locked version against each requirer's constraint, not by comparing this string.
-- A lock with either key is written as `version = 2`; one without stays `version = 1`, byte for
+- A dependency is a package with no manifest entry. Its `constraint` is the Composer AND of the
+  distinct constraints on it (requirers and manifest entry), sorted and distributed over `||`
+  (`^1 || ^2` and `^2.1` give `^1, ^2.1 || ^2, ^2.1`); a single constraint stays as written, so
+  locks without dependencies do not change. Drift compares it like a manifest constraint: a
+  changed requirer constraint that the locked version still satisfies keeps the version. A hyphen
+  range combined with another constraint is exit 1.
+- A lock with `requires` is written as `version = 2`; one without stays `version = 1`, byte for
   byte as before. An older skillcask stops on `version = 2` instead of dropping dependencies it
   does not understand.
-- Parsing validates `requires` keys and constraints like the frontmatter. A `dependency = true`
-  package nobody requires is drift, not a parse error.
+- Parsing validates `requires` keys and constraints like the frontmatter.
 
 ## Commands
 
@@ -143,7 +143,7 @@ version = "1.3.1"
 ## Testing
 
 - Unit: `requires:` parsing (block map, quotes, comments, invalid shapes), lock round-trip with
-  `requires` / `dependency` and the version switch, constraint intersection with `||`.
+  `requires` and the version switch, constraint intersection with `||`.
 - Integration (local HTTPS fixture repository): transitive install and frozen reinstall; two
   requirers with a common and with an incompatible constraint (exit 1); dependency only in a
   repository the consumer did not declare (exit 1); GitHub dependency without and with the
