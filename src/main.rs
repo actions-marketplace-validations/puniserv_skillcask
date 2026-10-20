@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 mod archive;
 mod commands;
 mod error;

@@ -1,0 +1,21 @@
+name: Unsafe code
+
+# A report for dependency changes, not a gate: skillcask itself forbids unsafe code, and its
+# dependencies (TLS, zip, hashing) need some. Review what a Cargo.lock change adds.
+on:
+  pull_request:
+    paths: [Cargo.lock]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-geiger:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install stable --profile minimal && rustup default stable
+      - run: cargo install --locked cargo-geiger --version 0.14.0
+      # cargo-geiger exits 1 whenever any crate uses unsafe.
+      - run: cargo geiger --locked --output-format GitHubMarkdown >> "$GITHUB_STEP_SUMMARY" || true
