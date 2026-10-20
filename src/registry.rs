@@ -115,6 +115,11 @@ fn expand(versions: &[Value], minified: bool) -> Vec<Map<String, Value>> {
     out
 }
 
+/// Composer writes `time` with or without an offset; without one it is UTC.
+fn release_time(t: &str) -> Option<Timestamp> {
+    t.parse().ok().or_else(|| t.parse::<jiff::civil::DateTime>().ok()?.to_zoned(jiff::tz::TimeZone::UTC).ok().map(|z| z.timestamp()))
+}
+
 fn candidates(package: &str, versions: Vec<Map<String, Value>>, base: &Url) -> Vec<Candidate> {
     let s = |m: &Map<String, Value>, path: &[&str]| -> Option<String> {
         let mut v = m.get(path[0])?;
@@ -133,7 +138,12 @@ fn candidates(package: &str, versions: Vec<Map<String, Value>>, base: &Url) -> V
         let Some(parsed) = s(&m, &["version_normalized"]).and_then(|n| Version::parse(&n)).or_else(|| Version::parse(&version)) else {
             continue;
         };
-        let dist_url = s(&m, &["dist", "url"]).and_then(|u| base.join(&u).ok());
+        // Userinfo of the repository URL must not end up in the lock.
+        let dist_url = s(&m, &["dist", "url"]).and_then(|u| base.join(&u).ok()).map(|mut u| {
+            let _ = u.set_username("");
+            let _ = u.set_password(None);
+            u
+        });
         let (Some("zip"), Some(url)) = (s(&m, &["dist", "type"]).as_deref(), dist_url) else {
             eprintln!("warning: skipping {package} {version}: no zip dist");
             continue;
@@ -143,10 +153,17 @@ fn candidates(package: &str, versions: Vec<Map<String, Value>>, base: &Url) -> V
             Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).map(String::from).collect(),
             _ => vec![crate::skill::SKILL_MD.to_string()],
         };
+        let time = s(&m, &["time"]).and_then(|t| {
+            let parsed = release_time(&t);
+            if parsed.is_none() {
+                eprintln!("warning: {package} {version}: unrecognised release time {t:?}");
+            }
+            parsed
+        });
         out.push(Candidate {
             name: package.to_string(),
             parsed,
-            time: s(&m, &["time"]).and_then(|t| t.parse().ok()),
+            time,
             dist: Dist {
                 kind: "zip".into(),
                 url: url.to_string(),
@@ -362,6 +379,30 @@ mod tests {
         c.push(untimed);
         let picked = select(&c, "acme/x", "^1.0", SignedDuration::from_hours(72), now).unwrap();
         assert_eq!((picked.version.as_str(), picked.time.is_some()), ("v1.1.0", true));
+    }
+
+    #[test]
+    fn times_without_offset_are_utc() {
+        let v = |t: &str| json!({"version": "1.0.0", "type": "ai-agent-skill", "time": t, "dist": {"type": "zip", "url": "/x.zip"}});
+        let base = Url::parse("https://repo.example.com/p2/acme/x.json").unwrap();
+        let utc: Timestamp = "2026-10-19T11:00:00Z".parse().unwrap();
+        for t in ["2026-10-19 11:00:00", "2026-10-19T11:00:00", "2026-10-19T11:00:00+00:00"] {
+            let c = candidates("acme/x", expand(&[v(t)], false), &base);
+            assert_eq!(c[0].time, Some(utc), "{t}");
+            let now: Timestamp = "2026-10-19T12:00:00Z".parse().unwrap();
+            assert!(select(&c, "acme/x", "*", SignedDuration::from_hours(72), now).is_err(), "cooldown applies to {t}");
+        }
+        assert_eq!(candidates("acme/x", expand(&[v("yesterday")], false), &base)[0].time, None);
+    }
+
+    #[test]
+    fn userinfo_is_not_copied_into_dist_urls() {
+        let v = json!({"version": "1.0.0", "type": "ai-agent-skill", "dist": {"type": "zip", "url": "/dist/x.zip"}});
+        let base = Url::parse("https://u:secret@repo.example.com/p2/acme/x.json").unwrap();
+        assert_eq!(candidates("acme/x", vec![v.as_object().unwrap().clone()], &base)[0].dist.url, "https://repo.example.com/dist/x.zip");
+        let abs =
+            json!({"version": "1.0.0", "type": "ai-agent-skill", "dist": {"type": "zip", "url": "https://u:p@cdn.example.com/x.zip"}});
+        assert_eq!(candidates("acme/x", vec![abs.as_object().unwrap().clone()], &base)[0].dist.url, "https://cdn.example.com/x.zip");
     }
 
     #[test]
