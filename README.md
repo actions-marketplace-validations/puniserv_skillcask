@@ -95,6 +95,8 @@ Codex lists both.
 [repositories]
 # Packagist is the implicit last repository.
 acme = { type = "composer", url = "https://git.example.com/api/v4/group/42/-/packages/composer/packages.json" }
+# A repository you review yourself can skip the cooldown; the others keep it.
+own = { url = "https://git.example.com/own/packages.json", min-release-age = "0" }
 
 [skills]
 "netresearch/agent-jira-skill" = "^3.34"

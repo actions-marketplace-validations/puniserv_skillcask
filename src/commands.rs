@@ -117,7 +117,7 @@ impl Ctx {
             return self.lock_candidate(req, &github::repository(&req.name), &c, None, prepared);
         }
         let (repo, cands) = find(&Registry::new(self.http()?), m, req, locked)?;
-        let c = registry::select(&cands, &req.name, &req.constraint, m.policy.min_release_age, Timestamp::now())?;
+        let c = registry::select(&cands, &req.name, &req.constraint, m.min_release_age(&repo), Timestamp::now())?;
         self.lock_candidate(req, &repo, &c, None, prepared)
     }
 
@@ -161,7 +161,7 @@ impl Ctx {
                 Candidate { dist: p.dist.clone(), time: p.released, dist_shasum: None, ..c }
             }
         };
-        let repo = Repository { name: String::new(), url: p.repository.clone() };
+        let repo = Repository { name: String::new(), url: p.repository.clone(), ..Default::default() };
         self.lock_candidate(req, &repo, &c, Some(&p.dist_sha256), prepared).map(Some)
     }
 
@@ -940,7 +940,7 @@ pub fn add(ctx: &Ctx, spec: &str, repository: Option<String>) -> Result<()> {
     let lock = Lock::load(&ctx.s.config)?;
     let probe = SkillReq { name: name.clone(), repository: repository.clone(), ..Default::default() };
     let (repo, cands) = find(&Registry::new(ctx.http()?), &m, &probe, lock.get(&name))?;
-    let c = registry::select(&cands, &name, constraint.as_deref().unwrap_or("*"), m.policy.min_release_age, Timestamp::now())?;
+    let c = registry::select(&cands, &name, constraint.as_deref().unwrap_or("*"), m.min_release_age(&repo), Timestamp::now())?;
     let constraint = constraint.unwrap_or_else(|| default_constraint(&c, m.policy.allow_ranges));
     let (skills, rename) = existing.map(|e| (e.skills, e.rename)).unwrap_or_default();
     let req = SkillReq { name, constraint, repository, skills, rename, ..Default::default() };
@@ -1182,12 +1182,13 @@ pub fn outdated(ctx: &Ctx) -> Result<()> {
             rows.push([req.name.clone(), locked, dash(within), dash(latest), String::new()]);
             continue;
         }
-        let (_, cands) = reg.find(&m.repositories, &req.name, req.repository.as_deref())?;
+        let (repo, cands) = reg.find(&m.repositories, &req.name, req.repository.as_deref())?;
+        let age = m.min_release_age(&repo);
         let c = Constraint::parse(&req.constraint).map_err(|e| Error::new(MANIFEST, e))?;
         let within = registry::newest(&cands, Some(&c));
         let note = match within.and_then(|w| w.time.map(|t| (w, t))) {
-            Some((w, t)) if now.checked_sub(m.policy.min_release_age).ok().is_none_or(|c| t > c) => {
-                let eligible = t.checked_add(m.policy.min_release_age).unwrap_or(Timestamp::MAX);
+            Some((w, t)) if now.checked_sub(age).ok().is_none_or(|c| t > c) => {
+                let eligible = t.checked_add(age).unwrap_or(Timestamp::MAX);
                 format!("{} eligible {}", w.version, eligible.round(jiff::Unit::Second).unwrap_or(eligible))
             }
             _ => String::new(),

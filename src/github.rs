@@ -24,7 +24,7 @@ pub fn api() -> String {
 }
 
 pub fn repository(name: &str) -> Repository {
-    Repository { name: "github".into(), url: format!("{}/repos/{name}", api()) }
+    Repository { name: "github".into(), url: format!("{}/repos/{name}", api()), ..Default::default() }
 }
 
 pub fn is_sha(r: &str) -> bool {

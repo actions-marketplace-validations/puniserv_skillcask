@@ -505,11 +505,11 @@ mod tests {
         assert!(metadata_url(&root, &base, "acme/nope").unwrap().is_none());
         assert!(metadata_url(&json!({}), &base, "acme/x").is_err());
         assert!(metadata_url(&json!({"packages": {"acme/y": {}}}), &base, "acme/x").unwrap().is_none());
-        let packagist = Repository { name: "packagist".into(), url: crate::manifest::PACKAGIST_URL.into() };
+        let packagist = Repository { name: "packagist".into(), url: crate::manifest::PACKAGIST_URL.into(), ..Default::default() };
         assert_eq!(packages_url(&packagist).unwrap().as_str(), "https://repo.packagist.org/packages.json");
         assert!(is_packagist(&packagist));
         let raw = "https://git.example.com/api/v4/projects/7/repository/files/composer%2Fpackages.json/raw?ref=main";
-        assert_eq!(packages_url(&Repository { name: "r".into(), url: raw.into() }).unwrap().as_str(), raw);
+        assert_eq!(packages_url(&Repository { name: "r".into(), url: raw.into(), ..Default::default() }).unwrap().as_str(), raw);
         assert!(glob("a*c", "abbc") && glob("*", "x") && !glob("a*c", "abd") && glob("v/*", "v/x"));
     }
 }

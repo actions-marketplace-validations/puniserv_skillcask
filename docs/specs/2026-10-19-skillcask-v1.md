@@ -63,6 +63,7 @@ byte-identical skills to the ones committed in the lock, or a non-zero exit.
 | D12 | Repositories may carry every package inline in `packages.json` (Composer v1/Satis format) instead of `metadata-url`; `publish --inline` writes it, `--dist-url` places the zips. | Private monorepos can then be hosted on GitLab with no new infrastructure: `packages.json` lives in git and is read through the raw files API, zips go to the Generic Package Registry, whose file names cannot contain `/`. One file stays small for a few hundred skills. |
 | D13 | `--global` manages personal skills: store `~/.agents/skills`, links in `~/.claude/skills` etc., manifest and lock in `~/.config/skillcask`; a skill name clash inside one scope is solved with `rename`, a clash across scopes is a warning. | Agents read personal skills from home and skills have no namespaces. The design is in `docs/specs/2026-10-20-global-and-aliases.md`. |
 | D14 | `publish` records the tree hash of each new version in `extra.ai-agent-skill-tree`; without the published zip in `--out`, a version whose `shasum` differs counts as unchanged when its tree matches, and no zip is written for it. | CI that does not keep `dist/` must not fail on every published version when a `zip` or deflate update changes the bytes of the same tree. Downloading every old zip first would cost a request per version on each run. |
+| D15 | A repository may set its own `min-release-age`, which overrides `policy.min-release-age` for packages resolved there; GitHub sources keep the policy value. | Internal skills are reviewed in merge requests and published after every merge; a project-wide `"0"` would also drop the cooldown for public sources. |
 
 ## Project files
 
@@ -82,6 +83,7 @@ skills.lock                  # lock, committed, generated
 [repositories]
 # packagist = { type = "composer", url = "https://repo.packagist.org" }  # implicit default
 acme = { type = "composer", url = "https://git.example.com/api/v4/group/42/-/packages/composer/packages.json" }
+# own = { url = "…", min-release-age = "0" }   # overrides policy.min-release-age here (D15)
 
 [skills]
 "netresearch/agent-jira-skill" = "^2.0"

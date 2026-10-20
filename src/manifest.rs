@@ -55,10 +55,12 @@ pub fn template(global: bool) -> &'static str {
     if global { GLOBAL_TEMPLATE } else { TEMPLATE }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Repository {
     pub name: String,
     pub url: String,
+    /// Overrides `policy.min-release-age` for packages resolved here.
+    pub min_release_age: Option<SignedDuration>,
 }
 
 /// A GitHub source: `constraint` is a version constraint over tags, or a branch, tag or commit.
@@ -116,6 +118,11 @@ impl Manifest {
     pub fn skill(&self, name: &str) -> Option<&SkillReq> {
         self.skills.iter().find(|s| s.name == name)
     }
+
+    /// The cooldown for packages from `repo`.
+    pub fn min_release_age(&self, repo: &Repository) -> SignedDuration {
+        repo.min_release_age.unwrap_or(self.policy.min_release_age)
+    }
 }
 
 fn bad(what: impl std::fmt::Display) -> crate::error::Error {
@@ -137,20 +144,15 @@ pub fn parse(text: &str, global: bool) -> Result<Manifest> {
             if !url.starts_with("https://") {
                 return Err(bad(format!("repository {name}: only https:// URLs are allowed")));
             }
-            repositories.push(Repository { name: name.to_string(), url: url.to_string() });
+            let min_release_age = r.get("min-release-age").map(|i| age(i, &format!("repository {name}: min-release-age"))).transpose()?;
+            repositories.push(Repository { name: name.to_string(), url: url.to_string(), min_release_age });
         }
     }
 
     let policy = doc.get("policy").and_then(Item::as_table_like);
     let get = |k: &str| policy.and_then(|p| p.get(k));
-    let min_release_age = match get("min-release-age") {
-        None => SignedDuration::from_hours(72),
-        Some(i) => match (i.as_str(), i.as_integer()) {
-            (Some(s), _) => parse_age(s)?,
-            (_, Some(0)) => SignedDuration::ZERO,
-            _ => return Err(bad("policy.min-release-age must be a string such as \"3d\"")),
-        },
-    };
+    let min_release_age =
+        get("min-release-age").map(|i| age(i, "policy.min-release-age")).transpose()?.unwrap_or(SignedDuration::from_hours(72));
     let flag = |k: &str| -> Result<bool> {
         match get(k) {
             None => Ok(true),
@@ -159,7 +161,7 @@ pub fn parse(text: &str, global: bool) -> Result<Manifest> {
     };
     let policy = Policy { min_release_age, allow_ranges: flag("allow-ranges")?, packagist: flag("packagist")? };
     if policy.packagist && !repositories.iter().any(|r| r.name == "packagist") {
-        repositories.push(Repository { name: "packagist".into(), url: PACKAGIST_URL.into() });
+        repositories.push(Repository { name: "packagist".into(), url: PACKAGIST_URL.into(), ..Default::default() });
     }
 
     let mut skills = Vec::new();
@@ -293,6 +295,14 @@ pub fn valid_package_name(n: &str) -> bool {
             && !s.contains("..")
     };
     part(v) && part(p)
+}
+
+fn age(i: &Item, what: &str) -> Result<SignedDuration> {
+    match (i.as_str(), i.as_integer()) {
+        (Some(s), _) => parse_age(s),
+        (_, Some(0)) => Ok(SignedDuration::ZERO),
+        _ => Err(bad(format!("{what} must be a string such as \"3d\""))),
+    }
 }
 
 /// `"3d"`, `"12h"`, `"30m"`, `"1w"`, `"90s"`, `"0"`.
