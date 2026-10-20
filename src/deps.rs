@@ -51,7 +51,14 @@ pub fn check(key: &str, value: &str) -> std::result::Result<(Target, Option<GitH
     };
     let req = SkillReq { name: t.package().into(), constraint: value.into(), github: mode, ..Default::default() };
     // The consumer's allow-ranges applies to its own manifest only; the lock pins the version.
-    let any = Policy { min_release_age: Default::default(), allow_ranges: true, packagist: true, github_requires: true };
+    let any = Policy {
+        min_release_age: Default::default(),
+        allow_ranges: true,
+        packagist: true,
+        github_requires: true,
+        allow_sources: None,
+        effective: Default::default(),
+    };
     manifest::check_constraint(&req, &any).map_err(|e| format!("{key}: {e}"))?;
     Ok((t, mode))
 }

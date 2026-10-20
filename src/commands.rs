@@ -82,7 +82,7 @@ impl Ctx {
         if self.s.config.join(manifest::FILE).exists() {
             Manifest::load(&self.s.config, self.s.global)
         } else {
-            manifest::parse(manifest::template(self.s.global), self.s.global)
+            manifest::layered(manifest::template(self.s.global), self.s.global)
         }
     }
 
@@ -114,6 +114,7 @@ impl Ctx {
     /// `locked`: the entry's lock entry before this command, if any.
     fn resolve(&self, m: &Manifest, req: &SkillReq, locked: Option<&Package>, prepared: &mut HashMap<String, Fetched>) -> Result<Package> {
         if req.github.is_some() {
+            m.check_github(&req.name)?;
             let c = github::resolve(self.http()?, req, m.policy.min_release_age, Timestamp::now())?;
             return self.lock_candidate(req, &github::repository(&req.name), &c, None, prepared);
         }
@@ -132,6 +133,9 @@ impl Ctx {
         prepared: &mut HashMap<String, Fetched>,
     ) -> Result<Option<Package>> {
         let Some(p) = p.filter(|p| !source_changed(m, req, p)) else { return Ok(None) };
+        if let Some(why) = m.refuses(&p.repository) {
+            bail!(MANIFEST, "{}: {why}", p.name);
+        }
         let fits = || {
             let c = Constraint::parse(&req.constraint).ok();
             c.zip(version::Version::parse(&p.version)).is_some_and(|(c, v)| c.allows(&v))
@@ -282,6 +286,12 @@ impl Ctx {
     fn preflight(&self, m: &Manifest, lock: &Lock, old: &Lock) -> Result<()> {
         for p in m.targets.iter().map(String::as_str).chain([STORE, ".gitignore"]) {
             project::no_symlink(&self.s, p)?;
+        }
+        // A committed lock must not bring in what the policy refuses.
+        for p in &lock.packages {
+            if let Some(why) = m.refuses(&p.repository) {
+                bail!(MANIFEST, "{}: {why}", p.name);
+            }
         }
         if let Some(c) = self.conflicts(m, lock, old, &BTreeSet::new())?.first() {
             let renames = m.skill(&c.package).map(|r| &r.rename);
@@ -926,9 +936,17 @@ fn locked_repository<'a>(m: &'a Manifest, req: &SkillReq, locked: Option<&Packag
 }
 
 fn find(reg: &Registry, m: &Manifest, req: &SkillReq, locked: Option<&Package>) -> Result<(Repository, Vec<Candidate>)> {
+    // A blocked repository fails here; searching the others could pick a namesake elsewhere.
+    let blocked = |r: &Repository| m.refuses(&r.url).map(|why| Error::new(MANIFEST, format!("{}: {why}", req.name)));
     let Some(repo) = locked_repository(m, req, locked) else {
-        return reg.find(&m.repositories, &req.name, req.repository.as_deref());
+        if let Some(e) = req.repository.as_deref().and_then(|n| m.repository(n)).and_then(blocked) {
+            return Err(e);
+        }
+        return reg.find(&m.allowed_repositories(), &req.name, req.repository.as_deref());
     };
+    if let Some(e) = blocked(repo) {
+        return Err(e);
+    }
     match reg.versions(repo, &req.name)? {
         Some(c) if !c.is_empty() => Ok((repo.clone(), c)),
         Some(_) => bail!(MANIFEST, "{} in repository {} has no installable ai-agent-skill versions", req.name, repo.name),
@@ -1041,6 +1059,7 @@ fn add_github(ctx: &Ctx, spec: &str) -> Result<()> {
         bail!(MANIFEST, "{s:?} is not a valid skill name ([a-z0-9][a-z0-9-]*)");
     }
     let m = ctx.manifest_or_default()?;
+    m.check_github(&name)?;
     let existing = m.skill(&name).filter(|e| e.github.is_some()).cloned();
     let skills = match (skill, existing.as_ref().map(|e| e.skills.clone())) {
         (None, have) => have.flatten(),
@@ -1269,12 +1288,13 @@ pub fn outdated(ctx: &Ctx) -> Result<()> {
     for req in &m.skills {
         let locked = lock.get(&req.name).map_or("-".into(), |p| p.version.clone());
         if req.github.is_some() {
+            m.check_github(&req.name)?;
             let (within, latest) = github::newest(ctx.http()?, req)?;
             let dash = |v: Option<String>| v.unwrap_or_else(|| "-".into());
             rows.push([req.name.clone(), locked, dash(within), dash(latest), String::new()]);
             continue;
         }
-        let (repo, cands) = reg.find(&m.repositories, &req.name, req.repository.as_deref())?;
+        let (repo, cands) = reg.find(&m.allowed_repositories(), &req.name, req.repository.as_deref())?;
         let age = m.min_release_age(&repo);
         let c = Constraint::parse(&req.constraint).map_err(|e| Error::new(MANIFEST, e))?;
         let within = registry::newest(&cands, Some(&c));
@@ -1343,6 +1363,9 @@ pub fn status(ctx: &Ctx) -> Result<()> {
         row(&mut rows, "-", "-", l, state);
     }
     print_table(&rows);
+    for (k, (v, from)) in &m.policy.effective {
+        println!("policy.{k} = {v} ({from})");
+    }
     if bad > 0 {
         bail!(MANIFEST, "{bad} problem(s); run `skillcask install`");
     }
@@ -1449,7 +1472,7 @@ pub fn doctor(ctx: &Ctx, fix: bool) -> Result<()> {
 
 pub fn search(ctx: &Ctx, query: &str) -> Result<()> {
     let m = ctx.manifest_or_default()?;
-    let results = Registry::new(ctx.http()?).search(&m.repositories, query)?;
+    let results = Registry::new(ctx.http()?).search(&m.allowed_repositories(), query)?;
     if results.is_empty() {
         println!("no skill packages match {query:?}");
     }

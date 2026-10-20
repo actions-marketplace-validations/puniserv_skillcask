@@ -9,6 +9,7 @@ mod github;
 mod http;
 mod lock;
 mod manifest;
+mod policy;
 mod project;
 mod publish;
 mod registry;

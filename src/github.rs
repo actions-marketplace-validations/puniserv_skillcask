@@ -13,14 +13,23 @@ use crate::registry::{self, Candidate};
 use crate::skill::{FileEntry, SKILL_MD};
 use crate::version::{Constraint, Version};
 
-const API: &str = "https://api.github.com";
+pub const API: &str = "https://api.github.com";
+/// The `url` of the manifest's `github` repository entry.
+static CONFIGURED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 const TAG_PAGES: usize = 10;
 /// Pushes read from the Activity API, one page.
 const ACTIVITY: usize = 100;
 
-/// `SKILLCASK_GITHUB_API` points at GitHub Enterprise (`https://ghe.example.com/api/v3`) or a test server.
+/// `SKILLCASK_GITHUB_API`, else the manifest's `github` entry, points at GitHub Enterprise
+/// (`https://ghe.example.com/api/v3`) or a test server.
 pub fn api() -> String {
-    std::env::var("SKILLCASK_GITHUB_API").unwrap_or_else(|_| API.into()).trim_end_matches('/').to_string()
+    let set = || CONFIGURED.get().cloned().unwrap_or_else(|| API.into());
+    std::env::var("SKILLCASK_GITHUB_API").ok().filter(|v| !v.is_empty()).unwrap_or_else(set).trim_end_matches('/').to_string()
+}
+
+/// A run reads one manifest, so the first one sets the API base.
+pub fn set_api(url: &str) {
+    let _ = CONFIGURED.set(url.to_string());
 }
 
 pub fn repository(name: &str) -> Repository {

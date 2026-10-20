@@ -18,6 +18,9 @@ pub const TEMPLATE: &str = r#"# skillcask manifest. Lock: skills.lock (generated
 
 [repositories]
 # name = { type = "composer", url = "https://example.com/packages.json" }
+# Default sources; `packagist = false` turns one off. Packagist is always searched last.
+packagist = { url = "https://repo.packagist.org" }
+github = { type = "github", url = "https://api.github.com" }
 
 [skills]
 # "vendor/name" = "^1.0"
@@ -30,13 +33,17 @@ local = ".skills"   # project skills, linked into .agents/skills
 [policy]
 min-release-age = "3d"
 allow-ranges = true
-packagist = true
+# allow-sources = ["packagist", "github"]   # only these: repository names, packagist, github, https:// prefixes
 "#;
 
 pub const GLOBAL_TEMPLATE: &str = r#"# skillcask global manifest: personal skills in ~/.agents/skills. Lock: skills.lock.
+# Policy for every project goes into config.toml next to this file.
 
 [repositories]
 # name = { type = "composer", url = "https://example.com/packages.json" }
+# Default sources; `packagist = false` turns one off. Packagist is always searched last.
+packagist = { url = "https://repo.packagist.org" }
+github = { type = "github", url = "https://api.github.com" }
 
 [skills]
 # "vendor/name" = "^1.0"
@@ -48,7 +55,7 @@ targets = [".claude/skills", ".junie/skills"]
 [policy]
 min-release-age = "3d"
 allow-ranges = true
-packagist = true
+# allow-sources = ["packagist", "github"]   # only these: repository names, packagist, github, https:// prefixes
 "#;
 
 pub fn template(global: bool) -> &'static str {
@@ -91,12 +98,18 @@ pub struct Policy {
     pub packagist: bool,
     /// `requires:` may name GitHub sources (D16).
     pub github_requires: bool,
+    /// The only sources allowed; `None`: all (D17).
+    pub allow_sources: Option<Vec<String>>,
+    /// Keys set by a layer, with that layer, for `status`.
+    pub effective: crate::policy::Effective,
 }
 
 #[derive(Clone, Debug)]
 pub struct Manifest {
-    /// Declared order, then the implicit Packagist unless `policy.packagist = false`.
+    /// Declared order, Packagist last; it is implicit unless turned off.
     pub repositories: Vec<Repository>,
+    /// The GitHub API base; `None` with `github = false`.
+    pub github: Option<String>,
     pub skills: Vec<SkillReq>,
     pub targets: Vec<String>,
     /// Project skills, linked into the store (`[agents] local`, default `.skills`).
@@ -110,7 +123,44 @@ impl Manifest {
         if !path.exists() {
             bail!(MANIFEST, "{FILE} not found; run `skillcask init{}`", if global { " --global" } else { "" });
         }
-        parse(&std::fs::read_to_string(&path)?, global)
+        layered(&std::fs::read_to_string(&path)?, global)
+    }
+
+    /// Whether `url` (a repository URL as the lock records it) is an allowed source.
+    pub fn allows(&self, url: &str) -> bool {
+        let Some(list) = &self.policy.allow_sources else { return true };
+        list.iter().any(|e| match e.as_str() {
+            "packagist" => crate::policy::under(url, PACKAGIST_URL),
+            "github" => crate::policy::under(url, &format!("{}/repos/", crate::github::api())),
+            e if e.starts_with("https://") => crate::policy::under(url, e),
+            name => self.repository(name).is_some_and(|r| r.url == url),
+        })
+    }
+
+    /// Why packages from `url` are refused, or `None` when they are allowed.
+    pub fn refuses(&self, url: &str) -> Option<String> {
+        if self.allows(url) {
+            return None;
+        }
+        let from = self.policy.effective.get("allow-sources").map_or("", |(_, f)| f);
+        let shown = url::Url::parse(url).map_or_else(|_| url.to_string(), |u| crate::http::redact(&u));
+        Some(format!("source {shown} is not in policy.allow-sources ({from})"))
+    }
+
+    /// Repositories lookups may contact.
+    pub fn allowed_repositories(&self) -> Vec<Repository> {
+        self.repositories.iter().filter(|r| self.allows(&r.url)).cloned().collect()
+    }
+
+    /// Errors unless GitHub repository `name` (`owner/repo`) may be used.
+    pub fn check_github(&self, name: &str) -> Result<()> {
+        if self.github.is_none() {
+            bail!(MANIFEST, "{name}: GitHub is turned off (github = false in [repositories] of {FILE})");
+        }
+        if let Some(why) = self.refuses(&format!("{}/repos/{name}", crate::github::api())) {
+            bail!(MANIFEST, "{name}: {why}");
+        }
+        Ok(())
     }
 
     pub fn repository(&self, name: &str) -> Option<&Repository> {
@@ -131,44 +181,99 @@ fn bad(what: impl std::fmt::Display) -> crate::error::Error {
     crate::error::Error::new(MANIFEST, format!("{FILE}: {what}"))
 }
 
+/// The manifest alone, without the user config and the environment.
 pub fn parse(text: &str, global: bool) -> Result<Manifest> {
+    parse_with(text, global, &crate::policy::Outer::default())
+}
+
+/// The manifest with the policy layers of `config.toml` and the environment (D17).
+pub fn layered(text: &str, global: bool) -> Result<Manifest> {
+    let m = parse_with(text, global, &crate::policy::outer()?)?;
+    if let Some(api) = &m.github {
+        crate::github::set_api(api);
+    }
+    Ok(m)
+}
+
+pub fn parse_with(text: &str, global: bool, outer: &crate::policy::Outer) -> Result<Manifest> {
+    use crate::policy::Value as V;
     let doc: DocumentMut = text.parse().map_err(bad)?;
 
     let mut repositories = Vec::new();
+    let mut github = Some(crate::github::API.to_string());
+    let mut packagist_off = false;
     if let Some(t) = doc.get("repositories").and_then(Item::as_table_like) {
         for (name, item) in t.iter() {
+            if matches!(name, "packagist" | "github") && item.as_bool().is_some() {
+                if item.as_bool() == Some(false) {
+                    if name == "github" {
+                        github = None;
+                    } else {
+                        packagist_off = true;
+                    }
+                }
+                continue;
+            }
             let r = item.as_table_like().ok_or_else(|| bad(format!("repository {name} must be a table")))?;
             let kind = r.get("type").and_then(Item::as_str).unwrap_or("composer");
-            if kind != "composer" {
-                return Err(bad(format!("repository {name}: type {kind:?} is not supported, only \"composer\"")));
-            }
             let url = r.get("url").and_then(Item::as_str).ok_or_else(|| bad(format!("repository {name}: missing url")))?;
             if !url.starts_with("https://") {
                 return Err(bad(format!("repository {name}: only https:// URLs are allowed")));
+            }
+            match (kind, name) {
+                ("github", "github") => {
+                    if r.contains_key("min-release-age") {
+                        return Err(bad("repository github: min-release-age is not supported; GitHub uses policy.min-release-age"));
+                    }
+                    github = Some(url.trim_end_matches('/').to_string());
+                    continue;
+                }
+                ("github", _) => return Err(bad(format!("repository {name}: type \"github\" is only accepted on the key github"))),
+                ("composer", _) => {}
+                _ => return Err(bad(format!("repository {name}: type {kind:?} is not supported, only \"composer\" or \"github\""))),
             }
             let min_release_age = r.get("min-release-age").map(|i| age(i, &format!("repository {name}: min-release-age"))).transpose()?;
             repositories.push(Repository { name: name.to_string(), url: url.to_string(), min_release_age });
         }
     }
 
-    let policy = doc.get("policy").and_then(Item::as_table_like);
-    let get = |k: &str| policy.and_then(|p| p.get(k));
-    let min_release_age =
-        get("min-release-age").map(|i| age(i, "policy.min-release-age")).transpose()?.unwrap_or(SignedDuration::from_hours(72));
-    let flag = |k: &str| -> Result<bool> {
-        match get(k) {
-            None => Ok(true),
-            Some(i) => i.as_bool().ok_or_else(|| bad(format!("policy.{k} must be true or false"))),
-        }
+    let mut project = crate::policy::layer(doc.get("policy").and_then(Item::as_table_like), FILE, false)?;
+    if packagist_off {
+        project.values.insert("packagist", V::Bool(false));
+    }
+    let effective = crate::policy::resolve(&project, outer)?;
+    let flag = |k: &str, default: bool| match effective.get(k) {
+        Some((V::Bool(b), _)) => *b,
+        _ => default,
     };
-    let github_requires = match get("github-requires") {
-        None => false,
-        Some(i) => i.as_bool().ok_or_else(|| bad("policy.github-requires must be true or false"))?,
+    let policy = Policy {
+        min_release_age: match effective.get("min-release-age") {
+            Some((V::Age(a), _)) => *a,
+            _ => SignedDuration::from_hours(72),
+        },
+        allow_ranges: flag("allow-ranges", true),
+        packagist: flag("packagist", true),
+        github_requires: flag("github-requires", false),
+        allow_sources: match effective.get("allow-sources") {
+            Some((V::List(l), _)) => Some(l.clone()),
+            _ => None,
+        },
+        effective,
     };
-    let policy = Policy { min_release_age, allow_ranges: flag("allow-ranges")?, packagist: flag("packagist")?, github_requires };
-    if policy.packagist && !repositories.iter().any(|r| r.name == "packagist") {
+    if let Some(list) = &policy.allow_sources
+        && let Some(n) = list.iter().find(|e| !matches!(e.as_str(), "packagist" | "github") && !e.starts_with("https://"))
+        && !repositories.iter().any(|r| &r.name == n)
+    {
+        return Err(bad(format!("policy.allow-sources: unknown repository {n:?}")));
+    }
+    let is_packagist = |r: &Repository| r.name == "packagist" || r.url.trim_end_matches('/') == PACKAGIST_URL;
+    if !policy.packagist {
+        repositories.retain(|r| !is_packagist(r));
+    } else if !repositories.iter().any(is_packagist) {
         repositories.push(Repository { name: "packagist".into(), url: PACKAGIST_URL.into(), ..Default::default() });
     }
+    // A public package must never shadow a private one with the same name.
+    repositories.sort_by_key(is_packagist);
 
     let mut skills = Vec::new();
     if let Some(t) = doc.get("skills").and_then(Item::as_table_like) {
@@ -256,7 +361,7 @@ pub fn parse(text: &str, global: bool) -> Result<Manifest> {
         return Err(bad(format!("agents.local {local:?} cannot also be a target")));
     }
 
-    Ok(Manifest { repositories, skills, targets, local, policy })
+    Ok(Manifest { repositories, github, skills, targets, local, policy })
 }
 
 /// The version constraint, or for a GitHub `ref` its syntax; `allow-ranges = false` also forbids
@@ -515,6 +620,30 @@ min-release-age = "12h"
         assert_eq!(m.skills[2].skills.as_deref(), Some(&["review".to_string()][..]));
         assert_eq!(m.targets, [".claude/skills"]);
         assert_eq!(m.policy.min_release_age, SignedDuration::from_hours(12));
+    }
+
+    #[test]
+    fn default_sources() {
+        let names = |m: &Manifest| m.repositories.iter().map(|r| r.name.clone()).collect::<Vec<_>>();
+        let m = parse(&TEMPLATE.replace("[repositories]\n", "[repositories]\nzz = { url = \"https://z\" }\n"), false).unwrap();
+        assert_eq!(names(&m), ["zz", "packagist"]);
+        let listed_first =
+            parse("[repositories]\npackagist = { url = \"https://repo.packagist.org\" }\nacme = { url = \"https://a\" }", false).unwrap();
+        assert_eq!(names(&listed_first), ["acme", "packagist"], "Packagist is searched last");
+        assert_eq!(m.github.as_deref(), Some(crate::github::API));
+        let off = parse("[repositories]\npackagist = false\ngithub = false", false).unwrap();
+        assert!(off.repositories.is_empty() && off.github.is_none());
+        assert!(!off.policy.packagist);
+        let ghe = parse("[repositories]\ngithub = { type = \"github\", url = \"https://ghe.example.com/api/v3/\" }", false).unwrap();
+        assert_eq!(ghe.github.as_deref(), Some("https://ghe.example.com/api/v3"));
+        assert!(parse("[repositories]\nmine = { type = \"github\", url = \"https://x\" }", false).is_err());
+        assert!(parse("[repositories]\ngithub = { type = \"github\", url = \"https://x\", min-release-age = \"0\" }", false).is_err());
+        assert!(parse("[policy]\nallow-sources = [\"nope\"]", false).unwrap_err().msg.contains("unknown repository"));
+        let allow = parse("[repositories]\nacme = { url = \"https://a.example/packages.json\" }\n[policy]\nallow-sources = [\"acme\", \"https://b.example/\"]", false).unwrap();
+        assert!(allow.allows("https://a.example/packages.json") && allow.allows("https://b.example/x/packages.json"));
+        assert!(!allow.allows(PACKAGIST_URL) && !allow.allows("https://a.example/other.json"));
+        assert_eq!(names(&allow), ["acme", "packagist"]);
+        assert_eq!(allow.allowed_repositories().len(), 1);
     }
 
     #[test]
