@@ -178,4 +178,4 @@ decision (`conflict -> suggested name`); the terminal itself is not tested.
 ## Order
 
 A (global), then C (shadow warnings, uses the home paths from A), then B (aliases and the prompt).
-One commit per part, README updated in each.
+Small commits per task (see the plan), README updated with each part.
