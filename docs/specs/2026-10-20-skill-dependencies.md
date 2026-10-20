@@ -1,6 +1,6 @@
 # Spec: dependencies between skills
 
-Date: 2026-10-20. Status: draft.
+Date: 2026-10-20. Status: implemented.
 
 ## Problem
 

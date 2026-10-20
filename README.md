@@ -113,11 +113,33 @@ local = ".skills"        # project skills
 min-release-age = "3d"   # cooldown for add/update; "0" disables
 allow-ranges = true      # false: every version must be exact
 packagist = true         # false: drop the implicit Packagist repository
+github-requires = false  # true: dependencies may come from GitHub
 ```
 
 Constraints follow Composer semantics: `^0.3` means `>=0.3.0 <0.4.0`, `~1.2` means
 `>=1.2 <2.0`, and pre-releases are only selected when the constraint names a stability
 (`^1.0@beta`).
+
+### Dependencies
+
+A skill that needs other skills lists them in its `SKILL.md`:
+
+```yaml
+---
+name: gitlab-branch-mr
+version: 1.2.0
+requires:
+  acme/security-review: ^1.0
+  github:mattpocock/skills/pr: main
+---
+```
+
+`add`, `install` and `update` resolve, lock and install them like your own entries: same
+cooldown, same hashes, one version per package (the highest one every requirer accepts). They
+stay out of `skills.toml`; the lock records each package's `requires` and switches to
+`version = 2`. A dependency is looked up only in your repositories, in order, then Packagist;
+a `github:` one needs `github-requires = true`. `remove` drops dependencies nobody needs any
+more, and `status` shows them as `via <requirer>`.
 
 ### Name conflicts
 
