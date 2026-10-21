@@ -208,7 +208,7 @@ skillcask -g install --frozen    # e.g. from a dotfiles repository
 
 ### Commands
 
-Every command except `publish` takes `-g, --global`.
+Every command except `publish` and `validate` takes `-g, --global`.
 
 | Command | |
 |---|---|
@@ -217,13 +217,16 @@ Every command except `publish` takes `-g, --global`.
 | `add github:<owner/repo>[/skill][@version-or-ref]` | The same from a GitHub repository, see below. |
 | `remove <vendor/name>…` | Drop from manifest and lock; delete files, links and gitignore lines. |
 | `install [--frozen]` | Install the lock. `--frozen` (implied by `CI`) fails when the lock is out of date. |
-| `update [vendor/name…]` | Re-resolve within constraints. |
-| `outdated` | Newer versions, and when cooled-down ones become eligible. |
+| `update [vendor/name…] [--diff]` | Re-resolve within constraints. `--diff` prints what changes in each updated or added package; it does not ask before installing. |
+| `outdated [--strict]` | Newer versions, and when cooled-down ones become eligible. `--strict` exits 1 when `update` would lock a newer version. |
+| `diff [vendor/name] [--to constraint]` | Unified diff of skill files from the locked version to the one `update` would lock, see below. |
+| `info <vendor/name[@constraint]\|github:owner/repo\|skill>` | A package's skills, versions, description, license and requirements, or which package installs a skill. |
 | `status` | Exit 1 when manifest, lock or installed files disagree. |
 | `doctor [--fix]` | Broken or committed links, stale gitignore block, modified skills. |
 | `search <query>` | Packagist (`type=ai-agent-skill`) and skill packages of the other repositories, GitLab included. |
 | `auth set\|remove <host>` | Keep a registry token in git's credential helper (Keychain, Credential Manager, libsecret). |
 | `publish --vendor v --base-url URL --out DIR [--inline] [--dist-url TPL] [paths…]` | Build a static Composer repository from a monorepo. |
+| `validate [paths…]` | Check `SKILL.md` files against the Agent Skills spec, see below. |
 | `<other>` | Runs `skillcask-<other>` from `PATH`, like git and cargo plugins. |
 
 Exit codes: 0 ok, 1 manifest/lock/status problems, 2 authentication, 3 network, 4 hash mismatch,
@@ -233,6 +236,37 @@ Output is coloured in a terminal (`NO_COLOR` turns it off, `CLICOLOR_FORCE` on) 
 the next step on a `hint:` line. For coding agents, `--agent` or `SKILLCASK_AGENT=1` prints terse,
 uncoloured, tab-separated output with only the rows that need action; it is on by itself when
 `AI_AGENT` or `CLAUDECODE=1` is set, unless `SKILLCASK_AGENT=0`.
+
+A failed connection, HTTP 429 or a 5xx response is retried twice, after 1 s and 2 s or after the
+`Retry-After` seconds the server sends. A `Retry-After` above 60 s, a spent GitHub rate limit, a
+timeout or a TLS error fails at once.
+
+`add`, `update` and `outdated` warn about a package its registry marks `abandoned` and name the
+replacement when there is one (and it is a valid package name). Installing from the lock does not ask the registry.
+
+**Reviewing an update:** a skill is a prompt, so read what changes before you take it.
+`skillcask diff` prints a unified diff of the skill files, from the locked version to the one
+`update` would lock (newest within the constraint, past the cooldown), for every entry in
+`skills.toml` with a newer version; `diff vendor/name --to 2.0.0` compares one package with
+another version. A package new to the lock, such as a dependency a new version adds, is shown as
+all added. Nothing is installed or written. Control characters, bidi controls and other
+invisible characters in the diff are shown as `<U+XXXX>` (a carriage return too, when the line
+ends change), and invisible characters in changed files are warned about. Files over 1 MiB or
+10,000 lines print `Files differ (too large to show)`. `update --diff` prints the same diff
+before it writes the lock, then installs without asking: run `skillcask diff` first to review
+and decide. A scheduled CI job can run `skillcask outdated --strict` (exit 1 when something is to
+update), then `skillcask update --diff` and open a pull request with the output.
+
+**Where a skill comes from:** `skillcask info vendor/name` shows the package's skills with their
+descriptions, its versions, description, license, `abandoned` and `requires`, for the locked
+version or else the newest one `add` would take (`@constraint` for another); `info
+github:owner/repo` lists the skills of a GitHub repository before you add it. `skillcask info
+<skill>` names the package that installs an installed skill and the `skills.toml` entry, or the
+chain of `requires`, that brings it in.
+
+**Merge conflicts in `skills.lock`:** a lock with conflict markers fails with a hint. Resolve
+`skills.toml`, keep either side of the lock (`git checkout --theirs skills.lock`) and run
+`skillcask install`: it locks the entries from the other side that the kept lock lacks.
 
 ### Skills from GitHub and skills.sh
 
@@ -291,6 +325,13 @@ what you picked.
   and paths that collide by case or Unicode form fail a skill that contains them, and are
   skipped outside the selected skills.
 - No package code runs, ever. No telemetry.
+- `add` and `update` (and `install` when it resolves) warn about characters a reviewer cannot
+  see in the text files of new content: bidi controls (`U+202A`-`U+202E`, `U+2066`-`U+2069`,
+  `U+200E`, `U+200F`, `U+061C`), zero-width characters (`U+200B`-`U+200D`, `U+2060`, `U+FEFF`) and
+  Unicode tags (`U+E0000`-`U+E007F`), as `warning: acme/x: skills/foo/SKILL.md:12: U+202E
+  RIGHT-TO-LEFT OVERRIDE`, at most five per file. A leading byte order mark and a zero width
+  joiner inside an emoji are not reported; right-to-left and Indic text can trigger warnings.
+  Installing from the lock does not warn again.
 - `min-release-age` for GitHub sources uses times GitHub sets: release publication for tags,
   push times from the Activity API for branches. A tag without a release, or a ref GitHub lists no
   pushes for, falls back to commit dates, which the committer sets; reviewing what `add`/`update`
@@ -318,6 +359,22 @@ skillcask publish --vendor acme --base-url https://skills.example.com --out publ
 This writes `packages.json`, `p2/acme/<name>.json` and deterministic zips under `dist/`. Published
 versions are immutable, and re-running on unchanged skills changes no file. Serve the directory
 over HTTPS.
+
+Check the skills before publishing; `validate` exits 1 on any error and warns about invisible
+Unicode, as `add` does:
+
+```sh
+skillcask validate skills/
+```
+
+It follows the [Agent Skills specification](https://agentskills.io/specification): `name` 1-64
+lowercase letters, digits and single hyphens, equal to the directory name; `description` 1-1024
+characters; `compatibility` at most 500. Without paths it searches the current directory.
+`publish` skips a `SKILL.md` without `name` or `version` and names it in a warning.
+
+To retire a skill, publish a new version with `deprecated: true`, or `deprecated: vendor/name`
+naming its replacement, in the frontmatter. It becomes Composer's `abandoned`, and consumers see a
+warning on `add`, `update` and `outdated`.
 
 Hosts that cannot serve `/` inside file names (GitLab's Generic Package Registry) take a single
 file instead:
