@@ -148,6 +148,18 @@ allow-sources = ["https://gitlab.example.com/", "github"]
 enforce = ["allow-sources"]
 ```
 
+An enforced `min-release-age` also applies to a repository's own `min-release-age`: a project
+may only make it longer. Exceptions, by URL prefix, stay in `config.toml`:
+
+```toml
+[policy]
+min-release-age = "3d"
+enforce = ["min-release-age"]
+
+[policy.repository-min-release-age]
+"https://gitlab.example.com/" = "0"   # internal skills, reviewed in merge requests
+```
+
 `config.toml` and the environment take URL prefixes, not repository names, since a name means
 whatever a project calls it. `skillcask status` prints each key that is set and where it came
 from.

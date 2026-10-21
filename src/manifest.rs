@@ -275,6 +275,21 @@ pub fn parse_with(text: &str, global: bool, outer: &crate::policy::Outer) -> Res
     }
     // A public package must never shadow a private one with the same name.
     repositories.sort_by_key(is_packagist);
+    if let Some((V::Age(enforced), "config.toml, enforced")) = policy.effective.get("min-release-age") {
+        for r in &mut repositories {
+            let floor = crate::policy::repository_floor(outer, &r.url, *enforced);
+            match r.min_release_age {
+                Some(a) if a < floor => {
+                    return Err(bad(format!(
+                        "repository {}: min-release-age \"{a:#}\" is shorter than \"{floor:#}\" enforced by {}; remove it or ask to lift it",
+                        r.name, outer.config_path
+                    )));
+                }
+                Some(_) => {}
+                None => r.min_release_age = Some(floor),
+            }
+        }
+    }
 
     let mut skills = Vec::new();
     if let Some(t) = doc.get("skills").and_then(Item::as_table_like) {
@@ -766,5 +781,33 @@ min-release-age = "12h"
         write_skill(dir.path(), true, &ok).unwrap();
         let text = std::fs::read_to_string(dir.path().join(FILE)).unwrap();
         assert!(text.starts_with("# skillcask global manifest") && text.contains("\"a/b\" = \"^1.0\""), "{text}");
+    }
+
+    #[test]
+    fn enforced_age_binds_repositories() {
+        let doc: DocumentMut = "[policy]\nmin-release-age = \"3d\"\nenforce = [\"min-release-age\"]\n[policy.repository-min-release-age]\n\"https://git.example.com/\" = \"0\"\n\"https://git.example.com/slow/\" = \"5d\"".parse().unwrap();
+        let config = crate::policy::layer(doc.get("policy").and_then(Item::as_table_like), "config.toml", true).unwrap();
+        let o = crate::policy::Outer { config, config_path: "config.toml".into(), env: Default::default() };
+        let m = |repo: &str| parse_with(&format!("[repositories]\nr = {{ url = {repo} }}"), false, &o);
+        let age = |m: Manifest| m.min_release_age(&m.repositories[0]);
+
+        // Regression: a project's min-release-age = "0" used to bypass an enforced cooldown.
+        let e = m(r#""https://other.example/packages.json", min-release-age = "0""#).unwrap_err();
+        assert!(e.msg.contains("repository r: min-release-age \"0s\" is shorter than \"72h\" enforced by config.toml"), "{}", e.msg);
+        assert_eq!(age(m(r#""https://other.example/packages.json""#).unwrap()), SignedDuration::from_hours(72));
+        assert_eq!(age(m(r#""https://other.example/packages.json", min-release-age = "7d""#).unwrap()), SignedDuration::from_hours(168));
+        assert_eq!(age(m(r#""https://git.example.com/packages.json", min-release-age = "0""#).unwrap()), SignedDuration::ZERO);
+        assert_eq!(age(m(r#""https://git.example.com/packages.json""#).unwrap()), SignedDuration::ZERO);
+        assert!(m(r#""https://git.example.com/slow/packages.json", min-release-age = "1d""#).is_err(), "longest prefix wins");
+        let packagist = m(r#""https://other.example/packages.json", min-release-age = "4d""#).unwrap();
+        assert_eq!(packagist.min_release_age(&packagist.repositories[1]), SignedDuration::from_hours(72));
+
+        let env = crate::policy::env_layer(|k| (k == "SKILLCASK_MIN_RELEASE_AGE").then(|| "1h".to_string())).unwrap();
+        let lifted = parse_with(
+            "[repositories]\nr = { url = \"https://other.example/p.json\", min-release-age = \"0\" }",
+            false,
+            &crate::policy::Outer { env, ..o },
+        );
+        assert_eq!(age(lifted.unwrap()), SignedDuration::ZERO, "the environment lifts enforcement");
     }
 }

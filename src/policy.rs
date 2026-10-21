@@ -11,6 +11,7 @@ use crate::bail;
 use crate::error::{Error, MANIFEST, Result};
 
 pub const CONFIG: &str = "config.toml";
+pub const REPOSITORY_AGES: &str = "repository-min-release-age";
 pub const KEYS: [&str; 5] = ["min-release-age", "allow-ranges", "packagist", "github-requires", "allow-sources"];
 
 #[derive(Clone, Debug, PartialEq)]
@@ -38,6 +39,9 @@ impl std::fmt::Display for Value {
 pub struct Layer {
     pub values: BTreeMap<&'static str, Value>,
     pub enforce: BTreeSet<&'static str>,
+    /// `config.toml` only: URL prefix to the cooldown an enforced `min-release-age` allows for
+    /// repositories under it (D28).
+    pub repository_ages: BTreeMap<String, SignedDuration>,
 }
 
 /// The layers around a manifest: the user config and the environment.
@@ -116,6 +120,18 @@ pub fn layer(t: Option<&dyn TableLike>, file: &str, config: bool) -> Result<Laye
             }
             continue;
         }
+        if config && k == REPOSITORY_AGES {
+            let t = item.as_table_like().ok_or_else(|| bad(k, "must be a table of URL prefix = age".into()))?;
+            for (prefix, age) in t.iter() {
+                if !prefix.starts_with("https://") || prefix.len() == "https://".len() {
+                    return Err(bad(k, format!("{prefix:?} is not an https:// URL prefix")));
+                }
+                let age = age.as_str().ok_or_else(|| bad(k, format!("{prefix:?} must be a string such as \"3d\"")))?;
+                let age = crate::manifest::parse_age(age).map_err(|e| bad(k, format!("{prefix:?}: {}", e.msg)))?;
+                out.repository_ages.insert(prefix.to_string(), age);
+            }
+            continue;
+        }
         let Some(k) = key(k) else {
             if config {
                 bail!(MANIFEST, "{file}: unknown key policy.{k}");
@@ -127,6 +143,9 @@ pub fn layer(t: Option<&dyn TableLike>, file: &str, config: bool) -> Result<Laye
     }
     if let Some(k) = out.enforce.iter().find(|k| !out.values.contains_key(*k)) {
         bail!(MANIFEST, "{file}: policy.enforce lists {k}, which policy does not set");
+    }
+    if !out.repository_ages.is_empty() && !out.enforce.contains("min-release-age") {
+        bail!(MANIFEST, "{file}: policy.{REPOSITORY_AGES} needs min-release-age in policy.enforce");
     }
     Ok(out)
 }
@@ -217,6 +236,12 @@ pub fn resolve(project: &Layer, o: &Outer) -> Result<Effective> {
     Ok(out)
 }
 
+/// With `min-release-age` enforced, the shortest cooldown a project may give the repository at
+/// `url`: the longest matching prefix of `repository-min-release-age`, else the enforced value.
+pub fn repository_floor(o: &Outer, url: &str, enforced: SignedDuration) -> SignedDuration {
+    o.config.repository_ages.iter().filter(|(p, _)| under(url, p)).max_by_key(|(p, _)| p.len()).map_or(enforced, |(_, a)| *a)
+}
+
 /// `url` is `prefix` or below it on a `/` (or query) boundary.
 pub fn under(url: &str, prefix: &str) -> bool {
     url == prefix || url.starts_with(prefix) && (prefix.ends_with('/') || url[prefix.len()..].starts_with(['/', '?']))
@@ -265,6 +290,12 @@ mod tests {
         assert!(cfg("[policy]\ntypo = true").unwrap_err().msg.contains("unknown key"));
         assert!(cfg("[policy]\nenforce = [\"packagist\"]").unwrap_err().msg.contains("does not set"));
         assert!(cfg("[policy]\nenforce = [\"nope\"]").is_err());
+        let ages = "[policy]\nmin-release-age = \"1d\"\n[policy.repository-min-release-age]\n";
+        assert!(cfg(&format!("{ages}\"https://a/\" = \"0\"")).unwrap_err().msg.contains("needs min-release-age in policy.enforce"));
+        let ages = ages.replace("\n[", "\nenforce = [\"min-release-age\"]\n[");
+        assert!(cfg(&format!("{ages}\"https://a/\" = \"0\"")).is_ok());
+        assert!(cfg(&format!("{ages}acme = \"0\"")).unwrap_err().msg.contains("not an https:// URL prefix"));
+        assert!(cfg(&format!("{ages}\"https://a/\" = 0")).is_err());
         assert!(proj("[policy]\ntypo = true").values.is_empty());
         assert!(env_layer(|k| (k == "SKILLCASK_ALLOW_RANGES").then(|| "yes".to_string())).is_err());
         assert!(env_layer(|_| Some(" ".into())).unwrap().values.is_empty());
