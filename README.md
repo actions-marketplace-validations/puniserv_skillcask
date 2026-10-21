@@ -77,7 +77,6 @@ skills.lock                  # lock, commit it
 .agents/skills/<name>/       # installed skill (gitignored)
 .agents/skills/.skillcask-installed  # what this machine installed (gitignored)
 .claude/skills/<name>  -> ../../.agents/skills/<name>
-.junie/skills/<name>   -> ../../.agents/skills/<name>
 .gitignore                   # managed block
 ```
 
@@ -108,7 +107,7 @@ github = { type = "github", url = "https://api.github.com" }   # GitHub Enterpri
 "anthropics/skills" = { github = true, skills = ["pdf"] }      # default branch
 
 [agents]
-targets = [".claude/skills", ".junie/skills"]
+targets = ["claude", "kiro"]   # agent names or paths with a "/"; default: config.toml, else ["claude"]
 local = ".skills"        # project skills
 
 [policy]
@@ -118,6 +117,32 @@ packagist = true         # false: drop the implicit Packagist repository
 github-requires = false  # true: dependencies may come from GitHub
 allow-sources = ["acme", "own", "packagist", "github"]   # only these sources; default: all
 ```
+
+### Agents
+
+Most agents read `.agents/skills` themselves (Codex, Copilot, Cursor, Gemini CLI, OpenCode, Amp,
+Junie, Devin/Windsurf, Roo Code, Cline, Goose, Factory, Mistral Vibe), so they need no link.
+`[agents] targets` lists the agents that need one, by name, or any directory as a path with a `/`:
+
+| Name | Project | Home (`--global`) |
+|---|---|---|
+| `claude` | `.claude/skills` | `~/.claude/skills` |
+| `kiro` | `.kiro/skills` | `~/.kiro/skills` |
+| `junie` | store | `~/.junie/skills` |
+| `codex`, `copilot`, `cursor`, `gemini`, `opencode`, `amp`, `devin`, `roo`, `cline`, `goose`, `factory`, `vibe` | store | store |
+
+Set the list once in `config.toml` next to the global manifest; a `skills.toml` that sets
+`targets` replaces it. Manifests from before 0.6.0 carry an explicit list: delete the line to
+follow `config.toml`.
+
+```toml
+# ~/.config/skillcask/config.toml
+[agents]
+targets = ["claude", "kiro"]
+```
+
+When a target is dropped, the next `install` removes the links skillcask made there; `doctor`
+reports them. `status` prints the targets, where they came from and the directories they link.
 
 Constraints follow Composer semantics: `^0.3` means `>=0.3.0 <0.4.0`, `~1.2` means
 `>=1.2 <2.0`, and pre-releases are only selected when the constraint names a stability
@@ -211,8 +236,8 @@ skillcask -g install --frozen    # e.g. from a dotfiles repository
 
 - `skills.toml`, `skills.lock` and an optional `auth.json` live in `~/.config/skillcask`
   (`$XDG_CONFIG_HOME/skillcask`; `SKILLCASK_HOME` overrides both). Keep them in your dotfiles.
-- Skills go to `~/.agents/skills` (read by Codex), with links in `~/.claude/skills` and
-  `~/.junie/skills` (`[agents] targets`, relative to home). Links are absolute, so a symlinked
+- Skills go to `~/.agents/skills` (read by most agents), with links in `~/.claude/skills`
+  (`[agents] targets`, see Agents). Links are absolute, so a symlinked
   `~/.claude` works. `[agents] local` does not apply.
 - Personal skills you wrote by hand stay where they are and are not linked anywhere.
 - The list of managed paths is `~/.agents/skills/.skillcask-installed`, local to the machine;

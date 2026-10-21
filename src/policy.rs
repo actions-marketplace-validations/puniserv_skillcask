@@ -51,6 +51,8 @@ pub struct Outer {
     /// Shown in messages; empty when there is no config file.
     pub config_path: String,
     pub env: Layer,
+    /// `[agents] targets` of `config.toml` (D29).
+    pub targets: Option<Vec<String>>,
 }
 
 /// Each key that is set, its value and the layer it came from.
@@ -172,22 +174,34 @@ pub fn outer() -> Result<Outer> {
     let Some(path) = crate::scope::config_dir().map(|d| d.join(CONFIG)) else {
         return Ok(Outer { env, ..Default::default() });
     };
-    let (config, config_path) = read_config(&path)?;
-    Ok(Outer { config, config_path, env })
+    let (config, targets, config_path) = read_config(&path)?;
+    Ok(Outer { config, config_path, env, targets })
 }
 
-fn read_config(path: &Path) -> Result<(Layer, String)> {
+fn read_config(path: &Path) -> Result<(Layer, Option<Vec<String>>, String)> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Layer::default(), String::new())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Layer::default(), None, String::new())),
         Err(e) => return Err(e.into()),
     };
     let shown = path.display().to_string();
     let doc: DocumentMut = text.parse().map_err(|e| Error::new(MANIFEST, format!("{shown}: {e}")))?;
-    if let Some((k, _)) = doc.iter().find(|(k, _)| *k != "policy") {
-        bail!(MANIFEST, "{shown}: only [policy] is read here, found {k}");
+    if let Some((k, _)) = doc.iter().find(|(k, _)| !matches!(*k, "policy" | "agents")) {
+        bail!(MANIFEST, "{shown}: only [policy] and [agents] are read here, found {k}");
     }
-    Ok((layer(doc.get("policy").and_then(Item::as_table_like), &shown, true)?, shown))
+    let mut targets = None;
+    if let Some(a) = doc.get("agents") {
+        let a = a.as_table_like().ok_or_else(|| Error::new(MANIFEST, format!("{shown}: agents must be a table")))?;
+        for (k, item) in a.iter() {
+            if k != "targets" {
+                bail!(MANIFEST, "{shown}: agents.{k} is not read here, only agents.targets");
+            }
+            let list = item.as_array().and_then(|l| l.iter().map(|v| v.as_str().map(String::from)).collect::<Option<Vec<_>>>());
+            targets =
+                Some(list.ok_or_else(|| Error::new(MANIFEST, format!("{shown}: agents.targets must be a list of agent names or paths")))?);
+        }
+    }
+    Ok((layer(doc.get("policy").and_then(Item::as_table_like), &shown, true)?, targets, shown))
 }
 
 /// Set once the environment-over-`enforce` warnings are printed: a run loads the manifest more than once.
@@ -264,7 +278,7 @@ mod tests {
     #[test]
     fn layers_in_order() {
         let config = cfg("[policy]\nallow-sources = [\"https://git.example.com/\"]\nmin-release-age = \"1d\"\nallow-ranges = false\nenforce = [\"allow-sources\"]").unwrap();
-        let o = Outer { config, config_path: "config.toml".into(), env: Layer::default() };
+        let o = Outer { config, config_path: "config.toml".into(), ..Default::default() };
         let p = proj("[policy]\nmin-release-age = \"2d\"");
         let e = resolve(&p, &o).unwrap();
         assert_eq!(e["min-release-age"], (Value::Age(SignedDuration::from_hours(48)), "skills.toml"));
@@ -301,8 +315,12 @@ mod tests {
         assert!(env_layer(|_| Some(" ".into())).unwrap().values.is_empty());
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join(CONFIG), "[repositories]\nx = 1\n").unwrap();
-        assert!(read_config(&dir.path().join(CONFIG)).unwrap_err().msg.contains("only [policy]"));
+        assert!(read_config(&dir.path().join(CONFIG)).unwrap_err().msg.contains("only [policy] and [agents]"));
         assert_eq!(read_config(&dir.path().join("missing.toml")).unwrap().0, Layer::default());
+        std::fs::write(dir.path().join(CONFIG), "[agents]\ntargets = [\"claude\", \"./x\"]\n").unwrap();
+        assert_eq!(read_config(&dir.path().join(CONFIG)).unwrap().1, Some(vec!["claude".into(), "./x".into()]));
+        std::fs::write(dir.path().join(CONFIG), "[agents]\nlocal = \".skills\"\n").unwrap();
+        assert!(read_config(&dir.path().join(CONFIG)).unwrap_err().msg.contains("agents.local is not read here"));
     }
 
     #[test]

@@ -285,7 +285,7 @@ impl Project {
         std::fs::write(
             dir.join("skills.toml"),
             format!(
-                "[repositories]\nfix = {{ type = \"composer\", url = \"{}\" }}\n\n[skills]\n{skills}\n[policy]\npackagist = false\n",
+                "[repositories]\nfix = {{ type = \"composer\", url = \"{}\" }}\n\n[skills]\n{skills}\n[agents]\ntargets = [\".claude/skills\", \".junie/skills\"]\n\n[policy]\npackagist = false\n",
                 server.url("/packages.json")
             ),
         )
@@ -296,7 +296,7 @@ impl Project {
         self.write(
             "skills.toml",
             &format!(
-                "[repositories]\nfix = {{ type = \"composer\", url = \"{}\" }}\n\n[skills]\n{skills}\n[policy]\npackagist = false\n",
+                "[repositories]\nfix = {{ type = \"composer\", url = \"{}\" }}\n\n[skills]\n{skills}\n[agents]\ntargets = [\".claude/skills\", \".junie/skills\"]\n\n[policy]\npackagist = false\n",
                 server.url("/packages.json")
             ),
         );

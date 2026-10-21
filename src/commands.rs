@@ -646,6 +646,9 @@ impl Ctx {
                 }
             }
         }
+        for (d, n) in dropped_links(s, m, &old_block) {
+            project::unlink(s, &d, &n)?;
+        }
         let mut copies = BTreeSet::new();
         for (at, source, n) in plan {
             if project::link(s, &at, source, &n)? && !locked.contains_key(&n) {
@@ -1012,6 +1015,30 @@ fn set_modes(modes: &mut BTreeSet<String>, name: &str, files: &[FileEntry]) {
     let prefix = format!("{name}/");
     modes.retain(|l| !l.starts_with(&prefix));
     modes.extend(files.iter().filter(|f| f.exec).map(|f| format!("{prefix}{}", f.path)));
+}
+
+/// Links into the store in directories that are no longer targets (D29): those the managed block
+/// lists, and in a project the preset directories, where committed links of own skills live.
+fn dropped_links(s: &Scope, m: &Manifest, block: &[String]) -> Vec<(String, String)> {
+    let mut dirs: BTreeSet<String> = block
+        .iter()
+        .filter(|l| !l.contains('*') && !l.ends_with('/'))
+        .filter_map(|l| l.strip_prefix('/')?.rsplit_once('/').map(|(d, _)| d.to_string()))
+        .collect();
+    if !s.global {
+        dirs.extend(manifest::PRESETS.iter().filter_map(|p| p.1).map(String::from));
+    }
+    dirs.retain(|d| d != STORE && *d != m.local && !m.targets.contains(d) && project::no_symlink(s, d).is_ok());
+    let mut out = Vec::new();
+    for d in dirs {
+        for e in std::fs::read_dir(s.root.join(&d)).into_iter().flatten().flatten() {
+            let n = e.file_name().to_string_lossy().into_owned();
+            if project::made_by_skillcask(s, &d, STORE, &n, block) {
+                out.push((d.clone(), n));
+            }
+        }
+    }
+    out
 }
 
 fn managed_paths(managed: &BTreeSet<String>, targets: &[String]) -> Vec<String> {
@@ -1624,6 +1651,10 @@ pub fn status(ctx: &Ctx) -> Result<()> {
     for (k, (v, from)) in m.policy.effective.iter().filter(|_| !ui::agent()) {
         println!("{}", ui::out(ui::Color::Dim, format!("policy.{k} = {v} ({from})")));
     }
+    if !ui::agent() {
+        let dirs = if m.targets.is_empty() { format!("{STORE} only") } else { m.targets.join(", ") };
+        println!("{}", ui::out(ui::Color::Dim, format!("agents.targets = {:?} ({}): {dirs}", m.target_entries, m.targets_from)));
+    }
     if bad > 0 {
         return Err(Error::new(MANIFEST, format!("{bad} problem(s)")).hint("run skillcask install"));
     }
@@ -1674,6 +1705,24 @@ pub fn doctor(ctx: &Ctx, fix: bool) -> Result<()> {
     }
     if open.len() == before {
         passed.push(format!("links: {links} ok"));
+    }
+
+    let dropped = dropped_links(s, &m, &project::read_block(s)?);
+    if dropped.is_empty() {
+        passed.push("targets: no links left in former target directories".to_string());
+    } else {
+        let what = format!(
+            "links in directories that are no longer targets: {}",
+            dropped.iter().map(|(d, n)| s.show(&format!("{d}/{n}"))).collect::<Vec<_>>().join(", ")
+        );
+        if fix {
+            for (d, n) in &dropped {
+                project::unlink(s, d, n)?;
+            }
+            fixed.push(what);
+        } else {
+            open.push(what);
+        }
     }
 
     let managed: BTreeSet<String> = locked.keys().cloned().collect();

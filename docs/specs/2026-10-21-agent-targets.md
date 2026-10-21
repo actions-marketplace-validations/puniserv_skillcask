@@ -1,6 +1,6 @@
 # Spec: agent presets and default targets
 
-Date: 2026-10-21. Status: proposed, for 0.6.0.
+Date: 2026-10-21. Status: implemented, for 0.6.0.
 
 ## Problem
 
@@ -84,21 +84,24 @@ rule. No environment variable either; CI rarely needs links, and the manifest ca
 `init` and `init --global` no longer write `targets`; the template has a commented line naming
 the layers. A manifest written by an older version keeps its explicit list and therefore
 overrides `config.toml`; the README says to delete the line to follow the config. `status`
-prints the resolved targets with their layer and, per preset, the directory or `store`.
+prints `agents.targets = [<as written>] (<layer>): <directories>`, or `.agents/skills only`.
 
 The built-in default changes from `[".claude/skills", ".junie/skills"]` to `["claude"]`. In the
 global scope that drops `~/.junie/skills`; a Junie user adds `"junie"` to `config.toml`.
 
 ## Stale links
 
-The managed block (`.gitignore` in a project, the managed list in the global scope) already
-records every link skillcask made. On `install`, `update` and `remove`, a link in the previous
-block whose directory is no longer a target is removed when it still points into the store
-(`made_by_skillcask`). An empty target directory that skillcask created is left in place.
+On `install`, `update` and `remove`, skillcask removes the links it made (`made_by_skillcask`:
+a link to the store, or a copy the block lists) in directories that are no longer targets:
 
-Links of hand-written and project skills are committed, so they are not in the block. `doctor`
-reports a committed link into the store from a directory that is no longer a target; `doctor
---fix` removes it from the working tree and the user commits the deletion.
+- every directory the previous managed block lists (`.gitignore` in a project, the managed list
+  in the global scope);
+- in a project also every preset directory, since links of hand-written and project skills are
+  committed and not in the block; the user commits the deletion.
+
+Other entries stay; so does an empty directory. A directory behind a symlink is skipped. In home
+only the block counts: other links there are the user's. `doctor` reports the same links and
+`doctor --fix` removes them.
 
 ## Duplicates
 

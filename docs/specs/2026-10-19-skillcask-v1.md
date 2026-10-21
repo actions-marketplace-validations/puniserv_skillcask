@@ -105,7 +105,7 @@ acme = { type = "composer", url = "https://git.example.com/api/v4/group/42/-/pac
 "acme/review" = { version = "1.4.2", repository = "acme", skills = ["review"] }
 
 [agents]
-targets = [".claude/skills", ".junie/skills"]   # default; .agents/skills is always the store
+targets = ["claude"]                            # default (D29); .agents/skills is always the store
 local = ".skills"                                 # default; project skills
 
 [policy]

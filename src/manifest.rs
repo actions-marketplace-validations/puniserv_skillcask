@@ -11,7 +11,26 @@ use crate::error::{Context, MANIFEST, Result};
 
 pub const FILE: &str = "skills.toml";
 pub const PACKAGIST_URL: &str = "https://repo.packagist.org";
-pub const DEFAULT_TARGETS: [&str; 2] = [".claude/skills", ".junie/skills"];
+pub const DEFAULT_TARGETS: [&str; 1] = ["claude"];
+/// Agent presets (D29): name, directory in a project, directory under home; `None` where the agent
+/// reads `.agents/skills` itself. Sources and date in docs/specs/2026-10-21-agent-targets.md.
+pub const PRESETS: [(&str, Option<&str>, Option<&str>); 15] = [
+    ("claude", Some(".claude/skills"), Some(".claude/skills")),
+    ("kiro", Some(".kiro/skills"), Some(".kiro/skills")),
+    ("junie", None, Some(".junie/skills")),
+    ("codex", None, None),
+    ("copilot", None, None),
+    ("cursor", None, None),
+    ("gemini", None, None),
+    ("opencode", None, None),
+    ("amp", None, None),
+    ("devin", None, None),
+    ("roo", None, None),
+    ("cline", None, None),
+    ("goose", None, None),
+    ("factory", None, None),
+    ("vibe", None, None),
+];
 pub const DEFAULT_LOCAL: &str = ".skills";
 
 pub const TEMPLATE: &str = r#"# skillcask manifest. Lock: skills.lock (generated, commit both).
@@ -27,7 +46,7 @@ github = { type = "github", url = "https://api.github.com" }
 # "owner/repo" = { github = true, skills = ["name"] }   # GitHub, default branch
 
 [agents]
-targets = [".claude/skills", ".junie/skills"]
+# targets = ["claude"]   # agent names or paths with a "/"; default: [agents] targets of config.toml, else ["claude"]
 local = ".skills"   # project skills, linked into .agents/skills
 
 [policy]
@@ -50,7 +69,7 @@ github = { type = "github", url = "https://api.github.com" }
 # "owner/repo" = { github = true, skills = ["name"] }   # GitHub, default branch
 
 [agents]
-targets = [".claude/skills", ".junie/skills"]
+# targets = ["claude"]   # agent names or paths with a "/"; default: [agents] targets of config.toml, else ["claude"]
 
 [policy]
 min-release-age = "3d"
@@ -111,7 +130,11 @@ pub struct Manifest {
     /// The GitHub API base; `None` with `github = false`.
     pub github: Option<String>,
     pub skills: Vec<SkillReq>,
+    /// Directories that get links, presets resolved (D29).
     pub targets: Vec<String>,
+    /// `targets` as written, and the file it came from, for `status`.
+    pub target_entries: Vec<String>,
+    pub targets_from: &'static str,
     /// Project skills, linked into the store (`[agents] local`, default `.skills`).
     pub local: String,
     pub policy: Policy,
@@ -359,10 +382,17 @@ pub fn parse_with(text: &str, global: bool, outer: &crate::policy::Outer) -> Res
         None => DEFAULT_LOCAL.to_string(),
         Some(i) => i.as_str().ok_or_else(|| bad("agents.local must be a path"))?.trim_end_matches('/').to_string(),
     };
-    let targets = match agents.and_then(|a| a.get("targets")) {
-        None => DEFAULT_TARGETS.iter().map(|s| s.to_string()).collect(),
-        Some(i) => string_array(i).ok_or_else(|| bad("agents.targets must be a list of paths"))?,
+    let (target_entries, targets_from) = match agents.and_then(|a| a.get("targets")) {
+        Some(i) => (string_array(i).ok_or_else(|| bad("agents.targets must be a list of agent names or paths"))?, FILE),
+        None => match &outer.targets {
+            Some(t) => (t.clone(), crate::policy::CONFIG),
+            None => (DEFAULT_TARGETS.map(String::from).to_vec(), "default"),
+        },
     };
+    let targets = resolve_targets(&target_entries, global).map_err(|e| {
+        let file = if targets_from == crate::policy::CONFIG { outer.config_path.as_str() } else { FILE };
+        crate::error::Error::new(MANIFEST, format!("{file}: agents.targets: {e}"))
+    })?;
     for t in targets.iter().chain([&local]) {
         let p = Path::new(t);
         if p.is_absolute() || p.components().any(|c| !matches!(c, std::path::Component::Normal(_))) || t.is_empty() || t.contains('\\') {
@@ -377,7 +407,27 @@ pub fn parse_with(text: &str, global: bool, outer: &crate::policy::Outer) -> Res
         return Err(bad(format!("agents.local {local:?} cannot also be a target")));
     }
 
-    Ok(Manifest { repositories, github, skills, targets, local, policy })
+    Ok(Manifest { repositories, github, skills, targets, target_entries, targets_from, local, policy })
+}
+
+/// Target directories for `entries`: presets for the scope, paths as written; each one once.
+fn resolve_targets(entries: &[String], global: bool) -> std::result::Result<Vec<String>, String> {
+    let mut out: Vec<String> = Vec::new();
+    for e in entries {
+        let dir = if e.contains('/') {
+            let p = e.trim_end_matches('/');
+            Some(p.strip_prefix("./").unwrap_or(p).to_string())
+        } else {
+            let (_, project, home) = PRESETS.iter().find(|(n, ..)| n == e).ok_or_else(|| {
+                format!("unknown agent {e:?}; known: {}; a path needs a \"/\", e.g. \"./{e}\"", PRESETS.map(|p| p.0).join(", "))
+            })?;
+            if global { home } else { project }.map(String::from)
+        };
+        if let Some(d) = dir.filter(|d| !out.contains(d)) {
+            out.push(d);
+        }
+    }
+    Ok(out)
 }
 
 /// The version constraint, or for a GitHub `ref` its syntax; `allow-ranges = false` also forbids
@@ -668,7 +718,8 @@ min-release-age = "12h"
         assert!(parse(GLOBAL_TEMPLATE, true).is_ok());
         assert!(parse("[agents]\nlocal = \".skills\"", true).is_err());
         assert_eq!(m.policy.min_release_age, SignedDuration::from_hours(72));
-        assert_eq!(m.targets, DEFAULT_TARGETS);
+        assert_eq!(m.targets, [".claude/skills"]);
+        assert_eq!((m.target_entries, m.targets_from), (vec!["claude".to_string()], "default"));
         assert!(parse("[repositories]\nx = { url = \"http://a\" }", false).is_err());
         assert!(parse("[skills]\n\"Acme/X\" = \"1.0\"", false).is_err());
         assert!(parse("[skills]\n\"a/b\" = { version = \"1\", repository = \"nope\" }", false).is_err());
@@ -787,7 +838,7 @@ min-release-age = "12h"
     fn enforced_age_binds_repositories() {
         let doc: DocumentMut = "[policy]\nmin-release-age = \"3d\"\nenforce = [\"min-release-age\"]\n[policy.repository-min-release-age]\n\"https://git.example.com/\" = \"0\"\n\"https://git.example.com/slow/\" = \"5d\"".parse().unwrap();
         let config = crate::policy::layer(doc.get("policy").and_then(Item::as_table_like), "config.toml", true).unwrap();
-        let o = crate::policy::Outer { config, config_path: "config.toml".into(), env: Default::default() };
+        let o = crate::policy::Outer { config, config_path: "config.toml".into(), ..Default::default() };
         let m = |repo: &str| parse_with(&format!("[repositories]\nr = {{ url = {repo} }}"), false, &o);
         let age = |m: Manifest| m.min_release_age(&m.repositories[0]);
 
@@ -809,5 +860,33 @@ min-release-age = "12h"
             &crate::policy::Outer { env, ..o },
         );
         assert_eq!(age(lifted.unwrap()), SignedDuration::ZERO, "the environment lifts enforcement");
+    }
+
+    #[test]
+    fn agent_presets_and_layers() {
+        let targets = |t: &str, global: bool| parse(&format!("[agents]\ntargets = {t}"), global).map(|m| m.targets);
+        assert_eq!(
+            targets(r#"["claude", "copilot", "kiro", "./tools/skills/", "codex"]"#, false).unwrap(),
+            [".claude/skills", ".kiro/skills", "tools/skills"]
+        );
+        assert_eq!(targets(r#"["junie", "copilot"]"#, false).unwrap(), Vec::<String>::new(), "both read the store");
+        assert_eq!(targets(r#"["junie"]"#, true).unwrap(), [".junie/skills"]);
+        assert_eq!(targets(r#"["claude", ".claude/skills"]"#, false).unwrap(), [".claude/skills"], "one link per directory");
+        let e = targets(r#"["cusor"]"#, false).unwrap_err().msg;
+        assert!(
+            e.contains("skills.toml: agents.targets: unknown agent \"cusor\"") && e.contains("cursor") && e.contains("\"./cusor\""),
+            "{e}"
+        );
+        assert!(targets(r#"["./"]"#, false).is_err());
+        assert!(targets(r#"["./../x"]"#, false).is_err());
+
+        let o =
+            crate::policy::Outer { targets: Some(vec!["kiro".into()]), config_path: "/home/u/config.toml".into(), ..Default::default() };
+        let m = parse_with("", false, &o).unwrap();
+        assert_eq!((m.targets, m.targets_from), (vec![".kiro/skills".to_string()], "config.toml"));
+        let m = parse_with("[agents]\ntargets = [\"claude\"]", false, &o).unwrap();
+        assert_eq!((m.targets, m.targets_from), (vec![".claude/skills".to_string()], FILE), "the manifest replaces the config list");
+        let bad = crate::policy::Outer { targets: Some(vec!["nope".into()]), ..o };
+        assert!(parse_with("", false, &bad).unwrap_err().msg.starts_with("/home/u/config.toml: agents.targets: unknown agent"));
     }
 }
