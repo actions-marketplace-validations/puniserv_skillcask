@@ -236,7 +236,7 @@ mismatch (exit 4) rather than installing unverified content.
 | `diff [pkg] [--to <constraint>]` | Unified diff of skill files from the locked version to the one `update` would lock (D27). |
 | `info <vendor/name[@c]\|github:owner/repo[@v]\|skill>` | Skills, versions and metadata of a package, or which package and entry install a skill (D26). |
 | `status` | Manifest vs lock (every reason `install --frozen` checks, and a skill name provided by two packages) vs installed (hash) per skill. Exit 1 on any mismatch. |
-| `doctor [--fix]` | Broken or committed managed links, stale gitignore block, modified installed skills (tree hash). `--fix` repairs without downloading. |
+| `doctor [--fix]` | Broken or committed managed links, stale gitignore block, modified installed skills (tree hash). A person also sees each check that passed. `--fix` repairs without downloading. |
 | `search <query>` | Packagist search API filtered by `type=ai-agent-skill`; for other repositories, a substring match over the names in `available-packages`, inline `packages` or `provider-includes` (GitLab), then the metadata of up to 30 matches to keep skill packages and show their description. A failing repository is a warning unless all fail. |
 | `<other>` | Runs `skillcask-<other>` from `PATH` with the remaining arguments and exits with its code (git/cargo-style plugins). Only executables the user installed; packages never provide them. Migrations from other manifest formats live in plugins, not in the core. |
 | `publish` | See Publishing. |

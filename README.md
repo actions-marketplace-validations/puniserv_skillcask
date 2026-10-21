@@ -222,7 +222,7 @@ Every command except `publish` and `validate` takes `-g, --global`.
 | `diff [vendor/name] [--to constraint]` | Unified diff of skill files from the locked version to the one `update` would lock, see below. |
 | `info <vendor/name[@constraint]\|github:owner/repo\|skill>` | A package's skills, versions, description, license and requirements, or which package installs a skill. |
 | `status` | Exit 1 when manifest, lock or installed files disagree. |
-| `doctor [--fix]` | Broken or committed links, stale gitignore block, modified skills. |
+| `doctor [--fix]` | Broken or committed links, stale gitignore block, modified skills; lists each check it ran. |
 | `search <query>` | Packagist (`type=ai-agent-skill`) and skill packages of the other repositories, GitLab included. |
 | `auth set\|remove <host>` | Keep a registry token in git's credential helper (Keychain, Credential Manager, libsecret). |
 | `publish --vendor v --base-url URL --out DIR [--inline] [--dist-url TPL] [paths…]` | Build a static Composer repository from a monorepo. |

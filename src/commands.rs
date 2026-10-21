@@ -1648,9 +1648,12 @@ pub fn doctor(ctx: &Ctx, fix: bool) -> Result<()> {
     let hand = hand_written(s, &lock, &old_managed, &locals)?;
     let mut open = Vec::new();
     let mut fixed = Vec::new();
+    let mut passed = Vec::new();
 
     let mut copies = BTreeSet::new();
+    let (mut links, before) = (0, open.len());
     for (at, source, n) in link_plan(&m, &locked, &hand, &locals) {
+        links += 1;
         let state = project::link_state(s, &at, source, &n);
         let what = format!("{}: link {}", s.show(&format!("{at}/{n}")), format!("{state:?}").to_lowercase());
         if state != LinkState::Foreign && not_ours(s, &m, &at, &n, &state, &old_managed) {
@@ -1669,6 +1672,9 @@ pub fn doctor(ctx: &Ctx, fix: bool) -> Result<()> {
             copies.insert(format!("/{at}/{n}"));
         }
     }
+    if open.len() == before {
+        passed.push(format!("links: {links} ok"));
+    }
 
     let managed: BTreeSet<String> = locked.keys().cloned().collect();
     let tracked = project::git_tracked(s, &managed_paths(&managed, &m.targets));
@@ -1680,6 +1686,8 @@ pub fn doctor(ctx: &Ctx, fix: bool) -> Result<()> {
         } else {
             open.push(what);
         }
+    } else {
+        passed.push("git index: no managed paths committed".to_string());
     }
 
     let block_file = project::block_file(s);
@@ -1692,8 +1700,11 @@ pub fn doctor(ctx: &Ctx, fix: bool) -> Result<()> {
         } else {
             open.push(what);
         }
+    } else {
+        passed.push(format!("{block_file}: managed block up to date"));
     }
 
+    let before = open.len();
     for (n, (p, sk)) in &locked {
         match tree_on_disk(s, n, &[&sk.tree_sha256]) {
             None => open.push(format!("{}: not installed ({}); run `skillcask install`", s.show(&format!("{STORE}/{n}")), p.name)),
@@ -1702,6 +1713,9 @@ pub fn doctor(ctx: &Ctx, fix: bool) -> Result<()> {
             }
             Some(_) => {}
         }
+    }
+    if open.len() == before {
+        passed.push(format!("installed: {} skill(s) match skills.lock", locked.len()));
     }
 
     let warnings = shadows(s, &m, locked.keys().chain(&hand).chain(&locals));
@@ -1715,6 +1729,10 @@ pub fn doctor(ctx: &Ctx, fix: bool) -> Result<()> {
             }
         }
     };
+    // An agent pays for every `ok` line in tokens (D19), so only a person sees what passed.
+    if !ui::agent() {
+        section(&passed, "✓", "", ui::Color::Green);
+    }
     section(&open, "✗", "problem", ui::Color::Red);
     section(&fixed, "✓", "fixed", ui::Color::Green);
     section(&warnings, "!", "warning", ui::Color::Yellow);
