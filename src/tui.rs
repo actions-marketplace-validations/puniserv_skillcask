@@ -15,15 +15,14 @@ use serde_json::Value;
 
 use crate::error::{Error, IO, MANIFEST, Result};
 
-const HELP: [&str; 14] = [
+/// Keys that do not depend on the selected row; those that do are listed in the actions box.
+const HELP: [&str; 12] = [
     "↑↓/jk move",
     "pgup/pgdn scroll",
     "tab info/audit/output",
     "g project/global",
     "i install",
     "a add",
-    "u diff, then update",
-    "x remove",
     "o doctor",
     "f doctor --fix",
     "/ search",
@@ -85,6 +84,20 @@ struct Row {
     ok: bool,
     adopt: Option<String>,
     update: Option<String>,
+    /// For a dependency, the packages that require it.
+    via: Option<String>,
+}
+
+impl Row {
+    /// The keys that act on this row, for the actions box.
+    fn actions(&self) -> Vec<String> {
+        match (&self.package, &self.via) {
+            _ if self.state == "not managed" => vec!["m adopt: move this copy aside and install it from a package".into()],
+            (Some(p), Some(via)) => vec![format!("u diff, then update {p}"), format!("a dependency of {via}: remove that to drop it")],
+            (Some(p), None) => vec![format!("u diff, then update {p}"), format!("x remove {p}")],
+            (None, _) => vec!["none: a project skill, edit it in the repository".into()],
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -284,15 +297,21 @@ impl App {
             KeyCode::Char('r') => return Some(Job::Refresh),
             KeyCode::Char('i') if self.no_manifest() && self.project.is_some() => return Some(Job::Run(args(&["init"]))),
             KeyCode::Char('i') => return Some(Job::Run(args(&["install"]))),
-            KeyCode::Char('a') => {
+            KeyCode::Char('a') => self.mode = Mode::Input { prompt: "add source", text: String::new(), then: Then::Add },
+            KeyCode::Char('m') => {
                 self.mode = match self.selected().filter(|r| r.state == "not managed").map(|r| r.adopt.clone()) {
                     Some(Some(src)) => Mode::Input { prompt: "adopt with add --adopt", text: src, then: Then::Adopt },
-                    // A plain add would only fail on the copy that stands at the name.
                     Some(None) => Mode::Input { prompt: "adopt: no source recorded, type it", text: String::new(), then: Then::Adopt },
-                    None => Mode::Input { prompt: "add source", text: String::new(), then: Then::Add },
+                    None => {
+                        self.message = "only a not managed skill can be adopted".into();
+                        Mode::List
+                    }
                 }
             }
             KeyCode::Char('u') | KeyCode::Char('x') if package.is_none() => self.message = "not a package".into(),
+            KeyCode::Char('x') if self.selected().is_some_and(|r| r.via.is_some()) => {
+                self.message = "a dependency: remove the package that requires it".into()
+            }
             KeyCode::Char('u') => return package.map(Job::Diff),
             KeyCode::Char('x') => {
                 let p = package?;
@@ -373,7 +392,7 @@ impl App {
                     Some(src) => format!("npx skills recorded the source {src}"),
                     None => "no source recorded".into(),
                 },
-                "press a to adopt: the copy moves to ~/.config/skillcask/adopted/ and the package's skill is installed".into(),
+                "press m to adopt: the copy moves to ~/.config/skillcask/adopted/ and the package's skill is installed".into(),
             ],
             View::Info => self.details.get(skill).cloned().unwrap_or_default(),
             View::Audit => audit_lines(&self.audit, skill),
@@ -500,8 +519,11 @@ fn rows(status: &Value, outdated: &Value) -> Vec<Row> {
         .flatten()
         .map(|e| {
             // A dependency's label is `name (via requirer, …)`.
-            let package = e["package"].as_str().and_then(|p| p.split(' ').next()).map(String::from);
+            let label = e["package"].as_str();
+            let package = label.and_then(|p| p.split(' ').next()).map(String::from);
+            let via = label.and_then(|p| p.split_once(" (via ")).map(|(_, v)| v.trim_end_matches(')').to_string());
             Row {
+                via,
                 update: package.as_deref().and_then(|p| updates.get(p)).map(|u| u.to_string()),
                 package,
                 version: s(&e["version"]),
@@ -581,9 +603,6 @@ fn keys(app: &App) -> Vec<&'static str> {
         Mode::Input { .. } => vec!["enter submit", "esc cancel", "backspace delete"],
         Mode::Confirm { .. } => vec!["y yes", "any other key no"],
         Mode::Pick { .. } => vec!["↑↓/jk move", "enter choose", "esc cancel"],
-        Mode::List if app.selected().is_some_and(|r| r.state == "not managed") => {
-            HELP.iter().map(|k| if *k == "a add" { "a adopt" } else { k }).collect()
-        }
         Mode::List => HELP.to_vec(),
     }
 }
@@ -609,6 +628,17 @@ fn draw(f: &mut Frame, app: &App) {
         Layout::vertical([Constraint::Length(1), Constraint::Fill(1), Constraint::Length(1), Constraint::Length(legend.len() as u16)])
             .areas(f.area());
     let [left, right] = Layout::horizontal([Constraint::Percentage(45), Constraint::Fill(1)]).areas(body);
+    let actions = app.selected().map(|r| (r.skill.as_ref().or(r.package.as_ref()).map_or("-", |s| s.as_str()), r.actions()));
+    let [right, actions_area] =
+        Layout::vertical([Constraint::Fill(1), Constraint::Length(actions.as_ref().map_or(0, |(_, a)| a.len() as u16 + 2))]).areas(right);
+    if let Some((name, lines)) = &actions {
+        f.render_widget(
+            Paragraph::new(lines.join("\n"))
+                .block(Block::bordered().title(clean(&format!("actions: {name}")).join(" ")))
+                .wrap(Wrap { trim: false }),
+            actions_area,
+        );
+    }
 
     let scope = match (&app.project, app.global) {
         (_, true) => "global".to_string(),
@@ -726,9 +756,10 @@ mod tests {
         assert_eq!(press(&mut a, KeyCode::Char('n')), None);
         assert_eq!((&a.mode, a.message.as_str()), (&Mode::List, "cancelled"));
 
-        press(&mut a, KeyCode::Down);
+        press(&mut a, KeyCode::Up);
         assert_eq!(press(&mut a, KeyCode::Char('x')), None);
-        assert_eq!(press(&mut a, KeyCode::Char('y')), Some(Job::Run(args(&["remove", "--", "acme/dep"]))));
+        assert_eq!(press(&mut a, KeyCode::Char('y')), Some(Job::Run(args(&["remove", "--", "acme/one"]))));
+        press(&mut a, KeyCode::Down);
 
         press(&mut a, KeyCode::Down);
         assert_eq!(press(&mut a, KeyCode::Char('u')), None);
@@ -739,8 +770,6 @@ mod tests {
     fn the_legend_follows_the_mode_and_wraps_without_splitting_a_key() {
         let mut a = app(sample(), true);
         assert!(keys(&a).contains(&"a add"));
-        a.sel = 2;
-        assert!(keys(&a).contains(&"a adopt"));
         a.mode = Mode::Confirm { question: String::new(), args: Vec::new() };
         assert_eq!(keys(&a), ["y yes", "any other key no"]);
         assert_eq!(legend(&["ab", "cd", "efg"], 6), ["ab  cd", "efg"]);
@@ -756,7 +785,7 @@ mod tests {
         a.sel = 2;
         assert_eq!(a.missing_detail(), None);
         let lines = a.detail_lines();
-        assert!(lines.iter().any(|l| l.contains("github:o/r/mine")) && lines.iter().any(|l| l.starts_with("press a")), "{lines:?}");
+        assert!(lines.iter().any(|l| l.contains("github:o/r/mine")) && lines.iter().any(|l| l.starts_with("press m")), "{lines:?}");
     }
 
     #[test]
@@ -769,20 +798,36 @@ mod tests {
         assert_eq!(press(&mut a, KeyCode::Enter), Some(Job::Run(args(&["add", "--", "acme/two"]))));
 
         a.sel = 2;
-        press(&mut a, KeyCode::Char('a'));
+        press(&mut a, KeyCode::Char('m'));
         assert!(matches!(&a.mode, Mode::Input { text, then: Then::Adopt, .. } if text == "github:o/r/mine"));
         assert_eq!(press(&mut a, KeyCode::Enter), Some(Job::Run(args(&["add", "--adopt", "--", "github:o/r/mine"]))));
 
-        press(&mut a, KeyCode::Char('a'));
+        press(&mut a, KeyCode::Char('m'));
         assert_eq!(press(&mut a, KeyCode::Esc), None);
 
         // Regression: an unmanaged skill without a recorded source got a plain add prompt.
         a.rows[2].adopt = None;
-        press(&mut a, KeyCode::Char('a'));
+        press(&mut a, KeyCode::Char('m'));
         assert!(matches!(&a.mode, Mode::Input { text, then: Then::Adopt, .. } if text.is_empty()));
         typed(&mut a, "github:o/r/mine");
         assert_eq!(press(&mut a, KeyCode::Enter), Some(Job::Run(args(&["add", "--adopt", "--", "github:o/r/mine"]))));
         assert_eq!(a.mode, Mode::List);
+
+        a.sel = 0;
+        press(&mut a, KeyCode::Char('m'));
+        assert_eq!((&a.mode, a.message.as_str()), (&Mode::List, "only a not managed skill can be adopted"));
+    }
+
+    #[test]
+    fn the_actions_box_lists_only_what_the_selected_row_allows() {
+        let mut a = app(sample(), true);
+        assert_eq!(a.rows[0].actions(), ["u diff, then update acme/one", "x remove acme/one"]);
+        assert_eq!(a.rows[1].via.as_deref(), Some("acme/one"));
+        assert!(a.rows[1].actions()[1].contains("dependency of acme/one"));
+        assert!(a.rows[2].actions()[0].starts_with("m adopt"));
+        a.sel = 1;
+        press(&mut a, KeyCode::Char('x'));
+        assert_eq!((&a.mode, a.message.as_str()), (&Mode::List, "a dependency: remove the package that requires it"));
     }
 
     #[test]
