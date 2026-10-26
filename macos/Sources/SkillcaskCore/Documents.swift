@@ -1,0 +1,80 @@
+import Foundation
+
+// The `--json` documents of D32. Keys are only ever added, so every type ignores unknown keys
+// (Decodable's default) and optional keys stay optional.
+
+public struct StatusDoc: Decodable, Sendable {
+    public struct Entry: Decodable, Sendable, Hashable {
+        public let package: String?
+        public let version: String?
+        public let skill: String?
+        public let state: String
+        public let ok: Bool
+    }
+    public struct Targets: Decodable, Sendable {
+        public let entries: [String]
+        public let dirs: [String]
+    }
+    public let ok: Bool
+    public let entries: [Entry]
+    public let targets: Targets?
+}
+
+public struct OutdatedDoc: Decodable, Sendable {
+    public struct Package: Decodable, Sendable {
+        public let package: String
+        public let locked: String?
+        public let within: String?
+        public let latest: String?
+        public let note: String?
+    }
+    public let packages: [Package]
+    public let behind: [String]
+}
+
+/// `info` of a package, or of a skill name (`skill`, `kind`, …); keys of the other shape are nil.
+public struct InfoDoc: Decodable, Sendable {
+    public struct Skill: Decodable, Sendable {
+        public let name: String
+        public let description: String?
+    }
+    /// `true` (no replacement) or the replacement package name.
+    public struct Abandoned: Decodable, Sendable {
+        public let replacement: String?
+        public init(from decoder: Decoder) throws {
+            replacement = try? decoder.singleValueContainer().decode(String.self)
+        }
+    }
+    public let package: String?
+    public let source: String?
+    public let repository: String?
+    public let version: String?
+    public let locked: Bool?
+    public let description: String?
+    public let license: [String]?
+    public let abandoned: Abandoned?
+    public let versions: [String]?
+    public let requires: [String: String]?
+    public let skills: [Skill]?
+    public let why: [String]?
+    public let skill: String?
+    public let kind: String?
+    public let path: String?
+    public let from: String?
+}
+
+public struct SearchDoc: Decodable, Sendable {
+    public struct Result: Decodable, Sendable, Hashable {
+        public let name: String
+        public let description: String?
+    }
+    public let results: [Result]
+}
+
+public struct DoctorDoc: Decodable, Sendable {
+    public let ok: Bool
+    public let passed: [String]
+    public let problems: [String]
+    public let fixed: [String]
+    public let warnings: [String]
+}
