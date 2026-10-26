@@ -1322,8 +1322,8 @@ fn add_github(ctx: &Ctx, spec: &str) -> Result<()> {
     add_vcs(ctx, name, None, skill, at)
 }
 
-/// `https://host/owner/repo[.git][@constraint-or-ref]`; the entry is named `owner/repo`.
-fn add_git(ctx: &Ctx, spec: &str) -> Result<()> {
+/// `https://host/owner/repo[.git][@constraint-or-ref]` as (URL, `@` part, entry name `owner/repo`).
+fn git_spec(spec: &str) -> Result<(String, Option<String>, String)> {
     // `@` cannot be userinfo: credentials in the URL are refused anyway.
     let (url, at) = match spec.rsplit_once('@').filter(|(u, _)| u.len() > "https://".len()) {
         Some((u, a)) => (u, Some(a.to_string())),
@@ -1334,6 +1334,13 @@ fn add_git(ctx: &Ctx, spec: &str) -> Result<()> {
     let name = git::name_of(url).ok_or_else(|| {
         Error::new(MANIFEST, format!("{url:?}: owner/repo of the URL is not a valid package name (vendor/name, lowercase)"))
     })?;
+    Ok((url.to_string(), at, name))
+}
+
+/// `https://host/owner/repo[.git][@constraint-or-ref]`; the entry is named `owner/repo`.
+fn add_git(ctx: &Ctx, spec: &str) -> Result<()> {
+    let (url, at, name) = git_spec(spec)?;
+    let url = url.as_str();
     if let Some(e) = ctx.manifest_or_default()?.skill(&name).filter(|e| e.git.as_deref() != Some(url)) {
         let had = e.git.as_deref().map_or("another source", |_| "another git URL");
         bail!(MANIFEST, "{name} is already in {} from {had}; remove it first", manifest::FILE);
@@ -1532,6 +1539,10 @@ pub fn update(ctx: &Ctx, names: &[String], diff: bool) -> Result<()> {
         let new = ctx.resolve(&m, req, old.get(&req.name), &mut prepared)?;
         match old.get(&req.name) {
             Some(o) if o.version == new.version && o.dist_sha256 == new.dist_sha256 => {}
+            Some(o) if o.version == new.version => crate::ui::warn(format!(
+                "{} {}: same version, other content (a moved tag or a republished version); review it with `skillcask update --diff`",
+                new.name, new.version
+            )),
             Some(o) => report.push(format!("updated {} {} -> {}", new.name, o.version, new.version)),
             None => report.push(format!("locked {} {}", new.name, new.version)),
         }
@@ -1598,7 +1609,14 @@ pub fn outdated(ctx: &Ctx, strict: bool, json: bool) -> Result<()> {
             m.check_source(req)?;
             let (within, latest) = github::newest(ctx.http()?, req)?;
             let dash = |v: Option<String>| v.unwrap_or_else(|| "-".into());
-            rows.push([req.name.clone(), locked, dash(within), dash(latest), String::new()]);
+            let note = match p.filter(|_| req.github == Some(GitHub::Tags)) {
+                Some(p) => moved_tag(&github::versions(ctx.http()?, req)?, p).unwrap_or_default(),
+                None => String::new(),
+            };
+            if !note.is_empty() {
+                ui::warn(format!("{}: {note}", req.name));
+            }
+            rows.push([req.name.clone(), locked, dash(within), dash(latest), note]);
             if let Some(p) = p.filter(|_| strict) {
                 match ctx.candidate(&m, eff, Some(p)) {
                     Ok((_, c)) if newer(eff, p, &c) => behind.push(format!("{} {} -> {}", req.name, p.version, c.version)),
@@ -1649,6 +1667,14 @@ pub fn outdated(ctx: &Ctx, strict: bool, json: bool) -> Result<()> {
 }
 
 /// Whether `c` is newer than the locked `p`; a branch or commit entry compares commits.
+/// Why the locked tag no longer names the locked commit: it was moved (deleted and pushed again,
+/// or force-pushed), so `update` would lock other content under the same version.
+fn moved_tag(tags: &[Candidate], p: &Package) -> Option<String> {
+    let now = tags.iter().find(|c| c.version == p.version)?.dist.reference.as_deref()?;
+    let locked = p.dist.reference.as_deref().filter(|r| *r != now)?;
+    Some(format!("tag {} moved from {} to {}", p.version, &locked[..12.min(locked.len())], &now[..12.min(now.len())]))
+}
+
 fn newer(req: &SkillReq, p: &Package, c: &Candidate) -> bool {
     if req.github == Some(GitHub::Ref) {
         return c.dist.reference != p.dist.reference;
@@ -2143,20 +2169,25 @@ pub fn diff(ctx: &Ctx, package: Option<&str>, to: Option<&str>) -> Result<()> {
 pub fn info(ctx: &Ctx, target: &str, json: bool) -> Result<()> {
     let m = ctx.manifest_or_default()?;
     let lock = Lock::load(&ctx.s.config)?;
+    let url = target.strip_prefix("git:").map(git_spec).transpose()?;
     let (spec, gh) = target.strip_prefix("github:").map_or((target, false), |r| (r, true));
-    let (name, at) = spec.split_once('@').map_or((spec, None), |(n, a)| (n, Some(a)));
-    if !gh && !name.contains('/') {
+    let (name, at) = match &url {
+        Some((_, at, name)) => (name.as_str(), at.as_deref()),
+        None => spec.split_once('@').map_or((spec, None), |(n, a)| (n, Some(a))),
+    };
+    if url.is_none() && !gh && !name.contains('/') {
         return why_skill(ctx, &m, &lock, name, json);
     }
     let name = if gh { name.to_lowercase() } else { name.to_string() };
     if !manifest::valid_package_name(&name) {
         bail!(MANIFEST, "{name:?} is not a valid package name (vendor/name, lowercase)");
     }
-    let existing = m.skill(&name);
-    let gh = gh || existing.is_some_and(|e| e.github.is_some());
-    let locked = lock.get(&name).filter(|_| at.is_none());
+    // An entry of that name from another source says nothing about this URL.
+    let existing = m.skill(&name).filter(|e| url.as_ref().is_none_or(|(u, ..)| e.git.as_ref() == Some(u)));
+    let gh = gh || url.is_some() || existing.is_some_and(|e| e.github.is_some());
+    let locked = lock.get(&name).filter(|_| at.is_none() && (url.is_none() || existing.is_some()));
     let (repo, c, versions, abandoned) = if gh {
-        let git = existing.and_then(|e| e.git.clone());
+        let git = url.as_ref().map(|(u, ..)| u.clone()).or_else(|| existing.and_then(|e| e.git.clone()));
         let probe = SkillReq { name: name.clone(), git: git.clone(), ..Default::default() };
         m.check_source(&probe)?;
         let tags = github::versions(ctx.http()?, &probe)?;
@@ -2171,7 +2202,7 @@ pub fn info(ctx: &Ctx, target: &str, json: bool) -> Result<()> {
                 git: probe.git.clone(),
                 ..Default::default()
             },
-            (None, None) => SkillReq { name: name.clone(), constraint: "*".into(), github: Some(GitHub::Tags), ..Default::default() },
+            (None, None) => SkillReq { name: name.clone(), constraint: "*".into(), github: Some(GitHub::Tags), git, ..Default::default() },
         };
         let (repo, c) = match (at, locked) {
             (Some(a), _) => ctx.candidate_at(&m, &req, None, a)?,
@@ -2209,7 +2240,7 @@ pub fn info(ctx: &Ctx, target: &str, json: bool) -> Result<()> {
     };
 
     if json {
-        let source = match existing.and_then(|e| e.git.as_ref()) {
+        let source = match url.as_ref().map(|(u, ..)| u).or(existing.and_then(|e| e.git.as_ref())) {
             Some(_) => "git",
             None if gh => "github",
             None => "composer",

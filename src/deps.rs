@@ -13,21 +13,40 @@ use crate::version::Constraint;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Target {
     Composer(String),
-    GitHub { repo: String, skill: Option<String> },
+    GitHub {
+        repo: String,
+        skill: Option<String>,
+    },
+    /// A plain git repository (D30): `repo` is the entry name from the URL's last two parts.
+    Git {
+        url: String,
+        repo: String,
+        skill: Option<String>,
+    },
 }
 
 impl Target {
     /// The lock and manifest name.
     pub fn package(&self) -> &str {
         match self {
-            Target::Composer(n) | Target::GitHub { repo: n, .. } => n,
+            Target::Composer(n) | Target::GitHub { repo: n, .. } | Target::Git { repo: n, .. } => n,
         }
     }
 }
 
-/// `vendor/name` or `github:owner/repo[/skill]`.
+/// `vendor/name`, `github:owner/repo[/skill]` or `git:https://host/owner/repo.git[#skill]`.
 pub fn target(key: &str) -> std::result::Result<Target, String> {
-    let bad = || format!("{key:?} is not a package (vendor/name) or github:owner/repo[/skill]");
+    let bad = || format!("{key:?} is not a package (vendor/name), github:owner/repo[/skill] or git:https://…[#skill]");
+    if let Some(rest) = key.strip_prefix("git:") {
+        let (url, skill) = rest.split_once('#').map_or((rest, None), |(u, s)| (u, Some(s.to_string())));
+        let url = url.trim_end_matches('/');
+        crate::git::check_url(url).map_err(|e| format!("{key:?}: {e}"))?;
+        let repo = crate::git::name_of(url).ok_or_else(bad)?;
+        if skill.as_deref().is_some_and(|s| !valid_name(s)) {
+            return Err(bad());
+        }
+        return Ok(Target::Git { url: url.to_string(), repo, skill });
+    }
     let Some(rest) = key.strip_prefix("github:") else {
         return manifest::valid_package_name(key).then(|| Target::Composer(key.to_string())).ok_or_else(bad);
     };
@@ -46,8 +65,8 @@ pub fn check(key: &str, value: &str) -> std::result::Result<(Target, Option<GitH
     let t = target(key)?;
     let mode = match t {
         Target::Composer(_) => None,
-        Target::GitHub { .. } if Constraint::parse(value).is_ok() => Some(GitHub::Tags),
-        Target::GitHub { .. } => Some(GitHub::Ref),
+        Target::GitHub { .. } | Target::Git { .. } if Constraint::parse(value).is_ok() => Some(GitHub::Tags),
+        Target::GitHub { .. } | Target::Git { .. } => Some(GitHub::Ref),
     };
     let req = SkillReq { name: t.package().into(), constraint: value.into(), github: mode, ..Default::default() };
     // The consumer's allow-ranges applies to its own manifest only; the lock pins the version.
@@ -113,6 +132,8 @@ struct Ask {
     key: String,
     value: String,
     mode: Option<GitHub>,
+    /// The plain git URL, for a `git:` key.
+    git: Option<String>,
     skill: Option<String>,
 }
 
@@ -126,11 +147,19 @@ pub fn wanted(m: &Manifest, lock: &Lock) -> Result<Wanted> {
         for (key, value) in &p.requires {
             let (t, mode) = check(key, value).map_err(|e| crate::error::Error::new(MANIFEST, format!("{n}: {e}")))?;
             let dep = t.package().to_string();
-            let skill = match t {
-                Target::GitHub { skill, .. } => skill,
-                Target::Composer(_) => None,
+            let (git, skill) = match t {
+                Target::GitHub { skill, .. } => (None, skill),
+                Target::Git { url, skill, .. } => (Some(url), skill),
+                Target::Composer(_) => (None, None),
             };
-            asks.entry(dep.clone()).or_default().push(Ask { requirer: n.clone(), key: key.clone(), value: value.clone(), mode, skill });
+            asks.entry(dep.clone()).or_default().push(Ask {
+                requirer: n.clone(),
+                key: key.clone(),
+                value: value.clone(),
+                mode,
+                git,
+                skill,
+            });
             if seen.insert(dep.clone()) {
                 queue.push(dep);
             }
@@ -161,11 +190,16 @@ fn merge(m: &Manifest, name: &str, base: Option<&SkillReq>, asks: &[Ask]) -> Res
     if asks.iter().any(|a| a.mode != mode) || base.is_some_and(|b| b.github != mode) {
         return Err(conflict("required as different kinds of source (Composer, GitHub tags, GitHub ref)"));
     }
-    // A GitHub entry in the manifest is the consumer's own decision already.
+    let git = &asks[0].git;
+    if asks.iter().any(|a| &a.git != git) || base.is_some_and(|b| &b.git != git) {
+        return Err(conflict("required from different repositories (GitHub or git URLs)"));
+    }
+    // A GitHub or git entry in the manifest is the consumer's own decision already.
     if mode.is_some() && base.is_none() && !m.policy.github_requires {
+        let what = if git.is_some() { "a git source" } else { "a GitHub source" };
         bail!(
             MANIFEST,
-            "{} requires {}, a GitHub source; allow GitHub dependencies with `github-requires = true` under [policy] in {}, or add it to [skills] yourself",
+            "{} requires {}, {what}; allow GitHub and git dependencies with `github-requires = true` under [policy] in {}, or add it to [skills] yourself",
             asks[0].requirer,
             asks[0].key,
             manifest::FILE
@@ -200,7 +234,8 @@ fn merge(m: &Manifest, name: &str, base: Option<&SkillReq>, asks: &[Ask]) -> Res
         }
         (None, want) => want.map(|w| w.into_iter().cloned().collect()),
     };
-    let mut req = base.cloned().unwrap_or_else(|| SkillReq { name: name.to_string(), github: mode, ..Default::default() });
+    let mut req =
+        base.cloned().unwrap_or_else(|| SkillReq { name: name.to_string(), github: mode, git: git.clone(), ..Default::default() });
     req.constraint = constraint;
     req.skills = skills;
     Ok(req)
@@ -215,7 +250,22 @@ mod tests {
         assert_eq!(target("acme/x"), Ok(Target::Composer("acme/x".into())));
         assert_eq!(target("github:Owner/Repo/pr"), Ok(Target::GitHub { repo: "owner/repo".into(), skill: Some("pr".into()) }));
         assert_eq!(target("github:o/r"), Ok(Target::GitHub { repo: "o/r".into(), skill: None }));
-        for bad in ["acme", "Acme/x", "github:a", "github:a/b/Bad_Skill", "gitlab:a/b"] {
+        let url = "https://git.example.com/team/skills.git";
+        assert_eq!(
+            target(&format!("git:{url}#pr")),
+            Ok(Target::Git { url: url.into(), repo: "team/skills".into(), skill: Some("pr".into()) })
+        );
+        assert_eq!(target(&format!("git:{url}/")).unwrap().package(), "team/skills");
+        for bad in [
+            "acme",
+            "Acme/x",
+            "github:a",
+            "github:a/b/Bad_Skill",
+            "gitlab:a/b",
+            "git:http://h/a/b",
+            "git:https://h/a",
+            "git:https://h/a/b#Bad",
+        ] {
             assert!(target(bad).is_err(), "{bad}");
         }
     }
@@ -295,6 +345,24 @@ mod tests {
         assert!(wanted(&m, &l).unwrap_err().msg.contains("different refs"));
         let l = lock(&[("acme/a", "^1", "\"github:o/r/pr\" = \"main\""), ("acme/b", "^1", "\"o/r\" = \"^1\"")]);
         assert!(wanted(&m, &l).unwrap_err().msg.contains("different kinds"));
+    }
+
+    #[test]
+    fn git_dependencies_need_the_policy_and_one_url() {
+        let a = "\"git:https://git.example.com/o/r.git#pr\" = \"^1\"";
+        let m = manifest("\"acme/a\" = \"^1\"", "");
+        assert!(wanted(&m, &lock(&[("acme/a", "^1", a)])).unwrap_err().msg.contains("a git source"));
+        let m = manifest("\"acme/a\" = \"^1\"\n\"acme/b\" = \"^1\"", "github-requires = true");
+        let w = wanted(&m, &lock(&[("acme/a", "^1", a)])).unwrap();
+        let r = w.reqs.iter().find(|r| r.name == "o/r").unwrap();
+        assert_eq!(
+            (r.git.as_deref(), r.github, r.skills.clone()),
+            (Some("https://git.example.com/o/r.git"), Some(GitHub::Tags), Some(vec!["pr".to_string()]))
+        );
+        let b = "\"git:https://other.example.com/o/r.git\" = \"^1\"";
+        assert!(wanted(&m, &lock(&[("acme/a", "^1", a), ("acme/b", "^1", b)])).unwrap_err().msg.contains("different repositories"));
+        let gh = "\"github:o/r\" = \"^1\"";
+        assert!(wanted(&m, &lock(&[("acme/a", "^1", a), ("acme/b", "^1", gh)])).unwrap_err().msg.contains("different repositories"));
     }
 
     #[test]

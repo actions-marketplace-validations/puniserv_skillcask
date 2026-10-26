@@ -46,6 +46,8 @@ requires:
 - Key `github:owner/repo[/skill]`: a GitHub repository, all its skills or one. The value follows
   `add github:`: a version constraint over tags when it parses as one, else a branch, tag or
   commit.
+- Key `git:https://host/owner/repo.git[#skill]` (D36): a plain git repository, named
+  `owner/repo` as `add git:` names it; the value as for `github:`.
 - Keys and values may be quoted. Anything else (a list, a nested map, an invalid name or
   constraint) is an error naming the package, version and `SKILL.md` path. `publish` checks the
   same rules, so a typo fails in the skill's own CI, not at the consumer.

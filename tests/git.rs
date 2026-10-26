@@ -169,3 +169,55 @@ fn credentials_come_from_auth_json() {
     p.ok(&["add", &format!("git:{url}")]);
     assert!(s.requests().iter().any(|r| r.path.ends_with("/git-upload-pack")));
 }
+
+#[test]
+fn requires_and_info_take_a_git_target() {
+    let s = Server::start();
+    let r = repo();
+    commit(r.path(), &[("skills/one/SKILL.md", &skill_md("one")), ("skills/two/SKILL.md", &skill_md("two"))], 300, Some("v1.2.0"));
+    let url = served(&s, r.path());
+    let md = format!("---\nname: foo\ndescription: d\nrequires:\n  \"git:{url}#one\": \"^1\"\n---\n# foo\n");
+    let zip = zipball(&[("SKILL.md", &md)]);
+    s.package("acme/x", vec![Ver { version: "1.0.0", time: Some(ago(240)), zip, extra: None }]);
+    let p = Project::new(&s);
+    let composer = format!("[repositories]\nfix = {{ type = \"composer\", url = \"{}\" }}\n\n", s.url("/packages.json"));
+    p.write("skills.toml", &format!("{composer}[skills]\n\n[policy]\npackagist = false\n"));
+    assert!(p.expect(&["add", "acme/x"], 1).contains("a git source; allow GitHub and git dependencies with `github-requires = true`"));
+
+    p.write("skills.toml", &format!("{composer}[skills]\n\n[policy]\npackagist = false\ngithub-requires = true\n"));
+    let out = p.ok(&["add", "acme/x"]);
+    assert!(out.contains("added acme/skills v1.2.0 (dependency of acme/x)"), "{out}");
+    assert!(p.exists(".agents/skills/one") && !p.exists(".agents/skills/two"), "only the required skill");
+    let lock = p.read("skills.lock");
+    assert!(lock.contains(&format!("url = \"{url}\"")) && lock.contains("type = \"git\""), "{lock}");
+    assert!(clone_of(&p, &s).ok(&["install", "--frozen"]).contains("one"));
+
+    let q = Project::new(&s);
+    q.write("skills.toml", "[skills]\n\n[policy]\npackagist = false\n");
+    let out = q.ok(&["info", &format!("git:{url}")]);
+    assert!(out.contains("acme/skills") && out.contains("1.2.0") && out.contains("two"), "{out}");
+    let v: serde_json::Value = serde_json::from_slice(&q.run(&["info", &format!("git:{url}@^1"), "--json"]).stdout).unwrap();
+    assert_eq!((v["source"].as_str(), v["version"].as_str()), (Some("git"), Some("v1.2.0")));
+    assert!(q.expect(&["info", "git:http://example.com/a/b.git"], 1).contains("must start with https://"));
+}
+
+#[test]
+fn a_moved_tag_is_reported() {
+    let s = Server::start();
+    let r = repo();
+    commit(r.path(), &[("skills/one/SKILL.md", &skill_md("one"))], 300, Some("v1.0.0"));
+    let url = served(&s, r.path());
+    let p = Project::new(&s);
+    manifest(&p, &format!("\"acme/skills\" = {{ git = \"{url}\", version = \"^1.0\" }}\n"), "");
+    p.ok(&["install"]);
+    assert!(!p.ok(&["outdated"]).contains("moved"));
+
+    commit(r.path(), &[("skills/one/SKILL.md", &format!("{}changed\n", skill_md("one")))], 200, None);
+    git(r.path(), &["-c", "user.name=t", "-c", "user.email=t@example.com", "tag", "-f", "-a", "v1.0.0", "-m", "again"]);
+    let out = p.ok(&["outdated"]);
+    assert!(out.contains("warning: acme/skills: tag v1.0.0 moved from "), "{out}");
+    let v: serde_json::Value = serde_json::from_slice(&p.run(&["outdated", "--json"]).stdout).unwrap();
+    assert!(v["packages"][0]["note"].as_str().unwrap().starts_with("tag v1.0.0 moved from "), "{v}");
+    let out = p.ok(&["update"]);
+    assert!(out.contains("acme/skills v1.0.0: same version, other content (a moved tag or a republished version)"), "{out}");
+}

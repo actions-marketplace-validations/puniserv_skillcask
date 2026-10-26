@@ -135,7 +135,7 @@ local = ".skills"        # project skills
 min-release-age = "3d"   # cooldown for add/update; "0" disables
 allow-ranges = true      # false: every version must be exact
 packagist = true         # false: drop the implicit Packagist repository
-github-requires = false  # true: dependencies may come from GitHub
+github-requires = false  # true: dependencies may come from GitHub or git URLs
 allow-sources = ["acme", "own", "packagist", "github"]   # only these sources; default: all
 deny-patterns = false    # true: risky patterns in new skill text fail instead of warning
 ```
@@ -222,6 +222,7 @@ version: 1.2.0
 requires:
   acme/security-review: ^1.0
   github:mattpocock/skills/pr: main
+  "git:https://git.example.com/team/skills.git#review": ^2.0
 ---
 ```
 
@@ -229,7 +230,7 @@ requires:
 cooldown, same hashes, one version per package (the highest one every requirer accepts). They
 stay out of `skills.toml`; the lock records each package's `requires` and switches to
 `version = 2`. A dependency is looked up only in your repositories, in order, then Packagist;
-a `github:` one needs `github-requires = true`. `remove` drops dependencies nobody needs any
+a `github:` or `git:<url>[#skill]` one needs `github-requires = true`. `remove` drops dependencies nobody needs any
 more, and `status` shows them as `via <requirer>`.
 
 ### Name conflicts
@@ -278,9 +279,9 @@ Every command except `publish` and `validate` takes `-g, --global`.
 | `remove <vendor/name>…` | Drop from manifest and lock; delete files, links and gitignore lines. |
 | `install [--frozen]` | Install the lock. `--frozen` (implied by `CI`) fails when the lock is out of date. |
 | `update [vendor/name…] [--diff]` | Re-resolve within constraints. `--diff` prints what changes in each updated or added package; it does not ask before installing. |
-| `outdated [--strict]` | Newer versions, and when cooled-down ones become eligible. `--strict` exits 1 when `update` would lock a newer version. |
+| `outdated [--strict]` | Newer versions, when cooled-down ones become eligible, and GitHub or git tags moved since they were locked. `--strict` exits 1 when `update` would lock a newer version. |
 | `diff [vendor/name] [--to constraint]` | Unified diff of skill files from the locked version to the one `update` would lock, see below. |
-| `info <vendor/name[@constraint]\|github:owner/repo\|skill>` | A package's skills, versions, description, license and requirements, or which package installs a skill. |
+| `info <vendor/name[@constraint]\|github:owner/repo\|git:url\|skill>` | A package's skills, versions, description, license and requirements, or which package installs a skill. |
 | `status` | Exit 1 when manifest, lock or installed files disagree. |
 | `doctor [--fix]` | Broken or committed links, stale gitignore block, modified skills; lists each check it ran. |
 | `audit [--json\|--sarif]` | What each installed skill reaches (commands, hosts, paths, env vars, scripts) and its findings: modified files, risky lines, invisible characters. Exit 1 on any finding. |
