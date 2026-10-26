@@ -80,3 +80,35 @@ public struct DoctorDoc: Decodable, Sendable {
     public let fixed: [String]
     public let warnings: [String]
 }
+
+/// `audit` exits 1 when it has findings and still prints this document.
+public struct AuditDoc: Decodable, Sendable {
+    public struct Finding: Decodable, Sendable, Hashable {
+        public let rule: String
+        public let path: String
+        public let line: Int?
+        public let message: String
+    }
+    public struct Skill: Decodable, Sendable {
+        public let skill: String
+        public let kind: String
+        /// Relative to the project, or to the home directory with `-g`.
+        public let path: String
+        public let findings: [Finding]
+        public let commands: [String]
+        public let network: [String]
+        public let paths: [String]
+        public let env: [String]
+        public let scripts: [String]
+    }
+    public let ok: Bool
+    public let skills: [Skill]
+}
+
+/// `projects --json` (D40), CLI 0.9.0 and newer.
+public struct ProjectsDoc: Decodable, Sendable {
+    public struct Project: Decodable, Sendable {
+        public let path: String
+    }
+    public let projects: [Project]
+}

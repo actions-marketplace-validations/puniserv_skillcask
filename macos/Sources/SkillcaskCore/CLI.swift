@@ -26,8 +26,8 @@ public struct RunResult: Sendable {
 }
 
 public enum CLI {
-    /// The first version with the `--json` documents (D32) the app reads.
-    public static let minimum = [0, 7, 0]
+    /// The first version with every `--json` document (D32) the app reads on refresh: `audit` came in 0.8.0.
+    public static let minimum = [0, 8, 0]
 
     /// `[major, minor, patch]` from `skillcask 0.7.0 (4235d7f73ebd)`; nil for anything else.
     public static func version(_ output: String) -> [Int]? {

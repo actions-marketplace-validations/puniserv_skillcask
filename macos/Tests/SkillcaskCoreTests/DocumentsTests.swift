@@ -94,8 +94,26 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String, status: Int32 
 
 @Test func versionGate() {
     #expect(CLI.version("skillcask 0.7.0 (4235d7f73ebd)\n") == [0, 7, 0])
-    #expect(CLI.tooOld("skillcask 0.7.0 (4235d7f73ebd)") == nil)
+    #expect(CLI.tooOld("skillcask 0.8.0 (4235d7f73ebd)") == nil)
+    #expect(CLI.tooOld("skillcask 0.7.0 (4235d7f73ebd)") != nil)
     #expect(CLI.tooOld("skillcask 0.10.1") == nil)
     #expect(CLI.tooOld("skillcask 0.5.0 (abc)")?.contains("0.5.0 is too old") == true)
     #expect(CLI.tooOld("error: unexpected argument") != nil)
+}
+
+@Test func projects() throws {
+    let doc = try #require(decode(ProjectsDoc.self, #"{"projects":[{"path":"/Users/me/www/a"},{"path":"/Users/me/www/b/c"}]}"#))
+    #expect(doc.projects.map(\.path) == ["/Users/me/www/a", "/Users/me/www/b/c"])
+}
+
+@Test func auditWithFindingsStillDecodes() throws {
+    let json = #"""
+        {"ok":false,"skills":[{"commands":[],"env":[],"findings":[],"kind":"package","network":[],"package":"juliusbrussee/caveman","path":".agents/skills/safe-refactor","paths":[],"scripts":[],"skill":"safe-refactor","version":"v4.0.1"},{"commands":["git"],"env":["HOME"],"findings":[{"line":5,"message":"downloads code into a shell","path":".skills/notes/SKILL.md","rule":"risky-pattern"},{"line":null,"message":"not installed","path":".agents/skills/x","rule":"modified"}],"kind":"project","network":["x.example"],"package":null,"path":".skills/notes","paths":["~/.ssh"],"scripts":["run.sh"],"skill":"notes","version":null}]}
+        """#
+    let doc = try #require(decode(AuditDoc.self, json, status: 1))
+    #expect(!doc.ok)
+    let notes = doc.skills[1]
+    #expect(notes.path == ".skills/notes" && notes.network == ["x.example"] && notes.paths == ["~/.ssh"])
+    #expect(notes.findings.map(\.line) == [5, nil])
+    #expect(notes.findings[0].rule == "risky-pattern")
 }

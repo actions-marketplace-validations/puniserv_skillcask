@@ -22,6 +22,7 @@ struct SkillcaskApp: App {
 struct ContentView: View {
     @Environment(AppModel.self) private var model
     @State private var importing = false
+    @State private var scanPick = false
 
     var body: some View {
         @Bindable var model = model
@@ -41,10 +42,15 @@ struct ContentView: View {
             }
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
             .toolbar {
-                Button("Open Project", systemImage: "folder.badge.plus") { importing = true }
+                if model.scanning { ProgressView().controlSize(.small) }
+                Button("Find Projects", systemImage: "magnifyingglass") { scanPick = true; importing = true }
+                    .help("Find every folder with a skills.toml under a folder you pick")
+                    .disabled(model.scanning)
+                Button("Open Project", systemImage: "folder.badge.plus") { scanPick = false; importing = true }
             }
             .fileImporter(isPresented: $importing, allowedContentTypes: [.folder]) { result in
-                if case .success(let url) = result { model.open(url) }
+                guard case .success(let url) = result else { return }
+                if scanPick { Task { await model.scan(url) } } else { model.open(url) }
             }
         } content: {
             SkillsView()
@@ -117,6 +123,14 @@ struct EntryRow: View {
                 .padding(.horizontal, 6).padding(.vertical, 2)
                 .background(entry.ok ? Color.green.opacity(0.2) : Color.red.opacity(0.25), in: Capsule())
         }
+        .contextMenu {
+            ForEach([entry.skill, entry.package].compactMap { $0 }, id: \.self) { name in
+                Button("Copy \(name)") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(name, forType: .string)
+                }
+            }
+        }
     }
 }
 
@@ -138,10 +152,16 @@ struct DetailView: View {
                         if let note = u.note { Text(note).foregroundStyle(.secondary) }
                     }
                 }
+                if let a = entry.skill.flatMap({ model.audit[$0] }) { AuditSection(audit: a) }
+                if let text = model.skillText {
+                    Section("SKILL.md") {
+                        Text(text).monospaced().font(.callout).frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
                 if let package = entry.package {
                     Section {
                         HStack {
-                            Button("Update \(package)") { Task { await model.change(["update", package]) } }
+                            Button("Update \(package)…") { Task { await model.showDiff(package) } }
                             Button("Remove…", role: .destructive) { confirmRemove = true }
                         }
                     }
@@ -153,6 +173,10 @@ struct DetailView: View {
                 }
             }
             .formStyle(.grouped)
+            .textSelection(.enabled)
+            .sheet(isPresented: Binding(get: { model.diff != nil }, set: { if !$0 { model.diff = nil } })) {
+                DiffView()
+            }
         } else {
             ContentUnavailableView("Select a Skill", systemImage: "sidebar.right")
         }
@@ -171,12 +195,17 @@ struct AdoptView: View {
             Section(entry.skill ?? "") {
                 Text("Not managed by skillcask. Adopting moves it to ~/.config/skillcask/adopted/ and installs the skill from a package instead.")
                     .foregroundStyle(.secondary)
-                TextField("Source", text: $source, prompt: Text("github:owner/repo/\(entry.skill ?? "skill"), vendor/name or git:https://…"))
+                if entry.adopt == nil {
+                    Text("No source recorded for this skill. Enter where it comes from.")
+                        .foregroundStyle(.orange)
+                }
+                TextField("Source", text: $source, prompt: Text("e.g. github:owner/repo/skill, vendor/name or git:https://…"))
                 Button("Adopt") { Task { await model.change(["add", "--adopt", source.trimmingCharacters(in: .whitespaces)]) } }
                     .disabled(source.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }
         .formStyle(.grouped)
+        .textSelection(.enabled)
         .onAppear { source = entry.adopt ?? "" }
     }
 }
@@ -223,6 +252,66 @@ struct InfoSection: View {
 
     @ViewBuilder private func row(_ label: String, _ value: String?) -> some View {
         if let value { LabeledContent(label, value: value) }
+    }
+}
+
+/// What `audit` found the skill reaches, and its findings.
+struct AuditSection: View {
+    let audit: AuditDoc.Skill
+
+    var body: some View {
+        Section("Audit") {
+            ForEach(audit.findings, id: \.self) { f in
+                Label("\(f.path)\(f.line.map { ":\($0)" } ?? ""): \(f.message)", systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(f.rule == "modified" ? .red : .orange)
+            }
+            row("Commands", audit.commands)
+            row("Network", audit.network)
+            row("Paths", audit.paths)
+            row("Environment", audit.env)
+            row("Scripts", audit.scripts)
+            if audit.findings.isEmpty && [audit.commands, audit.network, audit.paths, audit.env, audit.scripts].allSatisfy(\.isEmpty) {
+                Label("No findings; uses no commands, network, paths, environment or scripts", systemImage: "checkmark.circle").foregroundStyle(.green)
+            }
+        }
+    }
+
+    @ViewBuilder private func row(_ label: String, _ items: [String]) -> some View {
+        if !items.isEmpty { LabeledContent(label, value: items.joined(separator: ", ")) }
+    }
+}
+
+struct DiffView: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading) {
+            if let d = model.diff {
+                Text("Update \(d.package)").font(.headline)
+                if d.text.isEmpty {
+                    Text("Nothing to update.").foregroundStyle(.secondary)
+                } else {
+                    ScrollView {
+                        Text(d.text).monospaced().font(.caption).textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(minHeight: 320)
+                }
+                HStack {
+                    Spacer()
+                    Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                    Button("Update") {
+                        dismiss()
+                        Task { await model.change(["update", d.package]) }
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(d.text.isEmpty)
+                }
+            }
+        }
+        .padding()
+        .frame(minWidth: 640)
     }
 }
 
@@ -283,6 +372,7 @@ struct DoctorView: View {
                     lines(d.passed, "checkmark.circle", .green)
                 }
                 .frame(minHeight: 240)
+                .textSelection(.enabled)
             }
             HStack {
                 Button("Fix") { Task { await model.runDoctor(fix: true) } }.disabled(model.doctor?.ok ?? true)
