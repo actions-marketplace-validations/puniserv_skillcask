@@ -283,7 +283,7 @@ Every command except `publish` and `validate` takes `-g, --global`.
 | `install [--frozen]` | Install the lock. `--frozen` (implied by `CI`) fails when the lock is out of date. |
 | `update [vendor/name…] [--diff]` | Re-resolve within constraints. `--diff` prints what changes in each updated or added package; it does not ask before installing. |
 | `outdated [--strict]` | Newer versions, when cooled-down ones become eligible, and GitHub or git tags moved since they were locked. `--strict` exits 1 when `update` would lock a newer version. |
-| `diff [vendor/name] [--to constraint]` | Unified diff of skill files from the locked version to the one `update` would lock, see below. |
+| `diff [vendor/name] [--to constraint\|--from old.lock]` | Unified diff of skill files from the locked version to the one `update` would lock, or from an older lock to `skills.lock`, see below. |
 | `info <vendor/name[@constraint]\|github:owner/repo\|git:url\|skill>` | A package's skills, versions, description, license and requirements, or which package installs a skill. |
 | `status` | Exit 1 when manifest, lock or installed files disagree. |
 | `doctor [--fix]` | Broken or committed links, stale gitignore block, modified skills; lists each check it ran. |
@@ -326,6 +326,26 @@ ends change), and invisible characters in changed files are warned about. Files 
 before it writes the lock, then installs without asking: run `skillcask diff` first to review
 and decide. A scheduled CI job can run `skillcask outdated --strict` (exit 1 when something is to
 update), then `skillcask update --diff` and open a pull request with the output.
+
+**Reviewing a lock change:** `skillcask diff --from old.lock` prints the same diff from the
+versions in another lock to those in `skills.lock`, plus the packages it drops, so a reviewer
+sees the skill text a pull request brings in instead of new versions and hashes. Each new dist
+is verified against `skills.lock` as `install` would, and the policy decides which repositories
+may be fetched. skillcask does not run git; the job fetches the old lock:
+
+```yaml
+# GitLab CI: print the diff in the merge request pipeline
+skills-diff:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes: [skills.lock]
+  script:
+    - git fetch --depth 1 origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+    - git show FETCH_HEAD:skills.lock | skillcask diff --from -
+```
+
+`--from -` reads the old lock from stdin. On GitHub the same lines run in a `pull_request` job with `$GITHUB_BASE_REF`; posting the
+output as a comment is up to the CI.
 
 **Where a skill comes from:** `skillcask info vendor/name` shows the package's skills with their
 descriptions, its versions, description, license, `abandoned` and `requires`, for the locked

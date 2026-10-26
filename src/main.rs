@@ -129,8 +129,11 @@ enum Cmd {
         /// One package (also a dependency); default: every entry of skills.toml with a newer version.
         package: Option<String>,
         /// Compare with the newest version matching this instead, cooldown not applied.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "from")]
         to: Option<String>,
+        /// Compare skills.lock with this older lock instead (`-`: stdin), e.g. the target branch's in a review.
+        #[arg(long)]
+        from: Option<std::path::PathBuf>,
     },
     /// A package's skills, versions, description, license and requirements; for an installed
     /// skill name, which package and skills.toml entry install it.
@@ -263,7 +266,10 @@ fn run(cli: Cli) -> Result<(), Error> {
         Cmd::Install { frozen } => commands::install(&ctx, frozen || ci()),
         Cmd::Update { packages, diff } => commands::update(&ctx, &packages, diff),
         Cmd::Outdated { strict, json } => commands::outdated(&ctx, strict, json),
-        Cmd::Diff { package, to } => commands::diff(&ctx, package.as_deref(), to.as_deref()),
+        Cmd::Diff { package, to, from } => match from {
+            Some(base) => commands::diff_from(&ctx, &base, package.as_deref()),
+            None => commands::diff(&ctx, package.as_deref(), to.as_deref()),
+        },
         Cmd::Info { target, json } => commands::info(&ctx, &target, json),
         Cmd::Status { json } => commands::status(&ctx, json),
         Cmd::Doctor { fix, json } => commands::doctor(&ctx, fix, json),

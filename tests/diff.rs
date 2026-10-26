@@ -135,3 +135,32 @@ fn a_line_end_change_is_visible() {
     let out = p.ok(&["diff"]);
     assert!(out.contains("-a\n-b\n-c\n+a<U+000D>\n+b<U+000D>\n+c<U+000D>\n"), "{out}");
 }
+
+#[test]
+fn diff_from_an_older_lock_shows_what_a_review_brings_in() {
+    let s = Server::start();
+    let p = project(&s);
+    std::fs::copy(p.path().join("skills.lock"), p.path().join("base.lock")).unwrap();
+    assert!(p.ok(&["diff", "--from", "base.lock"]).contains("no changes between the locks"));
+
+    release(&s, 240);
+    p.ok(&["update"]);
+    let out = p.ok(&["diff", "--from", "base.lock"]);
+    assert!(out.starts_with("acme/x 1.0.0 -> 1.1.0\n"), "{out}");
+    assert!(out.contains("@@ -1,3 +1,3 @@\n a\n-b\n+B\n c\n"), "{out}");
+    let piped = p.run_input(&["diff", "--from", "-"], &p.read("base.lock"));
+    assert!(String::from_utf8_lossy(&piped.stdout).starts_with("acme/x 1.0.0 -> 1.1.0\n"), "{piped:?}");
+    let rev = p.ok(&["diff", "--from", "skills.lock", "acme/x"]);
+    assert!(rev.contains("no changes"), "{rev}");
+
+    // A lock under review that hashes other content than its dist fails as `install` would.
+    let lock = p.read("skills.lock");
+    let at = lock.find("tree-sha256 = \"").unwrap() + "tree-sha256 = \"".len();
+    p.write("skills.lock", &format!("{}{}{}", &lock[..at], "0".repeat(64), &lock[at + 64..]));
+    assert!(p.expect(&["diff", "--from", "base.lock"], 4).contains("skills.lock expects 0000"));
+
+    std::fs::remove_file(p.path().join("skills.lock")).unwrap();
+    assert!(p.ok(&["diff", "--from", "base.lock"]).contains("acme/x 1.0.0 (removed)"));
+    assert!(p.expect(&["diff", "--from", "missing.lock"], 5).contains("missing.lock"));
+    assert!(p.expect(&["diff", "--from", "base.lock", "--to", "2"], 1).contains("cannot be used with"));
+}

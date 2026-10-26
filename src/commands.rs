@@ -2279,6 +2279,66 @@ pub fn diff(ctx: &Ctx, package: Option<&str>, to: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// D39: what `install` changes when `base` (an older lock) becomes skills.lock, for review.
+pub fn diff_from(ctx: &Ctx, base: &Path, package: Option<&str>) -> Result<()> {
+    let m = Manifest::load(&ctx.s.config, ctx.s.global)?;
+    let lock = Lock::load(&ctx.s.config)?;
+    // `-`: `git show origin/main:skills.lock | skillcask diff --from -`, with no temp file.
+    let text = if base == Path::new("-") {
+        std::io::read_to_string(std::io::stdin()).ctx("stdin")?
+    } else {
+        std::fs::read_to_string(base).ctx(base.display())?
+    };
+    let old = crate::lock::parse(&text).map_err(|e| Error::new(e.code, format!("{}: {}", base.display(), e.msg)))?;
+    if let Some(n) = package
+        && lock.get(n).is_none()
+        && old.get(n).is_none()
+    {
+        bail!(MANIFEST, "{n} is in neither {} nor {}", crate::lock::FILE, base.display());
+    }
+    let wanted = |n: &str| package.is_none_or(|p| p == n);
+    let mut shown = 0;
+    for new in lock.packages.iter().filter(|p| wanted(&p.name)) {
+        let before = old.get(&new.name);
+        if before.is_some_and(|b| b.dist_sha256 == new.dist_sha256 && b.skills == new.skills) {
+            continue;
+        }
+        // The lock under review chooses the URL; the policy decides whether it is fetched at all.
+        if let Some(why) = m.refuses(&new.repository) {
+            bail!(MANIFEST, "{}: {why}", new.name);
+        }
+        let f = ctx.fetch(&new.name, &new.dist, Some(&new.dist_sha256), None)?.1;
+        // Shows what `install` would place, or fails where `install` would.
+        for sk in &new.skills {
+            let mut files = f.skill_files(&new.name, sk.from.as_ref().unwrap_or(&sk.name), &sk.path)?;
+            if sk.from.is_some() {
+                files = f.renamed_files(files, &sk.path, &sk.name)?.0;
+            }
+            let got = skill::tree_hash(&files);
+            if got != sk.tree_sha256 {
+                bail!(
+                    HASH,
+                    "{} {}: skill {} has tree-sha256 {got}, skills.lock expects {}",
+                    new.name,
+                    new.version,
+                    sk.name,
+                    sk.tree_sha256
+                );
+            }
+        }
+        ctx.show_diff(before, new, &f, true)?;
+        shown += 1;
+    }
+    for gone in old.packages.iter().filter(|p| wanted(&p.name) && lock.get(&p.name).is_none()) {
+        println!("{}", ui::out(ui::Color::Cyan, skill::shown(&format!("{} {} (removed)", gone.name, gone.version))));
+        shown += 1;
+    }
+    if shown == 0 {
+        println!("no changes between the locks");
+    }
+    Ok(())
+}
+
 /// A package's skills, versions and registry metadata (`vendor/name[@constraint]` or
 /// `github:owner/repo[@version-or-ref]`), or which package installs a skill (its name).
 pub fn info(ctx: &Ctx, target: &str, json: bool) -> Result<()> {
