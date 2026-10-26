@@ -198,7 +198,8 @@ impl App {
     }
 
     fn missing_detail(&self) -> Option<Job> {
-        let skill = self.selected()?.skill.as_ref()?;
+        let r = self.selected().filter(|r| r.state != "not managed")?;
+        let skill = r.skill.as_ref()?;
         (!self.details.contains_key(skill)).then(|| Job::Detail(skill.clone()))
     }
 
@@ -365,6 +366,15 @@ impl App {
                 .collect();
         };
         match self.view {
+            // `info` knows only installed packages and project skills.
+            View::Info if r.state == "not managed" => vec![
+                "not managed by skillcask".into(),
+                match &r.adopt {
+                    Some(src) => format!("npx skills recorded the source {src}"),
+                    None => "no source recorded".into(),
+                },
+                "press a to adopt: the copy moves to ~/.config/skillcask/adopted/ and the package's skill is installed".into(),
+            ],
             View::Info => self.details.get(skill).cloned().unwrap_or_default(),
             View::Audit => audit_lines(&self.audit, skill),
             View::Output => self.output.clone(),
@@ -654,7 +664,7 @@ fn draw(f: &mut Frame, app: &App) {
         Mode::Pick { .. } | Mode::List => app.message.clone(),
     };
     f.render_widget(Paragraph::new(clean(&line).join(" ")), msg);
-    f.render_widget(Paragraph::new(legend.join("\n")).style(Style::new().fg(Color::DarkGray)), help);
+    f.render_widget(Paragraph::new(legend.join("\n")), help);
 }
 
 #[cfg(test)]
@@ -737,6 +747,16 @@ mod tests {
         let lines = legend(&HELP, 40);
         assert!(lines.len() > 1 && lines.iter().all(|l| l.chars().count() <= 40));
         assert_eq!(lines.join("  "), HELP.join("  "));
+    }
+
+    #[test]
+    fn an_unmanaged_skill_explains_adopt_instead_of_running_info() {
+        // Regression: info failed with "no installed skill" for every not managed row.
+        let mut a = app(sample(), true);
+        a.sel = 2;
+        assert_eq!(a.missing_detail(), None);
+        let lines = a.detail_lines();
+        assert!(lines.iter().any(|l| l.contains("github:o/r/mine")) && lines.iter().any(|l| l.starts_with("press a")), "{lines:?}");
     }
 
     #[test]
