@@ -108,3 +108,10 @@ fn the_home_directory_error_names_the_way_out() {
     assert!(out.contains("error: the home directory is the global scope, not a project"), "{out}");
     assert!(out.contains("  hint: manage personal skills with --global, e.g. skillcask --global install"), "{out}");
 }
+
+#[test]
+fn ui_refuses_to_start_without_a_terminal() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_skillcask")).arg("ui").output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("skillcask ui needs a terminal"), "{out:?}");
+}

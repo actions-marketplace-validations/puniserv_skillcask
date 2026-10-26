@@ -52,6 +52,7 @@ fn status_outdated_info_and_doctor() {
     assert_eq!(info["why"], json!(["acme/one: in skills.toml as \"^1.0\""]));
     let sk = doc(&p, &["info", "one", "--json"], 0);
     assert_eq!((sk["kind"].clone(), sk["package"].clone()), (json!("package"), json!("acme/one")));
+    assert_eq!(sk["path"], ".agents/skills/one");
 
     let d = doc(&p, &["doctor", "--json"], 0);
     assert_eq!(d["ok"], true);

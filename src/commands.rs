@@ -2490,7 +2490,7 @@ fn why_skill(ctx: &Ctx, m: &Manifest, lock: &Lock, name: &str, json: bool) -> Re
     if json {
         let locals = project::local_names(&ctx.s, &m.local)?;
         let doc = if let Some((p, sk)) = lock.skills().find(|(_, sk)| sk.name == name) {
-            json!({ "skill": name, "kind": "package", "package": p.name, "version": p.version, "from": sk.from, "why": why(m, &deps::wanted(m, lock)?, lock, &p.name) })
+            json!({ "skill": name, "kind": "package", "package": p.name, "version": p.version, "from": sk.from, "path": format!("{STORE}/{name}"), "why": why(m, &deps::wanted(m, lock)?, lock, &p.name) })
         } else if locals.contains(name) {
             json!({ "skill": name, "kind": "project", "path": format!("{}/{name}", m.local) })
         } else if hand_written(&ctx.s, lock, &project::block_managed(&ctx.s)?, &locals)?.contains(name) {

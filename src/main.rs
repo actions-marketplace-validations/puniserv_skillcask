@@ -17,6 +17,7 @@ mod publish;
 mod registry;
 mod scope;
 mod skill;
+mod tui;
 mod ui;
 mod version;
 
@@ -209,6 +210,8 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Browse, add, update and remove skills in a terminal UI; it runs this binary for every step.
+    Ui,
     /// Any other command runs `skillcask-<command>` from PATH, like git and cargo plugins.
     #[command(external_subcommand)]
     External(Vec<OsString>),
@@ -252,6 +255,9 @@ fn run(cli: Cli) -> Result<(), Error> {
     if let Cmd::Projects { dirs, json } = &cli.cmd {
         return commands::projects(dirs, *json);
     }
+    if let Cmd::Ui = cli.cmd {
+        return tui::run(cli.global);
+    }
     let scope = if cli.global {
         Scope::global()?
     } else {
@@ -287,7 +293,7 @@ fn run(cli: Cli) -> Result<(), Error> {
         Cmd::Doctor { fix, json } => commands::doctor(&ctx, fix, json),
         Cmd::Audit { json, sarif } => commands::audit(&ctx, json, sarif),
         Cmd::Search { query, json } => commands::search(&ctx, &query, json),
-        Cmd::External(_) | Cmd::Auth(_) | Cmd::Validate { .. } | Cmd::Projects { .. } => unreachable!("handled above"),
+        Cmd::External(_) | Cmd::Auth(_) | Cmd::Validate { .. } | Cmd::Projects { .. } | Cmd::Ui => unreachable!("handled above"),
         Cmd::Publish { vendor, base_url, dist_url, inline, out, paths } => {
             if vendor.is_empty() {
                 return Err(Error::new(MANIFEST, "--vendor must not be empty"));
