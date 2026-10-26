@@ -201,6 +201,14 @@ enum Cmd {
         /// Skill directories, or directories to search for SKILL.md (default: the current one).
         paths: Vec<PathBuf>,
     },
+    /// List directories that hold skills.toml under the given ones (default: the current one),
+    /// skipping hidden directories, node_modules, vendor, target and Library.
+    Projects {
+        dirs: Vec<PathBuf>,
+        /// Print one JSON document instead of text (D32).
+        #[arg(long)]
+        json: bool,
+    },
     /// Any other command runs `skillcask-<command>` from PATH, like git and cargo plugins.
     #[command(external_subcommand)]
     External(Vec<OsString>),
@@ -228,7 +236,8 @@ fn run(cli: Cli) -> Result<(), Error> {
         unpacked: cli.max_unpacked.unwrap_or(d.unpacked),
         files: cli.max_files.unwrap_or(d.files),
     };
-    if cli.global && matches!(cli.cmd, Cmd::External(_) | Cmd::Publish { .. } | Cmd::Auth(_) | Cmd::Validate { .. }) {
+    if cli.global && matches!(cli.cmd, Cmd::External(_) | Cmd::Publish { .. } | Cmd::Auth(_) | Cmd::Validate { .. } | Cmd::Projects { .. })
+    {
         return Err(Error::new(MANIFEST, "--global does not apply to this command"));
     }
     if let Cmd::External(args) = &cli.cmd {
@@ -239,6 +248,9 @@ fn run(cli: Cli) -> Result<(), Error> {
     }
     if let Cmd::Validate { paths } = &cli.cmd {
         return publish::validate(paths);
+    }
+    if let Cmd::Projects { dirs, json } = &cli.cmd {
+        return commands::projects(dirs, *json);
     }
     let scope = if cli.global {
         Scope::global()?
@@ -275,7 +287,7 @@ fn run(cli: Cli) -> Result<(), Error> {
         Cmd::Doctor { fix, json } => commands::doctor(&ctx, fix, json),
         Cmd::Audit { json, sarif } => commands::audit(&ctx, json, sarif),
         Cmd::Search { query, json } => commands::search(&ctx, &query, json),
-        Cmd::External(_) | Cmd::Auth(_) | Cmd::Validate { .. } => unreachable!("handled above"),
+        Cmd::External(_) | Cmd::Auth(_) | Cmd::Validate { .. } | Cmd::Projects { .. } => unreachable!("handled above"),
         Cmd::Publish { vendor, base_url, dist_url, inline, out, paths } => {
             if vendor.is_empty() {
                 return Err(Error::new(MANIFEST, "--vendor must not be empty"));

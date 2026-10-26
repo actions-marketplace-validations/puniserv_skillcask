@@ -271,7 +271,7 @@ skillcask -g install --frozen    # e.g. from a dotfiles repository
 
 ### Commands
 
-Every command except `publish` and `validate` takes `-g, --global`.
+Every command except `publish`, `validate` and `projects` takes `-g, --global`.
 
 | Command | |
 |---|---|
@@ -292,9 +292,10 @@ Every command except `publish` and `validate` takes `-g, --global`.
 | `auth set\|remove <host>` | Keep a registry token in git's credential helper (Keychain, Credential Manager, libsecret). |
 | `publish --vendor v --base-url URL --out DIR [--inline] [--dist-url TPL] [paths…]` | Build a static Composer repository from a monorepo. |
 | `validate [paths…]` | Check `SKILL.md` files against the Agent Skills spec, see below. |
+| `projects [dirs…]` | Directories that hold `skills.toml` under the given ones (default: the current one), up to 6 levels down; hidden directories, `node_modules`, `vendor`, `target` and `Library` are skipped. |
 | `<other>` | Runs `skillcask-<other>` from `PATH`, like git and cargo plugins. |
 
-`status`, `outdated`, `info`, `search`, `doctor` and `audit` take `--json`: one JSON document on one line of
+`status`, `outdated`, `info`, `search`, `doctor`, `audit` and `projects` take `--json`: one JSON document on one line of
 stdout, with the same exit code; warnings and errors stay on stderr. Package text in it is
 escaped as in the terminal (`<U+202E>`). For example `skillcask outdated --json | jq
 '.packages[] | select(.within != .locked)'`.

@@ -636,6 +636,27 @@ pub fn git_untrack(s: &Scope, paths: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// Hidden directories and these never hold a project of their own, and walking them is most of
+/// the time a scan takes.
+const NOT_PROJECTS: [&str; 4] = ["node_modules", "vendor", "target", "Library"];
+
+/// Appends `dir` and every directory under it, at most `depth` levels down, that holds
+/// skills.toml (D40). Symlinks are not followed, and an unreadable directory is skipped instead
+/// of failing the walk: a home directory always has some.
+pub fn find_projects(dir: &Path, depth: usize, found: &mut Vec<PathBuf>) {
+    if dir.join(crate::manifest::FILE).is_file() {
+        found.push(dir.to_path_buf());
+    }
+    let Some(rd) = std::fs::read_dir(dir).ok().filter(|_| depth > 0) else { return };
+    for e in rd.flatten() {
+        let name = e.file_name();
+        let name = name.to_string_lossy();
+        if e.file_type().is_ok_and(|t| t.is_dir()) && !name.starts_with('.') && !NOT_PROJECTS.contains(&name.as_ref()) {
+            find_projects(&e.path(), depth - 1, found);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

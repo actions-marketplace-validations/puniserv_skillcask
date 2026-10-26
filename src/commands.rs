@@ -2549,6 +2549,33 @@ fn why(m: &Manifest, w: &deps::Wanted, lock: &Lock, pkg: &str) -> Vec<String> {
 }
 
 /// `--json` output (D32): one compact document per command on stdout; warnings stay on stderr.
+/// Levels below each given directory `projects` looks at: deep enough for `~/src/org/repo`
+/// layouts, shallow enough that a scan of a home directory ends in seconds.
+const PROJECT_DEPTH: usize = 6;
+
+pub fn projects(dirs: &[std::path::PathBuf], json: bool) -> Result<()> {
+    let roots = if dirs.is_empty() { vec![std::path::PathBuf::from(".")] } else { dirs.to_vec() };
+    let mut found = Vec::new();
+    for r in &roots {
+        // Not canonicalize: on Windows it returns \\?\ paths nobody can paste.
+        let root = std::path::absolute(r).ctx(r.display())?;
+        if !root.is_dir() {
+            bail!(crate::error::IO, "{}: not a directory", r.display());
+        }
+        project::find_projects(&root, PROJECT_DEPTH, &mut found);
+    }
+    found.sort();
+    found.dedup();
+    if json {
+        print_json(&json!({ "projects": found.iter().map(|p| json!({ "path": p })).collect::<Vec<_>>() }));
+    } else if found.is_empty() {
+        ui::note("no skills.toml found");
+    } else {
+        found.iter().for_each(|p| println!("{}", p.display()));
+    }
+    Ok(())
+}
+
 fn print_json(v: &Value) {
     println!("{v}");
 }
