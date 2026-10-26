@@ -38,7 +38,9 @@ which echoes nothing, so a user cannot tell whether the paste arrived.
 
 ## Non-goals
 
-- JSON output.
+- ~~JSON output.~~ Dropped as a non-goal on 2026-10-26: agents and CI parse output, and every
+  comparable tool offers it. `--json` on `status`, `outdated`, `info`, `search` and `doctor` is
+  D32 in the v1 spec.
 - Masking the token prompt with `*`: it needs the terminal in raw mode, which means a dependency
   with `unsafe` code or writing it ourselves against `#![forbid(unsafe_code)]`.
 

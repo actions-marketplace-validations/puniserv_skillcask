@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Component, Path};
 
 use jiff::{SignedDuration, Timestamp};
+use serde_json::{Value, json};
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
 
@@ -1579,7 +1580,7 @@ fn settle_and_save(
 }
 
 /// `strict`: exit 1 when `update` would lock a newer version of a manifest entry.
-pub fn outdated(ctx: &Ctx, strict: bool) -> Result<()> {
+pub fn outdated(ctx: &Ctx, strict: bool, json: bool) -> Result<()> {
     let m = Manifest::load(&ctx.s.config, ctx.s.global)?;
     let lock = Lock::load(&ctx.s.config)?;
     // Only --strict needs what `update` resolves, and fails as `update` would on a conflict.
@@ -1627,7 +1628,16 @@ pub fn outdated(ctx: &Ctx, strict: bool) -> Result<()> {
         let v = |c: Option<&Candidate>| c.map_or("-".to_string(), |c| c.version.clone());
         rows.push([req.name.clone(), locked, v(within), v(registry::newest(&cands, None)), note]);
     }
-    ui::table(&rows, |_, _| None);
+    if json {
+        let opt = |s: &String| if s.is_empty() || s == "-" { Value::Null } else { Value::from(s.as_str()) };
+        let packages: Vec<Value> = rows[1..]
+            .iter()
+            .map(|r| json!({ "package": r[0], "locked": opt(&r[1]), "within": opt(&r[2]), "latest": opt(&r[3]), "note": opt(&r[4]) }))
+            .collect();
+        print_json(&json!({ "packages": packages, "behind": behind }));
+    } else {
+        ui::table(&rows, |_, _| None);
+    }
     if !behind.is_empty() {
         return Err(Error::new(
             MANIFEST,
@@ -1646,7 +1656,7 @@ fn newer(req: &SkillReq, p: &Package, c: &Candidate) -> bool {
     version::Version::parse(&p.version).is_none_or(|v| c.parsed > v)
 }
 
-pub fn status(ctx: &Ctx) -> Result<()> {
+pub fn status(ctx: &Ctx, json: bool) -> Result<()> {
     let m = Manifest::load(&ctx.s.config, ctx.s.global)?;
     let lock = Lock::load(&ctx.s.config)?;
     let mut rows = vec![["package", "version", "skill", "state"].map(String::from)];
@@ -1656,7 +1666,7 @@ pub fn status(ctx: &Ctx) -> Result<()> {
             bad += 1;
         }
         // An agent pays for every row; it only needs the ones to act on.
-        if !(ui::agent() && healthy(state)) {
+        if json || !(ui::agent() && healthy(state)) {
             rows.push([p, v, s, state].map(String::from));
         }
     };
@@ -1700,6 +1710,25 @@ pub fn status(ctx: &Ctx) -> Result<()> {
         row(&mut rows, "-", "-", l, state);
     }
     let skills = rows.iter().skip(1).filter(|r| r[3] == "ok").count();
+    if json {
+        let opt = |s: &String| if s == "-" { Value::Null } else { Value::from(s.as_str()) };
+        let entries: Vec<Value> = rows[1..]
+            .iter()
+            .map(|r| json!({ "package": opt(&r[0]), "version": opt(&r[1]), "skill": opt(&r[2]), "state": r[3], "ok": healthy(&r[3]) }))
+            .collect();
+        let policy: serde_json::Map<String, Value> =
+            m.policy.effective.iter().map(|(k, (v, from))| (k.to_string(), json!({ "value": policy_value(v), "from": from }))).collect();
+        print_json(&json!({
+            "ok": bad == 0,
+            "entries": entries,
+            "policy": policy,
+            "targets": { "entries": m.target_entries, "from": m.targets_from, "dirs": m.targets },
+        }));
+        if bad > 0 {
+            return Err(Error::new(MANIFEST, format!("{bad} problem(s)")).hint("run skillcask install"));
+        }
+        return Ok(());
+    }
     if rows.len() > 1 {
         ui::table(&rows, |i, c| match (i, healthy(c)) {
             (3, true) => Some(ui::Color::Green),
@@ -1726,7 +1755,7 @@ pub fn status(ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
-pub fn doctor(ctx: &Ctx, fix: bool) -> Result<()> {
+pub fn doctor(ctx: &Ctx, fix: bool, json: bool) -> Result<()> {
     let s = &ctx.s;
     let m = Manifest::load(&s.config, s.global)?;
     let lock = Lock::load(&s.config)?;
@@ -1828,6 +1857,13 @@ pub fn doctor(ctx: &Ctx, fix: bool) -> Result<()> {
     }
 
     let warnings = shadows(s, &m, locked.keys().chain(&hand).chain(&locals));
+    if json {
+        print_json(&json!({ "ok": open.is_empty(), "passed": passed, "problems": open, "fixed": fixed, "warnings": warnings }));
+        if !open.is_empty() {
+            return Err(Error::new(MANIFEST, format!("{} problem(s)", open.len())));
+        }
+        return Ok(());
+    }
     // An agent gets the same items with a word instead of a symbol and no blank lines.
     let section = |items: &[String], mark: &str, word: &str, c: ui::Color| {
         for i in items {
@@ -1862,9 +1898,14 @@ pub fn doctor(ctx: &Ctx, fix: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn search(ctx: &Ctx, query: &str) -> Result<()> {
+pub fn search(ctx: &Ctx, query: &str, json: bool) -> Result<()> {
     let m = ctx.manifest_or_default()?;
     let results = Registry::new(ctx.http()?).search(&m.allowed_repositories(), query)?;
+    if json {
+        let list: Vec<Value> = results.iter().map(|(n, d)| json!({ "name": skill::shown(n), "description": skill::shown(d) })).collect();
+        print_json(&json!({ "results": list }));
+        return Ok(());
+    }
     if results.is_empty() {
         println!("no skill packages match {query:?}");
     }
@@ -1940,13 +1981,13 @@ pub fn diff(ctx: &Ctx, package: Option<&str>, to: Option<&str>) -> Result<()> {
 
 /// A package's skills, versions and registry metadata (`vendor/name[@constraint]` or
 /// `github:owner/repo[@version-or-ref]`), or which package installs a skill (its name).
-pub fn info(ctx: &Ctx, target: &str) -> Result<()> {
+pub fn info(ctx: &Ctx, target: &str, json: bool) -> Result<()> {
     let m = ctx.manifest_or_default()?;
     let lock = Lock::load(&ctx.s.config)?;
     let (spec, gh) = target.strip_prefix("github:").map_or((target, false), |r| (r, true));
     let (name, at) = spec.split_once('@').map_or((spec, None), |(n, a)| (n, Some(a)));
     if !gh && !name.contains('/') {
-        return why_skill(ctx, &m, &lock, name);
+        return why_skill(ctx, &m, &lock, name, json);
     }
     let name = if gh { name.to_lowercase() } else { name.to_string() };
     if !manifest::valid_package_name(&name) {
@@ -2008,6 +2049,41 @@ pub fn info(ctx: &Ctx, target: &str) -> Result<()> {
         }
     };
 
+    if json {
+        let source = match existing.and_then(|e| e.git.as_ref()) {
+            Some(_) => "git",
+            None if gh => "github",
+            None => "composer",
+        };
+        let abandoned = match abandoned {
+            Some(Some(r)) if manifest::valid_package_name(&r) => Value::from(r),
+            Some(_) => Value::Bool(true),
+            None => Value::Null,
+        };
+        let skills: Vec<Value> = pkg
+            .skills
+            .iter()
+            .map(|sk| {
+                let d = skill::frontmatter(&skill_md_of(&f.dir.path().join(&sk.path))).remove("description");
+                json!({ "name": sk.name, "description": d.map(|d| skill::shown(&d)) })
+            })
+            .collect();
+        print_json(&json!({
+            "package": name,
+            "source": source,
+            "repository": crate::http::shown_url(&repo.url),
+            "version": c.version,
+            "locked": locked.is_some(),
+            "description": c.description.as_deref().map(skill::shown),
+            "license": c.license,
+            "abandoned": abandoned,
+            "versions": versions,
+            "requires": pkg.requires,
+            "skills": skills,
+            "why": why(&m, &deps::wanted(&m, &lock)?, &lock, &name),
+        }));
+        return Ok(());
+    }
     let line = |s: String| println!("{}", skill::shown(&s));
     let title = format!("{}{name} {}", if gh { "github:" } else { "" }, c.version);
     line(if locked.is_some() { format!("{title} (locked)") } else { title });
@@ -2044,8 +2120,22 @@ pub fn info(ctx: &Ctx, target: &str) -> Result<()> {
 }
 
 /// Which package installs skill `name`, and the manifest entries that bring that package in.
-fn why_skill(ctx: &Ctx, m: &Manifest, lock: &Lock, name: &str) -> Result<()> {
+fn why_skill(ctx: &Ctx, m: &Manifest, lock: &Lock, name: &str, json: bool) -> Result<()> {
     let line = |s: String| println!("{}", skill::shown(&s));
+    if json {
+        let locals = project::local_names(&ctx.s, &m.local)?;
+        let doc = if let Some((p, sk)) = lock.skills().find(|(_, sk)| sk.name == name) {
+            json!({ "skill": name, "kind": "package", "package": p.name, "version": p.version, "from": sk.from, "why": why(m, &deps::wanted(m, lock)?, lock, &p.name) })
+        } else if locals.contains(name) {
+            json!({ "skill": name, "kind": "project", "path": format!("{}/{name}", m.local) })
+        } else if hand_written(&ctx.s, lock, &project::block_managed(&ctx.s)?, &locals)?.contains(name) {
+            json!({ "skill": name, "kind": "hand-written", "path": format!("{STORE}/{name}") })
+        } else {
+            bail!(MANIFEST, "no installed skill {name:?}; info takes an installed skill name, vendor/name or github:owner/repo");
+        };
+        print_json(&doc);
+        return Ok(());
+    }
     if let Some((p, sk)) = lock.skills().find(|(_, sk)| sk.name == name) {
         line(match &sk.from {
             Some(from) => format!("{name}: skill {from} of {} {}, renamed", p.name, p.version),
@@ -2091,6 +2181,19 @@ fn why(m: &Manifest, w: &deps::Wanted, lock: &Lock, pkg: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// `--json` output (D32): one compact document per command on stdout; warnings stay on stderr.
+fn print_json(v: &Value) {
+    println!("{v}");
+}
+
+fn policy_value(v: &crate::policy::Value) -> Value {
+    match v {
+        crate::policy::Value::Age(a) => Value::from(format!("{a:#}")),
+        crate::policy::Value::Bool(b) => Value::Bool(*b),
+        crate::policy::Value::List(l) => Value::from(l.iter().map(|s| crate::http::shown_url(s)).collect::<Vec<_>>()),
+    }
 }
 
 /// A report line such as `updated a/b 1.0.0 -> 1.1.0`, its first word as the verb.

@@ -170,6 +170,11 @@ fn redact_raw(s: &str) -> String {
     out
 }
 
+/// `redact` for a string that may or may not parse as a URL.
+pub fn shown_url(s: &str) -> String {
+    Url::parse(s).map_or_else(|_| s.to_string(), |u| redact(&u))
+}
+
 /// URL safe to print: no userinfo, no query (tokens sometimes travel there).
 pub fn redact(url: &Url) -> String {
     let mut u = url.clone();

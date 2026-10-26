@@ -116,6 +116,9 @@ enum Cmd {
         /// Exit 1 when `update` would lock a newer version within a package's constraint.
         #[arg(long)]
         strict: bool,
+        /// Print one JSON document instead of text (D32).
+        #[arg(long)]
+        json: bool,
     },
     /// Unified diff of skill files from the locked version to the one `update` would lock.
     Diff {
@@ -130,17 +133,32 @@ enum Cmd {
     Info {
         /// vendor/name[@constraint], github:owner/repo[@version-or-ref], or a skill name
         target: String,
+        /// Print one JSON document instead of text (D32).
+        #[arg(long)]
+        json: bool,
     },
     /// Compare skills.toml, skills.lock and installed files; exit 1 on any mismatch.
-    Status,
+    Status {
+        /// Print one JSON document instead of text (D32).
+        #[arg(long)]
+        json: bool,
+    },
     /// Check links, the gitignore block and installed files.
     Doctor {
         /// Repair links, the git index and the gitignore block (never downloads).
         #[arg(long)]
         fix: bool,
+        /// Print one JSON document instead of text (D32).
+        #[arg(long)]
+        json: bool,
     },
     /// Search for skill packages.
-    Search { query: String },
+    Search {
+        query: String,
+        /// Print one JSON document instead of text (D32).
+        #[arg(long)]
+        json: bool,
+    },
     /// Keep a registry token in git's credential helper (Keychain, Credential Manager, libsecret).
     #[command(subcommand)]
     Auth(AuthCmd),
@@ -227,12 +245,12 @@ fn run(cli: Cli) -> Result<(), Error> {
         Cmd::Remove { packages } => commands::remove(&ctx, &packages),
         Cmd::Install { frozen } => commands::install(&ctx, frozen || ci()),
         Cmd::Update { packages, diff } => commands::update(&ctx, &packages, diff),
-        Cmd::Outdated { strict } => commands::outdated(&ctx, strict),
+        Cmd::Outdated { strict, json } => commands::outdated(&ctx, strict, json),
         Cmd::Diff { package, to } => commands::diff(&ctx, package.as_deref(), to.as_deref()),
-        Cmd::Info { target } => commands::info(&ctx, &target),
-        Cmd::Status => commands::status(&ctx),
-        Cmd::Doctor { fix } => commands::doctor(&ctx, fix),
-        Cmd::Search { query } => commands::search(&ctx, &query),
+        Cmd::Info { target, json } => commands::info(&ctx, &target, json),
+        Cmd::Status { json } => commands::status(&ctx, json),
+        Cmd::Doctor { fix, json } => commands::doctor(&ctx, fix, json),
+        Cmd::Search { query, json } => commands::search(&ctx, &query, json),
         Cmd::External(_) | Cmd::Auth(_) | Cmd::Validate { .. } => unreachable!("handled above"),
         Cmd::Publish { vendor, base_url, dist_url, inline, out, paths } => {
             if vendor.is_empty() {

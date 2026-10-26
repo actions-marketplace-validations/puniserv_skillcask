@@ -268,6 +268,11 @@ Every command except `publish` and `validate` takes `-g, --global`.
 | `validate [paths…]` | Check `SKILL.md` files against the Agent Skills spec, see below. |
 | `<other>` | Runs `skillcask-<other>` from `PATH`, like git and cargo plugins. |
 
+`status`, `outdated`, `info`, `search` and `doctor` take `--json`: one JSON document on one line of
+stdout, with the same exit code; warnings and errors stay on stderr. Package text in it is
+escaped as in the terminal (`<U+202E>`). For example `skillcask outdated --json | jq
+'.packages[] | select(.within != .locked)'`.
+
 Exit codes: 0 ok, 1 manifest/lock/status problems, 2 authentication, 3 network, 4 hash mismatch,
 5 IO or archive error.
 
