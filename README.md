@@ -60,6 +60,27 @@ build provenance attestations:
 gh attestation verify skillcask-x86_64-unknown-linux-gnu.tar.xz -R puniserv/skillcask
 ```
 
+**GitHub Actions**
+
+```yaml
+permissions:
+  contents: read
+  attestations: read   # for the provenance check
+steps:
+  - uses: actions/checkout@<sha>
+  - uses: puniserv/skillcask@<commit sha of a release tag>   # vX.Y.Z
+    with:
+      version: X.Y.Z               # needed when the action is pinned to a sha, not a tag
+      args: install --frozen       # default
+      # working-directory: .
+      # verify-attestation: "true" # default
+```
+
+The action downloads the release archive for the runner (Linux x64 and arm64, macOS, Windows
+x64), checks its sha256 and its build provenance attestation, puts `skillcask` on `PATH` and runs
+it with `args`. It runs no other action. Used at a tag (`@vX.Y.Z`) it takes the version from the
+tag.
+
 ## Use
 
 ```sh

@@ -1,0 +1,97 @@
+name: skillcask
+description: 'Install skillcask from a GitHub release, verified, and install skills exactly as skills.lock pins them.'
+branding:
+  icon: lock
+  color: gray-dark
+
+inputs:
+  version:
+    description: 'skillcask version (x.y.z). Default: the release tag the action is used at (uses puniserv/skillcask@vX.Y.Z).'
+    required: false
+    default: ""
+  args:
+    description: 'Arguments for skillcask, split on whitespace.'
+    required: false
+    default: install --frozen
+  working-directory:
+    description: 'Directory with skills.toml and skills.lock.'
+    required: false
+    default: .
+  verify-attestation:
+    description: 'Also check the archive''s build provenance attestation with `gh attestation verify`.'
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Install skillcask
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        ACTION_REF: ${{ github.action_ref }}
+        VERIFY: ${{ inputs.verify-attestation }}
+        # Read-only use: gh attestation verify needs a token to call the attestations API.
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        v="${INPUT_VERSION:-}"
+        if [ -z "$v" ]; then
+          case "$ACTION_REF" in
+            v[0-9]*) v="$ACTION_REF" ;;
+            *) echo "::error::skillcask: set the version input (x.y.z); the action is used at ${ACTION_REF:-an unknown ref}, not a release tag"; exit 1 ;;
+          esac
+        fi
+        v="${v#v}"
+        if ! [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "::error::skillcask: version must be x.y.z, got $v"
+          exit 1
+        fi
+        case "$RUNNER_OS-$RUNNER_ARCH" in
+          Linux-X64) target=x86_64-unknown-linux-musl ext=tar.xz ;;
+          Linux-ARM64) target=aarch64-unknown-linux-gnu ext=tar.xz ;;
+          macOS-ARM64) target=aarch64-apple-darwin ext=tar.xz ;;
+          macOS-X64) target=x86_64-apple-darwin ext=tar.xz ;;
+          Windows-X64) target=x86_64-pc-windows-msvc ext=zip ;;
+          *) echo "::error::skillcask: no release build for $RUNNER_OS $RUNNER_ARCH"; exit 1 ;;
+        esac
+        file="skillcask-$target.$ext"
+        base="https://github.com/puniserv/skillcask/releases/download/v$v"
+        dir="$RUNNER_TEMP/skillcask-$v"
+        mkdir -p "$dir"
+        cd "$dir"
+        curl --proto '=https' --tlsv1.2 -fsSL --retry 3 -o "$file" "$base/$file"
+        curl --proto '=https' --tlsv1.2 -fsSL --retry 3 -o "$file.sha256" "$base/$file.sha256"
+        expected="$(cut -d' ' -f1 < "$file.sha256")"
+        if command -v sha256sum >/dev/null; then
+          actual="$(sha256sum "$file" | cut -d' ' -f1)"
+        else
+          actual="$(shasum -a 256 "$file" | cut -d' ' -f1)"
+        fi
+        if [ "$expected" != "$actual" ]; then
+          echo "::error::skillcask: $file has sha256 $actual, the release lists $expected"
+          exit 1
+        fi
+        if [ "$VERIFY" = "true" ]; then
+          gh attestation verify "$file" --repo puniserv/skillcask
+        fi
+        if [ "$ext" = zip ]; then
+          unzip -q -o "$file"
+        else
+          tar -xJf "$file"
+        fi
+        bin="$(dirname "$(find "$dir" -type f \( -name skillcask -o -name skillcask.exe \) | head -n 1)")"
+        echo "$bin" >> "$GITHUB_PATH"
+        "$bin/skillcask" --version
+
+    - name: Run skillcask
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        ARGS: ${{ inputs.args }}
+      # Passed through the environment and split here, so the input is never parsed as shell code.
+      run: |
+        set -euo pipefail
+        read -r -a args <<< "$ARGS"
+        # macOS runners ship bash 3.2, where an empty array trips `set -u`.
+        skillcask ${args[@]+"${args[@]}"}
