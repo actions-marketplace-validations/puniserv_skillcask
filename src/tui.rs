@@ -15,7 +15,22 @@ use serde_json::Value;
 
 use crate::error::{Error, IO, MANIFEST, Result};
 
-const HELP: &str = "↑↓ move  tab info/audit/output  g scope  i install  a add  u update  x remove  o doctor  f fix  / search  p projects  r refresh  q quit";
+const HELP: [&str; 14] = [
+    "↑↓/jk move",
+    "pgup/pgdn scroll",
+    "tab info/audit/output",
+    "g project/global",
+    "i install",
+    "a add",
+    "u diff, then update",
+    "x remove",
+    "o doctor",
+    "f doctor --fix",
+    "/ search",
+    "p find projects",
+    "r refresh",
+    "q quit",
+];
 const SKILL_MD_MAX: u64 = 256 * 1024;
 
 pub fn run(global: bool) -> Result<()> {
@@ -269,8 +284,10 @@ impl App {
             KeyCode::Char('i') if self.no_manifest() && self.project.is_some() => return Some(Job::Run(args(&["init"]))),
             KeyCode::Char('i') => return Some(Job::Run(args(&["install"]))),
             KeyCode::Char('a') => {
-                self.mode = match self.selected().filter(|r| r.state == "not managed").and_then(|r| r.adopt.clone()) {
-                    Some(src) => Mode::Input { prompt: "adopt with add --adopt", text: src, then: Then::Adopt },
+                self.mode = match self.selected().filter(|r| r.state == "not managed").map(|r| r.adopt.clone()) {
+                    Some(Some(src)) => Mode::Input { prompt: "adopt with add --adopt", text: src, then: Then::Adopt },
+                    // A plain add would only fail on the copy that stands at the name.
+                    Some(None) => Mode::Input { prompt: "adopt: no source recorded, type it", text: String::new(), then: Then::Adopt },
                     None => Mode::Input { prompt: "add source", text: String::new(), then: Then::Add },
                 }
             }
@@ -548,9 +565,39 @@ fn audit_lines(audit: &[Value], skill: &str) -> Vec<String> {
     out.iter().flat_map(|l| clean(l)).collect()
 }
 
+/// The keys of the current mode.
+fn keys(app: &App) -> Vec<&'static str> {
+    match &app.mode {
+        Mode::Input { .. } => vec!["enter submit", "esc cancel", "backspace delete"],
+        Mode::Confirm { .. } => vec!["y yes", "any other key no"],
+        Mode::Pick { .. } => vec!["↑↓/jk move", "enter choose", "esc cancel"],
+        Mode::List if app.selected().is_some_and(|r| r.state == "not managed") => {
+            HELP.iter().map(|k| if *k == "a add" { "a adopt" } else { k }).collect()
+        }
+        Mode::List => HELP.to_vec(),
+    }
+}
+
+/// Packs the keys into lines of at most `width` columns, never splitting one key.
+fn legend(keys: &[&str], width: u16) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for k in keys {
+        match lines.last_mut() {
+            Some(l) if l.chars().count() + 2 + k.chars().count() <= width as usize => {
+                l.push_str("  ");
+                l.push_str(k);
+            }
+            _ => lines.push(k.to_string()),
+        }
+    }
+    lines
+}
+
 fn draw(f: &mut Frame, app: &App) {
+    let legend = legend(&keys(app), f.area().width);
     let [head, body, msg, help] =
-        Layout::vertical([Constraint::Length(1), Constraint::Fill(1), Constraint::Length(1), Constraint::Length(1)]).areas(f.area());
+        Layout::vertical([Constraint::Length(1), Constraint::Fill(1), Constraint::Length(1), Constraint::Length(legend.len() as u16)])
+            .areas(f.area());
     let [left, right] = Layout::horizontal([Constraint::Percentage(45), Constraint::Fill(1)]).areas(body);
 
     let scope = match (&app.project, app.global) {
@@ -604,11 +651,10 @@ fn draw(f: &mut Frame, app: &App) {
     let line = match &app.mode {
         Mode::Input { prompt, text, .. } => format!("{prompt}: {text}_"),
         Mode::Confirm { question, .. } => question.clone(),
-        Mode::Pick { .. } => "enter choose  esc cancel".into(),
-        Mode::List => app.message.clone(),
+        Mode::Pick { .. } | Mode::List => app.message.clone(),
     };
     f.render_widget(Paragraph::new(clean(&line).join(" ")), msg);
-    f.render_widget(Paragraph::new(HELP).style(Style::new().fg(Color::DarkGray)), help);
+    f.render_widget(Paragraph::new(legend.join("\n")).style(Style::new().fg(Color::DarkGray)), help);
 }
 
 #[cfg(test)]
@@ -680,6 +726,20 @@ mod tests {
     }
 
     #[test]
+    fn the_legend_follows_the_mode_and_wraps_without_splitting_a_key() {
+        let mut a = app(sample(), true);
+        assert!(keys(&a).contains(&"a add"));
+        a.sel = 2;
+        assert!(keys(&a).contains(&"a adopt"));
+        a.mode = Mode::Confirm { question: String::new(), args: Vec::new() };
+        assert_eq!(keys(&a), ["y yes", "any other key no"]);
+        assert_eq!(legend(&["ab", "cd", "efg"], 6), ["ab  cd", "efg"]);
+        let lines = legend(&HELP, 40);
+        assert!(lines.len() > 1 && lines.iter().all(|l| l.chars().count() <= 40));
+        assert_eq!(lines.join("  "), HELP.join("  "));
+    }
+
+    #[test]
     fn add_prompts_and_adopt_is_prefilled_for_unmanaged_skills() {
         let mut a = app(sample(), true);
         press(&mut a, KeyCode::Char('a'));
@@ -695,6 +755,13 @@ mod tests {
 
         press(&mut a, KeyCode::Char('a'));
         assert_eq!(press(&mut a, KeyCode::Esc), None);
+
+        // Regression: an unmanaged skill without a recorded source got a plain add prompt.
+        a.rows[2].adopt = None;
+        press(&mut a, KeyCode::Char('a'));
+        assert!(matches!(&a.mode, Mode::Input { text, then: Then::Adopt, .. } if text.is_empty()));
+        typed(&mut a, "github:o/r/mine");
+        assert_eq!(press(&mut a, KeyCode::Enter), Some(Job::Run(args(&["add", "--adopt", "--", "github:o/r/mine"]))));
         assert_eq!(a.mode, Mode::List);
     }
 
