@@ -345,8 +345,8 @@ entry; `install` from the lock uses none, it downloads the pinned archive. Set `
 for a higher limit and for private repositories. `SKILLCASK_GITHUB_API` points at GitHub
 Enterprise (`https://ghe.example.com/api/v3`).
 
-skills.sh itself is not queried: its API needs a Vercel token. Search on the website, then add
-what you picked.
+skills.sh itself is not queried: its API is undocumented and may change without notice. Search
+on the website, then add what you picked.
 
 ## Security
 

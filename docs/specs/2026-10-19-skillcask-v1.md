@@ -7,22 +7,38 @@ Date: 2026-10-19. Status: v1.
 Agent skills (a directory with `SKILL.md`, read by Claude Code, Codex, Junie and others) are
 copied into repositories by hand or by tools that do not freeze what they install.
 
-- **Vercel Skills CLI** (`npx skills`, v1.7.2, source checked at `vercel-labs/skills@b465908`):
+- **Vercel Skills CLI** (`npx skills`, v1.7.4, source checked at `vercel-labs/skills@a80e4c9`):
   writes a project `skills-lock.json` with `source`, `ref` (branch or tag) and `computedHash`
   (sha256 of the files), but `experimental_install` re-fetches from `ref`, not from a commit, and
   never checks `computedHash` (`src/install.ts`). A moved tag or branch installs different content
-  silently. No semver for git sources, `update` takes the newest, no CI drift check. Needs Node;
+  silently. No semver for git sources, `update` takes the newest, no CI drift check: `skills
+  check` is an alias of `update` and changes the install (`src/cli.ts:420`). Needs Node >= 22.20;
   anonymous telemetry on by default.
-- **`netresearch/composer-agent-skill-plugin`** (MIT): a Composer plugin with a package
-  convention (`"type": "ai-agent-skill"`, 57 such packages on Packagist), a lock for direct git
-  sources, and an `AGENTS.md` index instead of agent skill directories. Works only where Composer
-  and PHP are present.
+- **`netresearch/composer-agent-skill-plugin`** (MIT, v2.1.1): a Composer plugin with a package
+  convention (`"type": "ai-agent-skill"`, 57 such packages on Packagist), semver, a lock whose
+  checksums it now verifies, a per-package trust map, and an `AGENTS.md` index instead of agent
+  skill directories. Works only where Composer and PHP are present.
+- **microsoft/apm** (v0.35.0): commit pin, sha256 that fails on mismatch, `install --frozen`,
+  semver and transitive dependencies. No release cooldown; packages may ship hooks and MCP
+  servers (behind an approval gate); needs Python.
+- **rulesync** (v41.0.0): commit pin, per-skill sha256 checked under `--frozen`, `--outdated`. No
+  semver, no cooldown.
+- **Goldziher/ai-rulez** (v5.7.0): digest lock, `--frozen`, `min_release_age` with an
+  organisation floor, a Sigstore-signed lock. Packages may carry hooks and scripts.
+- **Tessl CLI** (v0.118.0, proprietary): semver, commit pin, an organisation release-age policy;
+  no content hash, no frozen mode, telemetry on by default (it may include file contents).
+- **ClawHub** (v0.23.3): registry with VirusTotal and LLM scanning; the lock has no hash and there
+  is no frozen mode.
+- **`gh skill`** (GitHub CLI 2.103, preview): a user-global lock in the Vercel format, no hash
+  check, and it edits `SKILL.md` on install.
 - **In-house sync scripts**: semver per skill, committed lock, sha256 per package, CI drift check — but bash, tied to one
   GitLab instance and its Generic Package Registry layout.
 
 Supply-chain security practice asks for a committed lockfile, deterministic installs that fail on drift, pinned versions, a cooldown on
-freshly published versions, and no install-time code execution. No skill tool does all of it for
-repositories in any language.
+freshly published versions, and no install-time code execution. Several tools now lock by
+content hash and install frozen; none combines a content-hash lock, a frozen install, a
+release-age cooldown, a text diff of updates and data-only packages in one static binary without
+a runtime. The 2026-10-26 survey behind this list is in `docs/research/`.
 
 ## Goal
 
@@ -59,7 +75,7 @@ byte-identical skills to the ones committed in the lock, or a non-zero exit.
 | D8 | Authentication reads Composer's `auth.json` / `COMPOSER_AUTH`. | Existing GitLab and Private Packagist credentials, including CI job tokens, work as they are. |
 | D9 | Publishing supports both one-repo-per-skill (standard Composer) and monorepos (`skillcask publish` builds a static Composer repository). | Many skills live in monorepos; GitLab's Composer registry accepts one package per project. |
 | D10 | MIT OR Apache-2.0, no telemetry. | Usual Rust dual licence; nothing leaves the machine except registry requests. |
-| D11 | GitHub repositories are a second source (`github = true`), resolved through the GitHub REST API; the lock format is unchanged. | Most public skills (the ones skills.sh lists) live in GitHub repositories without Composer metadata. Pinning the commit sha plus both hashes keeps D6. skills.sh itself is not used: its API needs a Vercel OIDC token. |
+| D11 | GitHub repositories are a second source (`github = true`), resolved through the GitHub REST API; the lock format is unchanged. | Most public skills (the ones skills.sh lists) live in GitHub repositories without Composer metadata. Pinning the commit sha plus both hashes keeps D6. skills.sh itself is not used: its search and download APIs answered anonymously on 2026-10-26, but they are undocumented and could change or close without notice. |
 | D12 | Repositories may carry every package inline in `packages.json` (Composer v1/Satis format) instead of `metadata-url`; `publish --inline` writes it, `--dist-url` places the zips. | Private monorepos can then be hosted on GitLab with no new infrastructure: `packages.json` lives in git and is read through the raw files API, zips go to the Generic Package Registry, whose file names cannot contain `/`. One file stays small for a few hundred skills. |
 | D13 | `--global` manages personal skills: store `~/.agents/skills`, links in `~/.claude/skills` etc., manifest and lock in `~/.config/skillcask`; a skill name clash inside one scope is solved with `rename`, a clash across scopes is a warning. | Agents read personal skills from home and skills have no namespaces. The design is in `docs/specs/2026-10-20-global-and-aliases.md`. |
 | D14 | `publish` records the tree hash of each new version in `extra.ai-agent-skill-tree`; without the published zip in `--out`, a version whose `shasum` differs counts as unchanged when its tree matches, and no zip is written for it. | CI that does not keep `dist/` must not fail on every published version when a `zip` or deflate update changes the bytes of the same tree. Downloading every old zip first would cost a request per version on each run. |
