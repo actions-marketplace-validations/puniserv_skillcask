@@ -31,6 +31,8 @@ pub struct Ctx {
     pub interactive: bool,
     /// The command installs nothing: dists unpack in the system temp dir, not in the store.
     pub read_only: bool,
+    /// `add --adopt`: replace an unmanaged global skill of the same name (D38).
+    pub adopt: bool,
     http: OnceCell<Http>,
 }
 
@@ -72,7 +74,7 @@ impl Fetched {
 
 impl Ctx {
     pub fn new(s: Scope, verbose: bool, limits: Limits, interactive: bool) -> Ctx {
-        Ctx { s, verbose, limits, interactive, read_only: false, http: OnceCell::new() }
+        Ctx { s, verbose, limits, interactive, read_only: false, adopt: false, http: OnceCell::new() }
     }
 
     fn http(&self) -> Result<&Http> {
@@ -299,6 +301,24 @@ impl Ctx {
                 })?
             };
             found.push((name, dir, md));
+        }
+        if discovered {
+            // D37: a repository that also ships a plugin copy names a skill twice; the shallower
+            // directory wins, an equal depth still fails below.
+            let depth = |d: &str| if d.is_empty() { 0 } else { d.matches('/').count() + 1 };
+            found.sort_by_key(|(_, dir, _)| depth(dir));
+            let mut kept: Vec<(String, String, String)> = Vec::new();
+            for (name, dir, md) in found {
+                match kept.iter().find(|(n, ..)| *n == name) {
+                    Some((_, first, _)) if depth(first) < depth(&dir) => {
+                        if req.skills.as_ref().is_none_or(|sel| sel.contains(&name)) {
+                            crate::ui::warn(format!("{}: skill {name:?} is in {first} and {dir}; using {first}", c.name));
+                        }
+                    }
+                    _ => kept.push((name, dir, md)),
+                }
+            }
+            found = kept;
         }
         for k in req.rename.keys() {
             if !found.iter().any(|(n, ..)| n == k) {
@@ -925,6 +945,84 @@ fn hand_written(s: &Scope, lock: &Lock, old_managed: &BTreeSet<String>, locals: 
         .collect())
 }
 
+/// D38: global skills in the store or a target that skillcask does not manage, each with the
+/// `add` source `npx skills` recorded for it, if any.
+fn not_managed(s: &Scope, m: &Manifest, lock: &Lock) -> Result<BTreeMap<String, Option<String>>> {
+    if !s.global {
+        return Ok(BTreeMap::new());
+    }
+    let mut names: BTreeSet<String> = project::store_names(s)?.into_iter().collect();
+    for t in &m.targets {
+        let dir = s.root.join(t);
+        if let Ok(rd) = std::fs::read_dir(&dir) {
+            names.extend(
+                rd.flatten()
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .filter(|n| !n.starts_with('.') && dir.join(n).join(skill::SKILL_MD).is_file()),
+            );
+        }
+    }
+    let managed = project::block_managed(s)?;
+    let locked: BTreeSet<&str> = lock.skills().map(|(_, sk)| sk.name.as_str()).collect();
+    let known = npx_sources(s);
+    Ok(names
+        .into_iter()
+        .filter(|n| !locked.contains(n.as_str()) && !managed.contains(n))
+        .map(|n| {
+            let src = known.get(&n).cloned();
+            (n, src)
+        })
+        .collect())
+}
+
+/// `github:` sources from the lock `npx skills` keeps in `~/.agents/.skill-lock.json`.
+fn npx_sources(s: &Scope) -> BTreeMap<String, String> {
+    let Some(v) =
+        std::fs::read_to_string(s.root.join(".agents/.skill-lock.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok())
+    else {
+        return BTreeMap::new();
+    };
+    v["skills"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(n, e)| skill::valid_name(n) && e["sourceType"] == "github")
+        .filter_map(|(n, e)| {
+            let src = e["source"].as_str()?;
+            manifest::valid_package_name(&src.to_lowercase()).then(|| (n.clone(), format!("github:{src}/{n}")))
+        })
+        .collect()
+}
+
+/// D38: moves what stands where `pkg`'s skills go and skillcask does not manage (a target entry
+/// that is not a link into the store, then the store dir) to `<config>/adopted/<unix time>/`.
+fn adopt(s: &Scope, m: &Manifest, lock: &Lock, pkg: &str) -> Result<()> {
+    if !s.global {
+        bail!(MANIFEST, "--adopt applies only with --global");
+    }
+    let managed = project::block_managed(s)?;
+    let to = s.config.join("adopted").join(Timestamp::now().as_second().to_string());
+    let p = lock.get(pkg).expect("the package was just locked");
+    for sk in p.skills.iter().filter(|sk| !managed.contains(&sk.name)) {
+        // A clash with another package is a conflict, not something to adopt.
+        if lock.skills().any(|(o, k)| o.name != pkg && k.name == sk.name) {
+            continue;
+        }
+        for at in m.targets.iter().map(String::as_str).chain([STORE]) {
+            let rel = format!("{at}/{}", sk.name);
+            let from = s.root.join(&rel);
+            if from.symlink_metadata().is_err() || (at != STORE && project::link_state(s, at, STORE, &sk.name) == LinkState::Ok) {
+                continue;
+            }
+            let dest = to.join(&rel);
+            std::fs::create_dir_all(dest.parent().expect("rel has a parent")).ctx(dest.display())?;
+            std::fs::rename(&from, &dest).ctx(format!("moving {} to {}", s.show(&rel), dest.display()))?;
+            crate::ui::done("adopted", format!("{} (moved to {})", s.show(&rel), dest.display()));
+        }
+    }
+    Ok(())
+}
+
 /// Every link as (directory, source directory, name): project skills into the store, then all
 /// skills from the store into each agent target.
 fn link_plan<'a>(
@@ -969,7 +1067,11 @@ fn store_conflict(s: &Scope, p: &Package, sk: &LockedSkill, old: &Lock, owned: &
         return None;
     }
     let (Some(h), Some((op, os))) = (h, old_skill) else {
-        return Some((format!("{shown} exists and is not managed by skillcask, but {} provides a skill with that name", p.name), true));
+        let adopt = if s.global { " (`add --adopt` replaces it)" } else { "" };
+        return Some((
+            format!("{shown} exists and is not managed by skillcask, but {} provides a skill with that name{adopt}", p.name),
+            true,
+        ));
     };
     let away = "move it away (or delete it), then run `skillcask install`";
     if h == os.tree_sha256 {
@@ -1419,6 +1521,9 @@ fn finish_add(ctx: &Ctx, m: &Manifest, req: &SkillReq, repo: &Repository, c: &Ca
     let mut view = m.clone();
     view.skills.retain(|r| r.name != req.name);
     view.skills.push(req.clone());
+    if ctx.adopt {
+        adopt(&ctx.s, &view, &lock, &req.name)?;
+    }
     let mut skip = drifted(m, &old);
     skip.remove(&req.name);
     let mut newcomers = BTreeSet::from([req.name.clone()]);
@@ -1735,12 +1840,19 @@ pub fn status(ctx: &Ctx, json: bool) -> Result<()> {
         let state = if project::link_state(&ctx.s, STORE, &m.local, l) == LinkState::Ok { "project" } else { "not linked" };
         row(&mut rows, "-", "-", l, state);
     }
+    let unmanaged = not_managed(&ctx.s, &m, &lock)?;
+    for n in unmanaged.keys() {
+        row(&mut rows, "-", "-", n, "not managed");
+    }
     let skills = rows.iter().skip(1).filter(|r| r[3] == "ok").count();
     if json {
         let opt = |s: &String| if s == "-" { Value::Null } else { Value::from(s.as_str()) };
         let entries: Vec<Value> = rows[1..]
             .iter()
-            .map(|r| json!({ "package": opt(&r[0]), "version": opt(&r[1]), "skill": opt(&r[2]), "state": r[3], "ok": healthy(&r[3]) }))
+            .map(|r| {
+                let adopt = if r[3] == "not managed" { unmanaged.get(&r[2]).cloned().flatten() } else { None };
+                json!({ "package": opt(&r[0]), "version": opt(&r[1]), "skill": opt(&r[2]), "state": r[3], "ok": healthy(&r[3]), "adopt": adopt })
+            })
             .collect();
         let policy: serde_json::Map<String, Value> =
             m.policy.effective.iter().map(|(k, (v, from))| (k.to_string(), json!({ "value": policy_value(v), "from": from }))).collect();
@@ -1765,6 +1877,9 @@ pub fn status(ctx: &Ctx, json: bool) -> Result<()> {
     // An agent learns the policy's origin from the error a blocked source raises.
     for (k, (v, from)) in m.policy.effective.iter().filter(|_| !ui::agent()) {
         println!("{}", ui::out(ui::Color::Dim, format!("policy.{k} = {v} ({from})")));
+    }
+    if !unmanaged.is_empty() && !ui::agent() {
+        println!("{}", ui::out(ui::Color::Dim, "not managed: skillcask -g add --adopt <source> installs a package's skill in its place"));
     }
     if !ui::agent() {
         let dirs = if m.targets.is_empty() { format!("{STORE} only") } else { m.targets.join(", ") };
@@ -2394,7 +2509,7 @@ fn say(line: &str) {
 
 /// `status` states that are not problems.
 fn healthy(state: &str) -> bool {
-    matches!(state, "ok" | "hand-written" | "project")
+    matches!(state, "ok" | "hand-written" | "project" | "not managed")
 }
 
 #[cfg(test)]

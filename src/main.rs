@@ -91,6 +91,10 @@ enum Cmd {
         /// Repository name from [repositories].
         #[arg(long)]
         repository: Option<String>,
+        /// With --global: move a skill of the same name that skillcask does not manage to
+        /// ~/.config/skillcask/adopted/ and install the package's in its place.
+        #[arg(long)]
+        adopt: bool,
     },
     /// Remove packages from skills.toml and skills.lock, with their files and links.
     Remove {
@@ -251,7 +255,10 @@ fn run(cli: Cli) -> Result<(), Error> {
     ctx.read_only = matches!(cli.cmd, Cmd::Info { .. } | Cmd::Diff { .. });
     match cli.cmd {
         Cmd::Init => commands::init(&ctx),
-        Cmd::Add { package, repository } => commands::add(&ctx, &package, repository),
+        Cmd::Add { package, repository, adopt } => {
+            ctx.adopt = adopt;
+            commands::add(&ctx, &package, repository)
+        }
         Cmd::Remove { packages } => commands::remove(&ctx, &packages),
         Cmd::Install { frozen } => commands::install(&ctx, frozen || ci()),
         Cmd::Update { packages, diff } => commands::update(&ctx, &packages, diff),

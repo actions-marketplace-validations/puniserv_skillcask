@@ -1114,3 +1114,47 @@ fn bad_names_outside_the_selected_skill_are_skipped() {
         assert!(!q.exists("skills.lock"));
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn global_lists_unmanaged_skills_and_adopts_one() {
+    let s = Server::start();
+    let sha = "a".repeat(40);
+    s.put("/repos/acme/tools/tags", "[]");
+    s.put("/repos/acme/tools/commits/HEAD", gh_commit(&sha, 240).to_string());
+    // Regression guard (D37): a plugin copy of a skill used to fail the whole package.
+    s.put(
+        &format!("/repos/acme/tools/zipball/{sha}"),
+        zipball(&[("skills/two/SKILL.md", &skill_md("two")), ("plugins/p/skills/two/SKILL.md", "---\nname: two\n---\nplugin")]),
+    );
+    let p = with_github(Project::new(&s), &s);
+    p.global_manifest(&s, "");
+    let h = p.home().to_path_buf();
+    for (dir, body) in [(".agents/skills/two", "old"), (".agents/skills/mine", "mine"), (".claude/skills/other", "other")] {
+        std::fs::create_dir_all(h.join(dir)).unwrap();
+        std::fs::write(h.join(dir).join("SKILL.md"), body).unwrap();
+    }
+    std::os::unix::fs::symlink(h.join(".agents/skills/two"), h.join(".claude/skills/two")).unwrap();
+    let npx = json!({ "version": 3, "skills": { "two": { "source": "Acme/tools", "sourceType": "github" } } });
+    std::fs::write(h.join(".agents/.skill-lock.json"), npx.to_string()).unwrap();
+
+    let doc: serde_json::Value = serde_json::from_str(&p.global(&["status", "--json"], 0)).unwrap();
+    let entries = doc["entries"].as_array().unwrap();
+    let state = |n: &str| entries.iter().find(|e| e["skill"] == n).map(|e| (e["state"].clone(), e["adopt"].clone()));
+    assert_eq!(state("two"), Some((json!("not managed"), json!("github:Acme/tools/two"))), "{doc}");
+    assert_eq!(state("mine"), Some((json!("not managed"), json!(null))), "{doc}");
+    assert_eq!(state("other"), Some((json!("not managed"), json!(null))), "skills only in a target count too: {doc}");
+
+    let out = p.global(&["add", "github:acme/tools/two"], 1);
+    assert!(out.contains("`add --adopt` replaces it"), "{out}");
+    assert!(p.expect(&["add", "--adopt", "github:acme/tools/two"], 1).contains("--adopt applies only with --global"));
+
+    let out = p.global(&["add", "--adopt", "github:acme/tools/two"], 0);
+    assert!(out.contains("is in skills/two and plugins/p/skills/two; using skills/two"), "{out}");
+    let moved: Vec<_> = std::fs::read_dir(h.join(".config/skillcask/adopted")).unwrap().flatten().collect();
+    assert_eq!(std::fs::read_to_string(moved[0].path().join(".agents/skills/two/SKILL.md")).unwrap(), "old");
+    assert_eq!(std::fs::read_to_string(h.join(".agents/skills/two/SKILL.md")).unwrap(), skill_md("two"));
+    assert_eq!(std::fs::read_link(h.join(".claude/skills/two")).unwrap(), h.join(".agents/skills/two"));
+    let doc: serde_json::Value = serde_json::from_str(&p.global(&["status", "--json"], 0)).unwrap();
+    assert!(doc["entries"].as_array().unwrap().iter().any(|e| e["skill"] == "two" && e["state"] == "ok"), "{doc}");
+}

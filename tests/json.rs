@@ -22,7 +22,7 @@ fn status_outdated_info_and_doctor() {
 
     let st = doc(&p, &["status", "--json"], 0);
     assert_eq!(st["ok"], true);
-    assert_eq!(st["entries"][0], json!({ "package": "acme/one", "version": "1.0.0", "skill": "one", "state": "ok", "ok": true }));
+    assert_eq!(st["entries"][0], json!({ "package": "acme/one", "version": "1.0.0", "skill": "one", "state": "ok", "ok": true, "adopt": null }));
     assert_eq!(st["policy"]["packagist"], json!({ "value": false, "from": "skills.toml" }));
     std::fs::write(p.path().join(".agents/skills/one/SKILL.md"), "changed").unwrap();
     let st = doc(&p, &["status", "--json"], 1);

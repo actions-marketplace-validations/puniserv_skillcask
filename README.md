@@ -262,7 +262,10 @@ skillcask -g install --frozen    # e.g. from a dotfiles repository
 - Skills go to `~/.agents/skills` (read by most agents), with links in `~/.claude/skills`
   (`[agents] targets`, see Agents). Links are absolute, so a symlinked
   `~/.claude` works. `[agents] local` does not apply.
-- Personal skills you wrote by hand stay where they are and are not linked anywhere.
+- Personal skills you wrote by hand stay where they are and are not linked anywhere. `status`
+  lists them, and copies other tools put in a target, as `not managed`; `status --json` names the
+  source `npx skills` recorded for one. `skillcask -g add --adopt <source>` moves such a skill to
+  `~/.config/skillcask/adopted/` and installs the package's skill of the same name in its place.
 - The list of managed paths is `~/.agents/skills/.skillcask-installed`, local to the machine;
   nothing touches git.
 
