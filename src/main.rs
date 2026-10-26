@@ -6,6 +6,7 @@ mod credential;
 mod deps;
 mod diff;
 mod error;
+mod git;
 mod github;
 mod http;
 mod lock;
@@ -84,7 +85,8 @@ enum Cmd {
     Init,
     /// Resolve a package, add it to skills.toml and skills.lock, install it.
     Add {
-        /// vendor/name[@constraint], or github:owner/repo[/skill][@version-or-ref]
+        /// vendor/name[@constraint], github:owner/repo[/skill][@version-or-ref], or
+        /// git:https://host/owner/repo.git[@version-or-ref]
         package: String,
         /// Repository name from [repositories].
         #[arg(long)]

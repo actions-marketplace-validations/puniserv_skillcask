@@ -105,7 +105,10 @@ pub struct SkillReq {
     pub constraint: String,
     pub repository: Option<String>,
     pub skills: Option<Vec<String>>,
+    /// Also set for a plain git entry, whose versions and refs work the same way.
     pub github: Option<GitHub>,
+    /// A plain git repository (`git = "https://…"`, D30).
+    pub git: Option<String>,
     /// Upstream skill name to install name.
     pub rename: BTreeMap<String, String>,
 }
@@ -174,6 +177,15 @@ impl Manifest {
     /// Repositories lookups may contact.
     pub fn allowed_repositories(&self) -> Vec<Repository> {
         self.repositories.iter().filter(|r| self.allows(&r.url)).cloned().collect()
+    }
+
+    /// Errors unless the GitHub or plain git source of `req` may be used.
+    pub fn check_source(&self, req: &SkillReq) -> Result<()> {
+        let Some(url) = &req.git else { return self.check_github(&req.name) };
+        if let Some(why) = self.refuses(url) {
+            bail!(MANIFEST, "{}: {why}", req.name);
+        }
+        Ok(())
     }
 
     /// Errors unless GitHub repository `name` (`owner/repo`) may be used.
@@ -323,8 +335,17 @@ pub fn parse_with(text: &str, global: bool, outer: &crate::policy::Outer) -> Res
             let req = if let Some(c) = item.as_str() {
                 SkillReq { name: name.into(), constraint: c.into(), ..Default::default() }
             } else if let Some(t) = item.as_table_like() {
+                let git = match t.get("git") {
+                    None => None,
+                    Some(i) => {
+                        let url = i.as_str().ok_or_else(|| bad(format!("{name}: git must be an https:// URL")))?;
+                        crate::git::check_url(url).map_err(|e| bad(format!("{name}: {e}")))?;
+                        Some(url.trim_end_matches('/').to_string())
+                    }
+                };
                 let github = match t.get("github") {
-                    None => false,
+                    None => git.is_some(),
+                    Some(_) if git.is_some() => return Err(bad(format!("{name}: git and github cannot be combined"))),
                     Some(i) => i.as_bool().ok_or_else(|| bad(format!("{name}: github must be true or false")))?,
                 };
                 let version = t.get("version").and_then(Item::as_str);
@@ -332,7 +353,7 @@ pub fn parse_with(text: &str, global: bool, outer: &crate::policy::Outer) -> Res
                 let repository = t.get("repository").and_then(Item::as_str).map(String::from);
                 let (constraint, github) = match (github, version, git_ref) {
                     (_, Some(_), Some(_)) => return Err(bad(format!("{name}: set either version or ref, not both"))),
-                    (false, _, Some(_)) => return Err(bad(format!("{name}: ref needs github = true"))),
+                    (false, _, Some(_)) => return Err(bad(format!("{name}: ref needs github = true or git = \"…\""))),
                     (false, None, None) => return Err(bad(format!("{name}: missing version"))),
                     (false, Some(v), None) => (v, None),
                     (true, Some(v), None) => (v, Some(GitHub::Tags)),
@@ -340,7 +361,8 @@ pub fn parse_with(text: &str, global: bool, outer: &crate::policy::Outer) -> Res
                 };
                 if let Some(r) = &repository {
                     if github.is_some() {
-                        return Err(bad(format!("{name}: repository and github = true cannot be combined")));
+                        let other = if git.is_some() { "git" } else { "github = true" };
+                        return Err(bad(format!("{name}: repository and {other} cannot be combined")));
                     }
                     if !repositories.iter().any(|x| &x.name == r) {
                         return Err(bad(format!("{name}: unknown repository {r:?}")));
@@ -365,7 +387,7 @@ pub fn parse_with(text: &str, global: bool, outer: &crate::policy::Outer) -> Res
                     }
                 }
                 rename.retain(|k, v| k != v);
-                SkillReq { name: name.into(), constraint: constraint.into(), repository, skills, github, rename }
+                SkillReq { name: name.into(), constraint: constraint.into(), repository, skills, github, git, rename }
             } else {
                 return Err(bad(format!("{name}: expected a version string or a table")));
             };
@@ -561,7 +583,8 @@ fn set_keys(t: &mut dyn TableLike, req: &SkillReq) {
         Some(GitHub::Tags) => (Some(true), Some(c), None),
         Some(GitHub::Ref) => (Some(true), None, Some(c).filter(|c| *c != DEFAULT_REF)),
     };
-    set(t, "github", github.map(Value::from));
+    set(t, "github", github.filter(|_| req.git.is_none()).map(Value::from));
+    set(t, "git", req.git.as_deref().map(Value::from));
     set(t, "version", version.map(Value::from));
     set(t, "ref", git_ref.map(Value::from));
     set(t, "repository", req.repository.as_deref().map(Value::from));

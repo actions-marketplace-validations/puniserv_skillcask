@@ -211,8 +211,8 @@ fn package(t: &dyn TableLike) -> Result<Package> {
     }
     let git_ref = t.get("ref").map(|i| i.as_bool().ok_or_else(|| bad(format!("invalid ref in {name}")))).transpose()?;
     let dist = Dist { kind: s(dist, "type").map_err(ctx)?, url: s(dist, "url").map_err(ctx)?, reference: s(dist, "reference").ok() };
-    if dist.kind != "zip" {
-        return Err(bad(format!("invalid dist type {:?} in {name}, only \"zip\"", dist.kind)));
+    if dist.kind != "zip" && dist.kind != crate::git::KIND {
+        return Err(bad(format!("invalid dist type {:?} in {name}, only \"zip\" or \"git\"", dist.kind)));
     }
     if !dist.url.starts_with("https://") {
         return Err(bad(format!("invalid dist url in {name}: only https:// is allowed")));

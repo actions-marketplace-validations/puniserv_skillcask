@@ -246,8 +246,20 @@ impl Http {
         Ok(Http { agent, auth: Auth::load(config)?, verbose, backoff: Duration::from_secs(1) })
     }
 
-    /// `Ok(None)` on 404/410. Connection failures, 429 and 5xx are retried: every request is a GET.
+    /// `Ok(None)` on 404/410. Connection failures, 429 and 5xx are retried: every request is a GET
+    /// or a read-only git `upload-pack` POST.
     pub fn get(&self, url: &str, max_bytes: u64) -> Result<Option<Vec<u8>>> {
+        self.send(url, None, max_bytes)
+    }
+
+    /// A POST of `body` (content type, bytes) that only reads, such as git's `upload-pack`, so
+    /// it is retried like a GET. Redirects are followed only when they keep the method (307, 308).
+    pub fn post(&self, url: &str, body: (&str, &[u8]), max_bytes: u64) -> Result<Option<Vec<u8>>> {
+        self.send(url, Some(body), max_bytes)
+    }
+
+    fn send(&self, url: &str, body: Option<(&str, &[u8])>, max_bytes: u64) -> Result<Option<Vec<u8>>> {
+        let method = if body.is_some() { "POST" } else { "GET" };
         let mut cur = Url::parse(url).map_err(|e| Error::new(NETWORK, format!("invalid URL {:?}: {e}", redact_raw(url))))?;
         for _ in 0..=MAX_REDIRECTS {
             if cur.scheme() != "https" {
@@ -262,14 +274,22 @@ impl Http {
             let mut retry = 0;
             let mut resp = loop {
                 if self.verbose {
-                    eprintln!("GET {shown}");
+                    eprintln!("{method} {shown}");
                 }
-                let mut req = self.agent.get(cur.as_str());
+                let mut req = ureq::http::Request::builder().method(method).uri(cur.as_str());
                 if let Some(c) = &cred {
                     let (k, v) = c.header();
                     req = req.header(k, v);
                 }
-                let (why, after) = match req.call() {
+                let sent = match body {
+                    Some((kind, b)) => {
+                        let req =
+                            req.header("content-type", kind).body(b.to_vec()).map_err(|e| Error::new(NETWORK, format!("{shown}: {e}")))?;
+                        self.agent.run(req)
+                    }
+                    None => self.agent.run(req.body(()).map_err(|e| Error::new(NETWORK, format!("{shown}: {e}")))?),
+                };
+                let (why, after) = match sent {
                     Ok(r) if (r.status() == 429 && !rate_limited(&r)) || r.status().is_server_error() => {
                         let after = r.headers().get("retry-after").and_then(|v| v.to_str().ok()).map(String::from);
                         (format!("HTTP {}", r.status().as_u16()), after)
@@ -298,6 +318,7 @@ impl Http {
                         Err(e) => Err(Error::new(NETWORK, format!("{shown}: {e}"))),
                     };
                 }
+                301..=303 if body.is_some() => bail!(NETWORK, "{shown}: HTTP {status} redirect of a POST"),
                 301 | 302 | 303 | 307 | 308 => {
                     let loc = resp
                         .headers()

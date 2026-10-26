@@ -252,6 +252,7 @@ Every command except `publish` and `validate` takes `-g, --global`.
 | `init` | Create `skills.toml`. |
 | `add <vendor/name>[@constraint] [--repository r]` | Resolve, lock and install. |
 | `add github:<owner/repo>[/skill][@version-or-ref]` | The same from a GitHub repository, see below. |
+| `add git:<https-url>[@version-or-ref]` | The same from any git repository over HTTPS, see below. |
 | `remove <vendor/name>…` | Drop from manifest and lock; delete files, links and gitignore lines. |
 | `install [--frozen]` | Install the lock. `--frozen` (implied by `CI`) fails when the lock is out of date. |
 | `update [vendor/name…] [--diff]` | Re-resolve within constraints. `--diff` prints what changes in each updated or added package; it does not ask before installing. |
@@ -348,6 +349,27 @@ Enterprise (`https://ghe.example.com/api/v3`).
 skills.sh itself is not queried: its API is undocumented and may change without notice. Search
 on the website, then add what you picked.
 
+### Skills from any git repository
+
+GitLab, Bitbucket, Azure DevOps, Gitea or a self-hosted server work without a Composer registry:
+
+```sh
+skillcask add git:https://gitlab.example.com/acme/skills.git
+skillcask add git:https://gitlab.example.com/acme/skills.git@main
+```
+
+```toml
+"acme/skills" = { git = "https://gitlab.example.com/acme/skills.git", version = "^1.0" }
+```
+
+Versions, `ref` and `skills = [...]` work as for GitHub; the entry is named after the last two
+parts of the URL. skillcask speaks git's HTTPS protocol itself: no git binary runs, so no hook or
+filter of the repository can. It fetches the one commit it needs and checks every file against
+the commit's object ids. Credentials come from the same places as for registries (`auth.json`,
+the credential helper, `$CI_JOB_TOKEN` in GitLab CI). Git servers keep no release or push times,
+so `min-release-age` uses commit dates, which the committer sets; a branch whose newest commit is
+too young falls back to an older commit when the server supports partial fetches (`filter`).
+
 ## Security
 
 - The lock pins the version, the commit reference, the sha256 of the downloaded archive and
@@ -369,6 +391,8 @@ on the website, then add what you picked.
   RIGHT-TO-LEFT OVERRIDE`, at most five per file. A leading byte order mark and a zero width
   joiner inside an emoji are not reported; right-to-left and Indic text can trigger warnings.
   Installing from the lock does not warn again.
+- Plain git sources pin the commit; the lock's `dist-sha256` hashes the commit's file list
+  (path, mode, sha256 of the content), so it does not depend on how a server packs objects.
 - `min-release-age` for GitHub sources uses times GitHub sets: release publication for tags,
   push times from the Activity API for branches. A tag without a release, or a ref GitHub lists no
   pushes for, falls back to commit dates, which the committer sets; reviewing what `add`/`update`

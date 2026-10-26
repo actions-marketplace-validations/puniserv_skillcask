@@ -36,6 +36,22 @@ pub fn repository(name: &str) -> Repository {
     Repository { name: "github".into(), url: format!("{}/repos/{name}", api()), ..Default::default() }
 }
 
+/// The repository a GitHub or plain git entry resolves in.
+pub fn repository_of(req: &SkillReq) -> Repository {
+    match &req.git {
+        Some(url) => crate::git::repository(url),
+        None => repository(&req.name),
+    }
+}
+
+/// Version tags of a GitHub or plain git entry, newest first, without times.
+pub fn versions(http: &Http, req: &SkillReq) -> Result<Vec<Candidate>> {
+    match &req.git {
+        Some(url) => crate::git::tags(http, req, url),
+        None => tags(http, &req.name),
+    }
+}
+
 pub fn is_sha(r: &str) -> bool {
     r.len() == 40 && r.bytes().all(|b| b.is_ascii_hexdigit())
 }
@@ -155,6 +171,9 @@ fn pushes(http: &Http, name: &str, r: &str) -> Result<Option<Vec<(String, String
 }
 
 pub fn resolve(http: &Http, req: &SkillReq, min_age: SignedDuration, now: Timestamp) -> Result<Candidate> {
+    if let Some(url) = &req.git {
+        return crate::git::resolve(http, req, url, min_age, now);
+    }
     let name = &req.name;
     let cutoff = now.checked_sub(min_age).unwrap_or(Timestamp::MIN);
     match req.github {
@@ -236,6 +255,9 @@ pub fn resolve(http: &Http, req: &SkillReq, min_age: SignedDuration, now: Timest
 
 /// (newest within the constraint, newest overall) for `outdated`; cooldown is not applied.
 pub fn newest(http: &Http, req: &SkillReq) -> Result<(Option<String>, Option<String>)> {
+    if let Some(url) = &req.git {
+        return crate::git::newest(http, req, url);
+    }
     if req.github == Some(GitHub::Ref) {
         let head = commit(http, &req.name, &req.constraint)?.0[..12].to_string();
         return Ok((Some(head.clone()), Some(head)));

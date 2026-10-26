@@ -10,6 +10,7 @@ use crate::archive::{self, Limits};
 use crate::bail;
 use crate::deps;
 use crate::error::{Context, Error, HASH, MANIFEST, NETWORK, Result};
+use crate::git;
 use crate::github;
 use crate::http::Http;
 use crate::lock::{Dist, Lock, LockedSkill, Package};
@@ -90,14 +91,21 @@ impl Ctx {
     }
 
     fn fetch(&self, name: &str, dist: &Dist, expected: Option<&str>, shasum: Option<&str>) -> Result<(String, Fetched)> {
-        if dist.kind != "zip" {
-            bail!(MANIFEST, "{name}: dist type {:?} is not supported, only zip", dist.kind);
-        }
-        let bytes = self
-            .http()?
-            .get(&dist.url, self.limits.download)?
-            .ok_or_else(|| Error::new(NETWORK, format!("{name}: dist archive not found (404)")))?;
-        let sha = hex::encode(Sha256::digest(&bytes));
+        let (bytes, sha) = match dist.kind.as_str() {
+            "zip" => {
+                let bytes = self
+                    .http()?
+                    .get(&dist.url, self.limits.download)?
+                    .ok_or_else(|| Error::new(NETWORK, format!("{name}: dist archive not found (404)")))?;
+                let sha = hex::encode(Sha256::digest(&bytes));
+                (bytes, sha)
+            }
+            git::KIND => {
+                let c = git::checkout(self.http()?, &dist.url, dist.reference.as_deref().unwrap_or(""), &self.limits).ctx(name)?;
+                (c.zip, c.sha256)
+            }
+            k => bail!(MANIFEST, "{name}: dist type {k:?} is not supported, only zip or git"),
+        };
         if let Some(exp) = expected
             && exp != sha
         {
@@ -128,9 +136,9 @@ impl Ctx {
     /// The version `update` locks for `req`: same repository, policy and cooldown.
     fn candidate(&self, m: &Manifest, req: &SkillReq, locked: Option<&Package>) -> Result<(Repository, Candidate)> {
         if req.github.is_some() {
-            m.check_github(&req.name)?;
+            m.check_source(req)?;
             let c = github::resolve(self.http()?, req, m.policy.min_release_age, Timestamp::now())?;
-            return Ok((github::repository(&req.name), c));
+            return Ok((github::repository_of(req), c));
         }
         let (repo, cands) = find(&Registry::new(self.http()?), m, req, locked)?;
         let c = registry::select(&cands, &req.name, &req.constraint, m.min_release_age(&repo), Timestamp::now())?;
@@ -140,10 +148,10 @@ impl Ctx {
     /// The newest version of `req`'s package matching `v`, without the cooldown: the user named it.
     fn candidate_at(&self, m: &Manifest, req: &SkillReq, locked: Option<&Package>, v: &str) -> Result<(Repository, Candidate)> {
         if req.github.is_some() {
-            m.check_github(&req.name)?;
+            m.check_source(req)?;
             let mode = if Constraint::parse(v).is_ok() { GitHub::Tags } else { GitHub::Ref };
             let r = SkillReq { constraint: v.to_string(), github: Some(mode), ..req.clone() };
-            return Ok((github::repository(&req.name), github::resolve(self.http()?, &r, SignedDuration::ZERO, Timestamp::now())?));
+            return Ok((github::repository_of(req), github::resolve(self.http()?, &r, SignedDuration::ZERO, Timestamp::now())?));
         }
         let (repo, cands) = find(&Registry::new(self.http()?), m, req, locked)?;
         let c = registry::select(&cands, &req.name, v, SignedDuration::ZERO, Timestamp::now())?;
@@ -1203,6 +1211,9 @@ fn default_constraint(c: &Candidate, allow_ranges: bool) -> String {
 }
 
 fn source_changed(m: &Manifest, req: &SkillReq, p: &Package) -> bool {
+    if let Some(url) = &req.git {
+        return git::repository(url).url != p.repository;
+    }
     match (req.github, &req.repository) {
         // Only the path: the API base may differ between machines (GitHub Enterprise, a proxy).
         (Some(_), _) => !p.repository.ends_with(&format!("/repos/{}", req.name)),
@@ -1230,6 +1241,12 @@ pub fn add(ctx: &Ctx, spec: &str, repository: Option<String>) -> Result<()> {
         }
         return add_github(ctx, rest);
     }
+    if let Some(rest) = spec.strip_prefix("git:") {
+        if repository.is_some() {
+            bail!(MANIFEST, "--repository does not apply to git: sources");
+        }
+        return add_git(ctx, rest);
+    }
     let (name, constraint) = match spec.split_once('@') {
         Some((n, c)) => (n.to_string(), Some(c.to_string())),
         None => (spec.to_string(), None),
@@ -1245,8 +1262,11 @@ pub fn add(ctx: &Ctx, spec: &str, repository: Option<String>) -> Result<()> {
     }
     let existing = m.skill(&name).cloned();
     // Before the constraint check: `@main` is a valid ref for a GitHub entry.
-    if existing.as_ref().is_some_and(|e| e.github.is_some()) && repository.is_none() {
-        return add_github(ctx, spec);
+    if let Some(e) = existing.as_ref().filter(|e| e.github.is_some() && repository.is_none()) {
+        return match &e.git {
+            Some(url) => add_vcs(ctx, name.clone(), Some(url.clone()), None, constraint),
+            None => add_github(ctx, spec),
+        };
     }
     if let Some(c) = &constraint {
         Constraint::parse(c).map_err(|e| Error::new(MANIFEST, e))?;
@@ -1279,14 +1299,39 @@ fn add_github(ctx: &Ctx, spec: &str) -> Result<()> {
         bail!(MANIFEST, "{spec:?}: expected github:owner/repo[/skill][@version-or-ref]");
     }
     let skill = parts.next().map(String::from);
-    let must_have = skill.clone();
     if let Some(s) = &skill
         && !skill::valid_name(s)
     {
         bail!(MANIFEST, "{s:?} is not a valid skill name ([a-z0-9][a-z0-9-]*)");
     }
+    add_vcs(ctx, name, None, skill, at)
+}
+
+/// `https://host/owner/repo[.git][@constraint-or-ref]`; the entry is named `owner/repo`.
+fn add_git(ctx: &Ctx, spec: &str) -> Result<()> {
+    // `@` cannot be userinfo: credentials in the URL are refused anyway.
+    let (url, at) = match spec.rsplit_once('@').filter(|(u, _)| u.len() > "https://".len()) {
+        Some((u, a)) => (u, Some(a.to_string())),
+        None => (spec, None),
+    };
+    let url = url.trim_end_matches('/');
+    git::check_url(url).map_err(|e| Error::new(MANIFEST, e))?;
+    let name = git::name_of(url).ok_or_else(|| {
+        Error::new(MANIFEST, format!("{url:?}: owner/repo of the URL is not a valid package name (vendor/name, lowercase)"))
+    })?;
+    if let Some(e) = ctx.manifest_or_default()?.skill(&name).filter(|e| e.git.as_deref() != Some(url)) {
+        let had = e.git.as_deref().map_or("another source", |_| "another git URL");
+        bail!(MANIFEST, "{name} is already in {} from {had}; remove it first", manifest::FILE);
+    }
+    add_vcs(ctx, name, Some(url.to_string()), None, at)
+}
+
+/// Adds a GitHub (`git` = `None`) or plain git entry. `skill`: one skill to select.
+fn add_vcs(ctx: &Ctx, name: String, git: Option<String>, skill: Option<String>, at: Option<String>) -> Result<()> {
+    let must_have = skill.clone();
     let m = ctx.manifest_or_default()?;
-    m.check_github(&name)?;
+    let probe = SkillReq { name: name.clone(), git: git.clone(), ..Default::default() };
+    m.check_source(&probe)?;
     let existing = m.skill(&name).filter(|e| e.github.is_some()).cloned();
     let skills = match (skill, existing.as_ref().map(|e| e.skills.clone())) {
         (None, have) => have.flatten(),
@@ -1306,7 +1351,7 @@ fn add_github(ctx: &Ctx, spec: &str) -> Result<()> {
             (Some(a), mode)
         }
         (None, Some(e)) => (Some(e.constraint.clone()), e.github.expect("filtered to GitHub entries")),
-        (None, None) if github::tags(ctx.http()?, &name)?.is_empty() => (None, GitHub::Ref),
+        (None, None) if github::versions(ctx.http()?, &probe)?.is_empty() => (None, GitHub::Ref),
         (None, None) => (None, GitHub::Tags),
     };
     let any = if mode == GitHub::Tags { "*" } else { manifest::DEFAULT_REF };
@@ -1316,6 +1361,7 @@ fn add_github(ctx: &Ctx, spec: &str) -> Result<()> {
         constraint: given.clone().unwrap_or_else(|| any.into()),
         skills,
         github: Some(mode),
+        git,
         rename,
         ..Default::default()
     };
@@ -1330,7 +1376,7 @@ fn add_github(ctx: &Ctx, spec: &str) -> Result<()> {
             (GitHub::Ref, false) => c.dist.reference.clone().expect("GitHub candidates carry their sha"),
         };
     }
-    finish_add(ctx, &m, &req, &github::repository(&req.name), &c, must_have.as_deref())
+    finish_add(ctx, &m, &req, &github::repository_of(&req), &c, must_have.as_deref())
 }
 
 /// `must_have`: a skill named on the command line, checked also when the entry selects all.
@@ -1534,7 +1580,7 @@ pub fn outdated(ctx: &Ctx, strict: bool) -> Result<()> {
         // What `update` resolves: the constraint with those of requirers added.
         let eff = w.iter().find(|r| r.name == req.name).unwrap_or(req);
         if req.github.is_some() {
-            m.check_github(&req.name)?;
+            m.check_source(req)?;
             let (within, latest) = github::newest(ctx.http()?, req)?;
             let dash = |v: Option<String>| v.unwrap_or_else(|| "-".into());
             rows.push([req.name.clone(), locked, dash(within), dash(latest), String::new()]);
@@ -1896,20 +1942,26 @@ pub fn info(ctx: &Ctx, target: &str) -> Result<()> {
     let gh = gh || existing.is_some_and(|e| e.github.is_some());
     let locked = lock.get(&name).filter(|_| at.is_none());
     let (repo, c, versions, abandoned) = if gh {
-        m.check_github(&name)?;
-        let tags = github::tags(ctx.http()?, &name)?;
+        let git = existing.and_then(|e| e.git.clone());
+        let probe = SkillReq { name: name.clone(), git: git.clone(), ..Default::default() };
+        m.check_source(&probe)?;
+        let tags = github::versions(ctx.http()?, &probe)?;
         let versions: Vec<String> = tags.iter().map(|t| t.version.clone()).collect();
         let req = match (at, existing) {
-            (Some(_), _) => SkillReq { name: name.clone(), github: Some(GitHub::Tags), ..Default::default() },
+            (Some(_), _) => SkillReq { name: name.clone(), github: Some(GitHub::Tags), git, ..Default::default() },
             (None, Some(e)) => e.clone(),
-            (None, None) if tags.is_empty() => {
-                SkillReq { name: name.clone(), constraint: manifest::DEFAULT_REF.into(), github: Some(GitHub::Ref), ..Default::default() }
-            }
+            (None, None) if tags.is_empty() => SkillReq {
+                name: name.clone(),
+                constraint: manifest::DEFAULT_REF.into(),
+                github: Some(GitHub::Ref),
+                git: probe.git.clone(),
+                ..Default::default()
+            },
             (None, None) => SkillReq { name: name.clone(), constraint: "*".into(), github: Some(GitHub::Tags), ..Default::default() },
         };
         let (repo, c) = match (at, locked) {
             (Some(a), _) => ctx.candidate_at(&m, &req, None, a)?,
-            (None, Some(p)) => (github::repository(&name), locked_candidate(p)),
+            (None, Some(p)) => (github::repository_of(&req), locked_candidate(p)),
             (None, None) => ctx.candidate(&m, &req, None)?,
         };
         (repo, c, versions, None)

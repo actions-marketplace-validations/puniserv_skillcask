@@ -24,6 +24,8 @@ struct State {
     responses: HashMap<String, Canned>,
     /// One-shot responses by path, served in order before anything else.
     queued: HashMap<String, std::collections::VecDeque<Canned>>,
+    /// Path prefixes served by `git upload-pack` from a repository (smart HTTP).
+    git: Vec<(String, PathBuf)>,
 }
 
 type Canned = (u16, Vec<(String, String)>, Vec<u8>);
@@ -116,6 +118,12 @@ impl Server {
         self.state.lock().unwrap().queued.entry(path.to_string()).or_default().push_back((status, headers, body.into()));
     }
 
+    /// Serves the repository at `dir` under `prefix` with git's smart HTTP protocol, as a
+    /// GitLab or Gitea host would.
+    pub fn serve_git(&self, prefix: &str, dir: &Path) {
+        self.state.lock().unwrap().git.push((prefix.to_string(), dir.to_path_buf()));
+    }
+
     pub fn redirect(&self, path: &str, location: &str) {
         self.respond(path, 302, &[("Location", location)], "");
     }
@@ -141,6 +149,10 @@ fn handle(s: &mut (impl Read + Write), st: &Mutex<State>) -> std::io::Result<()>
         }
     }
     let auth = headers.get("authorization").cloned();
+    let len = headers.get("content-length").and_then(|l| l.parse::<usize>().ok()).unwrap_or(0);
+    let mut sent = vec![0; len];
+    reader.read_exact(&mut sent)?;
+    let mut git_route = None;
     let (status, extra, body) = {
         let mut st = st.lock().unwrap();
         st.log.push(format!("{path} auth={}", auth.is_some()));
@@ -148,6 +160,9 @@ fn handle(s: &mut (impl Read + Write), st: &Mutex<State>) -> std::io::Result<()>
         let path_only = path.split('?').next().unwrap_or("");
         if st.auth.is_some() && st.auth != auth {
             (401, Vec::new(), Vec::new())
+        } else if let Some((prefix, dir)) = st.git.iter().find(|(p, _)| path_only.starts_with(&format!("{p}/"))) {
+            git_route = Some((path_only[prefix.len()..].to_string(), dir.clone()));
+            (200, Vec::new(), Vec::new())
         } else if let Some(r) = st.queued.get_mut(path_only).and_then(|q| q.pop_front()) {
             r
         } else if let Some(r) = st.responses.get(&path).or_else(|| st.responses.get(path_only)) {
@@ -160,11 +175,36 @@ fn handle(s: &mut (impl Read + Write), st: &Mutex<State>) -> std::io::Result<()>
             (404, Vec::new(), Vec::new())
         }
     };
+    let (status, body) = match git_route {
+        Some((route, dir)) => upload_pack(&route, &dir, &sent),
+        None => (status, body),
+    };
     let extra: String = extra.iter().map(|(k, v)| format!("{k}: {v}\r\n")).collect();
     let head = format!("HTTP/1.1 {status} X\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n", body.len());
     s.write_all(head.as_bytes())?;
     s.write_all(&body)?;
     s.flush()
+}
+
+fn upload_pack(route: &str, dir: &Path, input: &[u8]) -> (u16, Vec<u8>) {
+    let advertise = route == "/info/refs";
+    if !advertise && route != "/git-upload-pack" {
+        return (404, Vec::new());
+    }
+    let mut c = Command::new("git");
+    c.args(["upload-pack", "--stateless-rpc"]).env_remove("GIT_PROTOCOL").stdin(Stdio::piped()).stdout(Stdio::piped());
+    if advertise {
+        c.arg("--advertise-refs");
+    }
+    let mut child = c.arg(dir).spawn().unwrap();
+    child.stdin.take().unwrap().write_all(input).unwrap();
+    let out = child.wait_with_output().unwrap().stdout;
+    if !advertise {
+        return (200, out);
+    }
+    let mut body = b"001e# service=git-upload-pack\n0000".to_vec();
+    body.extend(out);
+    (200, body)
 }
 
 /// A zip like a GitHub zipball: everything under one top-level directory.
