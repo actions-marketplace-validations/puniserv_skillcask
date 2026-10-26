@@ -12,7 +12,7 @@ use crate::error::{Error, MANIFEST, Result};
 
 pub const CONFIG: &str = "config.toml";
 pub const REPOSITORY_AGES: &str = "repository-min-release-age";
-pub const KEYS: [&str; 5] = ["min-release-age", "allow-ranges", "packagist", "github-requires", "allow-sources"];
+pub const KEYS: [&str; 6] = ["min-release-age", "allow-ranges", "packagist", "github-requires", "allow-sources", "deny-patterns"];
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {

@@ -128,7 +128,7 @@ impl Ctx {
         let p = self.lock_candidate(req, &repo, &c, None, prepared)?;
         // The same dist as the lock's was scanned when it was locked.
         if locked.is_none_or(|l| l.dist_sha256 != p.dist_sha256) {
-            warn_invisible(&prepared[&p.name], &p)?;
+            scan_new(&prepared[&p.name], &p, m.policy.deny_patterns)?;
         }
         Ok(p)
     }
@@ -204,6 +204,7 @@ impl Ctx {
                 print_file_diff(&label, x, y);
                 if let Some((_, bytes)) = y.filter(|_| scan) {
                     warnings.extend(skill::invisible_warnings(&label, bytes));
+                    warnings.extend(skill::risky_warnings(&label, bytes));
                 }
             }
         }
@@ -681,14 +682,27 @@ impl Ctx {
 }
 
 /// Warns about invisible Unicode in `p`'s skill files (D23).
-fn warn_invisible(f: &Fetched, p: &Package) -> Result<()> {
+/// Warns about invisible characters (D23) and risky patterns (D31) in the skills of a fresh
+/// download; `deny`: risky patterns fail instead (policy.deny-patterns).
+fn scan_new(f: &Fetched, p: &Package, deny: bool) -> Result<()> {
+    let mut risky = 0;
     for sk in &p.skills {
         for e in f.skill_files(&p.name, sk.from.as_ref().unwrap_or(&sk.name), &sk.path)? {
             let path = if sk.path.is_empty() { e.path } else { format!("{}/{}", sk.path, e.path) };
-            for w in skill::invisible_warnings(&path, &std::fs::read(f.dir.path().join(&path))?) {
+            let bytes = std::fs::read(f.dir.path().join(&path))?;
+            for w in skill::invisible_warnings(&path, &bytes) {
+                ui::warn(format!("{}: {w}", p.name));
+            }
+            let found = skill::risky_warnings(&path, &bytes);
+            risky += found.len();
+            for w in found {
                 ui::warn(format!("{}: {w}", p.name));
             }
         }
+    }
+    if deny && risky > 0 {
+        return Err(Error::new(MANIFEST, format!("{} {}: risky patterns found, refused by policy.deny-patterns", p.name, p.version))
+            .hint("review the lines above; if they are fine, lift deny-patterns for this run with SKILLCASK_DENY_PATTERNS=false"));
     }
     Ok(())
 }
@@ -1383,7 +1397,7 @@ fn add_vcs(ctx: &Ctx, name: String, git: Option<String>, skill: Option<String>, 
 fn finish_add(ctx: &Ctx, m: &Manifest, req: &SkillReq, repo: &Repository, c: &Candidate, must_have: Option<&str>) -> Result<()> {
     let mut prepared = HashMap::new();
     let pkg = ctx.lock_candidate(req, repo, c, None, &mut prepared)?;
-    warn_invisible(&prepared[&pkg.name], &pkg)?;
+    scan_new(&prepared[&pkg.name], &pkg, m.policy.deny_patterns)?;
     if let Some(s) = must_have {
         let have: Vec<&str> = pkg.skills.iter().map(|k| k.from.as_deref().unwrap_or(&k.name)).collect();
         if !have.contains(&s) {
@@ -1988,7 +2002,8 @@ pub fn info(ctx: &Ctx, target: &str) -> Result<()> {
             let mut prepared = HashMap::new();
             let pkg = ctx.lock_candidate(&req, &repo, &c, None, &mut prepared)?;
             let f = prepared.remove(&name).expect("lock_candidate prepares it");
-            warn_invisible(&f, &pkg)?;
+            // `info` writes nothing, so it only warns.
+            scan_new(&f, &pkg, false)?;
             (pkg, f)
         }
     };

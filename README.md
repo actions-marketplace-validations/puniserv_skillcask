@@ -116,6 +116,7 @@ allow-ranges = true      # false: every version must be exact
 packagist = true         # false: drop the implicit Packagist repository
 github-requires = false  # true: dependencies may come from GitHub
 allow-sources = ["acme", "own", "packagist", "github"]   # only these sources; default: all
+deny-patterns = false    # true: risky patterns in new skill text fail instead of warning
 ```
 
 ### Agents
@@ -160,8 +161,8 @@ Policy can also come from `config.toml` next to the global manifest (`~/.config/
 from the environment. The first layer that sets a key wins:
 
 1. `SKILLCASK_ALLOW_SOURCES`, `SKILLCASK_MIN_RELEASE_AGE`, `SKILLCASK_ALLOW_RANGES`,
-   `SKILLCASK_PACKAGIST`, `SKILLCASK_GITHUB_REQUIRES` (overriding an enforced key prints a
-   warning);
+   `SKILLCASK_PACKAGIST`, `SKILLCASK_GITHUB_REQUIRES`, `SKILLCASK_DENY_PATTERNS` (overriding an
+   enforced key prints a warning);
 2. keys `config.toml` lists in `enforce`: a project that sets them otherwise fails;
 3. `[policy]` in `skills.toml`;
 4. the other keys of `config.toml`, as defaults.
@@ -391,6 +392,20 @@ too young falls back to an older commit when the server supports partial fetches
   RIGHT-TO-LEFT OVERRIDE`, at most five per file. A leading byte order mark and a zero width
   joiner inside an emoji are not reported; right-to-left and Indic text can trigger warnings.
   Installing from the lock does not warn again.
+- The same commands warn about lines that usually mean harm, as `warning: acme/x:
+  skills/foo/SKILL.md:12: downloads code into a shell`, at most five per file:
+
+  | Warning | Matches (case-insensitive) |
+  |---|---|
+  | downloads code into a shell | `curl`, `wget`, `irm`, `iwr`, `Invoke-WebRequest` or `Invoke-RestMethod` piped (`\|`) into `sh`, `bash`, `zsh`, `dash`, `iex`, `Invoke-Expression`, `python`, `perl`, `ruby` or `node`, also after `sudo` |
+  | decodes base64 and runs it | `base64 -d`, `base64 --decode`, `b64decode` or `FromBase64String` with a pipe into a shell, `eval`, `exec(` or `iex` |
+  | reads SSH keys | `~/.ssh`, `$HOME/.ssh`, `id_rsa`, `id_ed25519` |
+  | reads system account files | `/etc/passwd`, `/etc/shadow` |
+  | tells the agent to ignore its instructions | "ignore (all) previous/prior instructions", "disregard all previous/prior" |
+
+  Skills that teach shell setup trigger some of these legitimately, so they are warnings. With
+  `deny-patterns = true` under `[policy]` (or enforced in `config.toml`) they fail the command
+  with exit 1 and nothing is written.
 - Plain git sources pin the commit; the lock's `dist-sha256` hashes the commit's file list
   (path, mode, sha256 of the content), so it does not depend on how a server packs objects.
 - `min-release-age` for GitHub sources uses times GitHub sets: release publication for tags,

@@ -56,6 +56,7 @@ pub fn check(key: &str, value: &str) -> std::result::Result<(Target, Option<GitH
         allow_ranges: true,
         packagist: true,
         github_requires: true,
+        deny_patterns: false,
         allow_sources: None,
         effective: Default::default(),
     };

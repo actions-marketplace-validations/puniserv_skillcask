@@ -53,6 +53,7 @@ local = ".skills"   # project skills, linked into .agents/skills
 min-release-age = "3d"
 allow-ranges = true
 # allow-sources = ["packagist", "github"]   # only these: repository names, packagist, github, https:// prefixes
+# deny-patterns = true   # risky patterns (curl | sh, ~/.ssh, "ignore previous instructions") fail instead of warning
 "#;
 
 pub const GLOBAL_TEMPLATE: &str = r#"# skillcask global manifest: personal skills in ~/.agents/skills. Lock: skills.lock.
@@ -75,6 +76,7 @@ github = { type = "github", url = "https://api.github.com" }
 min-release-age = "3d"
 allow-ranges = true
 # allow-sources = ["packagist", "github"]   # only these: repository names, packagist, github, https:// prefixes
+# deny-patterns = true   # risky patterns (curl | sh, ~/.ssh, "ignore previous instructions") fail instead of warning
 "#;
 
 pub fn template(global: bool) -> &'static str {
@@ -120,6 +122,8 @@ pub struct Policy {
     pub packagist: bool,
     /// `requires:` may name GitHub sources (D16).
     pub github_requires: bool,
+    /// Risky patterns in new skill text fail instead of warning (D31).
+    pub deny_patterns: bool,
     /// The only sources allowed; `None`: all (D18).
     pub allow_sources: Option<Vec<String>>,
     /// Keys set by a layer, with that layer, for `status`.
@@ -290,6 +294,7 @@ pub fn parse_with(text: &str, global: bool, outer: &crate::policy::Outer) -> Res
         allow_ranges: flag("allow-ranges", true),
         packagist: flag("packagist", true),
         github_requires: flag("github-requires", false),
+        deny_patterns: flag("deny-patterns", false),
         allow_sources: match effective.get("allow-sources") {
             Some((V::List(l), _)) => Some(l.clone()),
             _ => None,
