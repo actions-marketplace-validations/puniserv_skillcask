@@ -26,6 +26,27 @@ public struct RunResult: Sendable {
 }
 
 public enum CLI {
+    /// The first version with the `--json` documents (D32) the app reads.
+    public static let minimum = [0, 7, 0]
+
+    /// `[major, minor, patch]` from `skillcask 0.7.0 (4235d7f73ebd)`; nil for anything else.
+    public static func version(_ output: String) -> [Int]? {
+        let words = output.split(whereSeparator: \.isWhitespace)
+        guard words.count >= 2, words[0] == "skillcask" else { return nil }
+        let parts = words[1].split(separator: ".").compactMap { Int($0) }
+        return parts.count == 3 ? parts : nil
+    }
+
+    /// Why `output` of `skillcask --version` is not usable, or nil when it is.
+    public static func tooOld(_ output: String) -> String? {
+        let want = minimum.map(String.init).joined(separator: ".")
+        guard let v = version(output) else {
+            return "Could not read the skillcask version (needs \(want) or newer). Update skillcask."
+        }
+        guard v.lexicographicallyPrecedes(minimum) else { return nil }
+        return "skillcask \(v.map(String.init).joined(separator: ".")) is too old; the app needs \(want) or newer. Update skillcask (brew upgrade skillcask, npm install -g skillcask or cargo install skillcask)."
+    }
+
     /// Apps started from Finder get a minimal PATH, so the usual install locations are added.
     static let extraPaths = ["/opt/homebrew/bin", "/usr/local/bin", NSHomeDirectory() + "/.cargo/bin"]
 

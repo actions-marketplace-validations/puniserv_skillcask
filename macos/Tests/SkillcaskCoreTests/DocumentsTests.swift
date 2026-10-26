@@ -82,3 +82,20 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String, status: Int32 
     #expect(String(decoding: r.stdout, as: UTF8.self) == "out\n")
     #expect(r.stderr == "err\n")
 }
+
+@Test func notManagedEntryCarriesTheAdoptSource() throws {
+    let doc = try #require(decode(StatusDoc.self, #"""
+        {"entries":[{"adopt":"github:JuliusBrussee/caveman/cavecrew","ok":true,"package":null,"skill":"cavecrew","state":"not managed","version":null},{"adopt":null,"ok":true,"package":null,"skill":"mine","state":"not managed","version":null}],"ok":true}
+        """#))
+    #expect(doc.entries.map(\.adopt) == ["github:JuliusBrussee/caveman/cavecrew", nil])
+    // 0.7.0 prints no `adopt` key.
+    #expect(try #require(decode(StatusDoc.self, #"{"entries":[{"ok":true,"package":null,"skill":"a","state":"ok","version":null}],"ok":true}"#)).entries[0].adopt == nil)
+}
+
+@Test func versionGate() {
+    #expect(CLI.version("skillcask 0.7.0 (4235d7f73ebd)\n") == [0, 7, 0])
+    #expect(CLI.tooOld("skillcask 0.7.0 (4235d7f73ebd)") == nil)
+    #expect(CLI.tooOld("skillcask 0.10.1") == nil)
+    #expect(CLI.tooOld("skillcask 0.5.0 (abc)")?.contains("0.5.0 is too old") == true)
+    #expect(CLI.tooOld("error: unexpected argument") != nil)
+}

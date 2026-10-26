@@ -10,6 +10,8 @@ public struct StatusDoc: Decodable, Sendable {
         public let skill: String?
         public let state: String
         public let ok: Bool
+        /// For a `not managed` global skill: the `add --adopt` source `npx skills` recorded (D38).
+        public let adopt: String?
     }
     public struct Targets: Decodable, Sendable {
         public let entries: [String]

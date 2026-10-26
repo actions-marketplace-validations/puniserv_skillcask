@@ -14,6 +14,7 @@ final class AppModel {
     var status: StatusDoc?
     var outdated: [String: OutdatedDoc.Package] = [:]
     var needsInit = false
+    var tooOld: String?
     var selected: StatusDoc.Entry?
     var info: InfoDoc?
     var doctor: DoctorDoc?
@@ -38,13 +39,7 @@ final class AppModel {
     /// always goes there, so stderr and the exit code are never swallowed.
     @discardableResult
     func run(_ args: [String], show: Bool = true) async -> RunResult? {
-        guard let scope else { return nil }
-        guard let exe = CLI.locate(configured: UserDefaults.standard.string(forKey: "skillcaskPath")) else {
-            last = RunResult(
-                command: "skillcask", status: -1, stdout: Data(),
-                stderr: "skillcask not found on PATH, in /opt/homebrew/bin or /usr/local/bin, or at the path set in Settings")
-            return nil
-        }
+        guard let scope, let exe = locate() else { return nil }
         let (dir, flags): (URL, [String]) = switch scope {
         case .project(let p): (URL(fileURLWithPath: p), [])
         case .global: (FileManager.default.homeDirectoryForCurrentUser, ["-g"])
@@ -56,12 +51,28 @@ final class AppModel {
         return r
     }
 
+    private func locate() -> URL? {
+        guard let exe = CLI.locate(configured: UserDefaults.standard.string(forKey: "skillcaskPath")) else {
+            last = RunResult(
+                command: "skillcask", status: -1, stdout: Data(),
+                stderr: "skillcask not found on PATH, in /opt/homebrew/bin or /usr/local/bin, or at the path set in Settings")
+            return nil
+        }
+        return exe
+    }
+
     func refresh() async {
         status = nil
         outdated = [:]
         selected = nil
         info = nil
         needsInit = false
+        tooOld = nil
+        // An older binary rejects `--json` with a usage error that explains nothing.
+        guard let exe = locate() else { return }
+        let v = await CLI.run(exe, ["--version"], in: FileManager.default.homeDirectoryForCurrentUser)
+        tooOld = CLI.tooOld(String(decoding: v.stdout, as: UTF8.self))
+        if tooOld != nil { return }
         if case .project(let p) = scope, !FileManager.default.fileExists(atPath: p + "/skills.toml") {
             needsInit = true
             return
@@ -73,7 +84,7 @@ final class AppModel {
 
     func loadInfo() async {
         info = nil
-        guard let target = selected?.package ?? selected?.skill else { return }
+        guard selected?.state != "not managed", let target = selected?.package ?? selected?.skill else { return }
         info = await run(["info", "--json", target], show: false)?.decode(InfoDoc.self)
     }
 

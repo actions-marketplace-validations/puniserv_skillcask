@@ -64,7 +64,9 @@ struct SkillsView: View {
     var body: some View {
         @Bindable var model = model
         VStack(spacing: 0) {
-            if model.scope == nil {
+            if let why = model.tooOld {
+                ContentUnavailableView("Update skillcask", systemImage: "arrow.up.circle", description: Text(why))
+            } else if model.scope == nil {
                 ContentUnavailableView(
                     "Open a Project", systemImage: "folder",
                     description: Text("A folder with skills.toml, or Global for personal skills."))
@@ -123,7 +125,9 @@ struct DetailView: View {
     @State private var confirmRemove = false
 
     var body: some View {
-        if let entry = model.selected {
+        if let entry = model.selected, entry.state == "not managed" {
+            AdoptView(entry: entry).id(entry)
+        } else if let entry = model.selected {
             Form {
                 if let info = model.info { InfoSection(info: info) } else { ProgressView() }
                 if let u = entry.package.flatMap({ model.outdated[$0] }) {
@@ -152,6 +156,28 @@ struct DetailView: View {
         } else {
             ContentUnavailableView("Select a Skill", systemImage: "sidebar.right")
         }
+    }
+}
+
+/// A global skill another tool installed (D38): `add --adopt` moves it to
+/// ~/.config/skillcask/adopted/ and installs the package's skill in its place.
+struct AdoptView: View {
+    @Environment(AppModel.self) private var model
+    let entry: StatusDoc.Entry
+    @State private var source = ""
+
+    var body: some View {
+        Form {
+            Section(entry.skill ?? "") {
+                Text("Not managed by skillcask. Adopting moves it to ~/.config/skillcask/adopted/ and installs the skill from a package instead.")
+                    .foregroundStyle(.secondary)
+                TextField("Source", text: $source, prompt: Text("github:owner/repo/\(entry.skill ?? "skill"), vendor/name or git:https://…"))
+                Button("Adopt") { Task { await model.change(["add", "--adopt", source.trimmingCharacters(in: .whitespaces)]) } }
+                    .disabled(source.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear { source = entry.adopt ?? "" }
     }
 }
 
