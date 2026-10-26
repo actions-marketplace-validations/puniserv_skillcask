@@ -152,6 +152,16 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// List what installed skills reach (commands, network, paths, env, scripts) and flag modified
+    /// files, risky lines and invisible characters; exit 1 on any finding.
+    Audit {
+        /// Print one JSON document instead of text (D32).
+        #[arg(long, conflicts_with = "sarif")]
+        json: bool,
+        /// Print a SARIF 2.1.0 log for code scanning.
+        #[arg(long)]
+        sarif: bool,
+    },
     /// Search for skill packages.
     Search {
         query: String,
@@ -250,6 +260,7 @@ fn run(cli: Cli) -> Result<(), Error> {
         Cmd::Info { target, json } => commands::info(&ctx, &target, json),
         Cmd::Status { json } => commands::status(&ctx, json),
         Cmd::Doctor { fix, json } => commands::doctor(&ctx, fix, json),
+        Cmd::Audit { json, sarif } => commands::audit(&ctx, json, sarif),
         Cmd::Search { query, json } => commands::search(&ctx, &query, json),
         Cmd::External(_) | Cmd::Auth(_) | Cmd::Validate { .. } => unreachable!("handled above"),
         Cmd::Publish { vendor, base_url, dist_url, inline, out, paths } => {

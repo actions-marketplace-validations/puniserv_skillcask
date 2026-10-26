@@ -1,6 +1,6 @@
 //! SKILL.md frontmatter, skill names and the tree hash.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use sha2::{Digest, Sha256};
@@ -335,10 +335,149 @@ fn risky_line(line: &str) -> Option<&'static str> {
 /// the rest. Not UTF-8 means binary: nothing.
 pub fn risky_warnings(path: &str, bytes: &[u8]) -> Vec<String> {
     let Ok(text) = std::str::from_utf8(bytes) else { return Vec::new() };
-    let found: Vec<(usize, &str)> = text.lines().enumerate().filter_map(|(i, l)| risky_line(l).map(|r| (i + 1, r))).collect();
+    let found = risky(text);
     let mut out: Vec<String> = found.iter().take(RISKY_SHOWN).map(|(n, r)| format!("{}:{n}: {r}", shown(path))).collect();
     if found.len() > RISKY_SHOWN {
         out.push(format!("{}: {} more risky lines", shown(path), found.len() - RISKY_SHOWN));
+    }
+    out
+}
+
+/// `(1-based line, pattern)` per line of `text` that matches a risky pattern (D31).
+pub fn risky(text: &str) -> Vec<(usize, &'static str)> {
+    text.lines().enumerate().filter_map(|(i, l)| risky_line(l).map(|r| (i + 1, r))).collect()
+}
+
+/// What a skill's text asks an agent to reach (D34): read from the text, so a hint, not a sandbox.
+#[derive(Debug, Default, PartialEq)]
+pub struct Reach {
+    /// First words of the lines in shell code blocks of Markdown files.
+    pub commands: BTreeSet<String>,
+    /// Hosts of `http://` and `https://` URLs.
+    pub network: BTreeSet<String>,
+    /// Paths in the home directory or under a system root.
+    pub paths: BTreeSet<String>,
+    /// Upper-case names read as `$NAME`, `${NAME}`, `$env:NAME` or `env.NAME`.
+    pub env: BTreeSet<String>,
+    /// Files an agent could run: executable or with a script extension.
+    pub scripts: BTreeSet<String>,
+}
+
+const SHELL_FENCES: [&str; 11] = ["bash", "sh", "shell", "zsh", "fish", "console", "terminal", "powershell", "pwsh", "ps1", "cmd"];
+const SCRIPT_EXTS: [&str; 11] = ["sh", "bash", "zsh", "ps1", "cmd", "bat", "py", "js", "mjs", "rb", "pl"];
+const PATH_ROOTS: [&str; 13] =
+    ["~/", "$home/", "${home}/", "%userprofile%", "/etc/", "/usr/", "/var/", "/opt/", "/tmp/", "/users/", "/home/", "/root/", "c:\\"];
+
+impl Reach {
+    /// Adds what the file at `path` (relative, `/`-separated) reaches; binary files only count as scripts.
+    pub fn add(&mut self, path: &str, exec: bool, bytes: &[u8]) {
+        let ext = path.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
+        if exec || ext.as_deref().is_some_and(|e| SCRIPT_EXTS.contains(&e)) {
+            self.scripts.insert(path.to_string());
+        }
+        let Ok(text) = std::str::from_utf8(bytes) else { return };
+        if matches!(ext.as_deref(), Some("md" | "markdown")) {
+            self.commands.extend(fenced_commands(text));
+        }
+        for token in text.split(|c: char| c.is_whitespace() || "\"'`()<>[]{},;|".contains(c)) {
+            let t = token.trim_end_matches(['.', ':', '!', '?']);
+            if let Some((scheme, rest)) = t.split_once("://") {
+                let host = rest.split(['/', ':', '?', '#', '@']).next().unwrap_or("").to_ascii_lowercase();
+                if (scheme.ends_with("http") || scheme.ends_with("https")) && host.contains('.') {
+                    self.network.insert(host);
+                }
+            } else if PATH_ROOTS.iter().any(|r| t.to_ascii_lowercase().starts_with(r)) && t.len() > 2 {
+                self.paths.insert(t.trim_end_matches('$').to_string());
+            }
+        }
+        self.env.extend(env_names(text));
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.commands.is_empty() && self.network.is_empty() && self.paths.is_empty() && self.env.is_empty() && self.scripts.is_empty()
+    }
+}
+
+/// Shell words that start a command line without being a command.
+const SHELL_KEYWORDS: [&str; 16] =
+    ["if", "then", "elif", "else", "fi", "for", "while", "until", "do", "done", "case", "esac", "in", "function", "select", "time"];
+
+/// First words of each command (split on `|`, `&&`, `||`, `;`) in shell code blocks; heredoc
+/// bodies, keywords and words that cannot be a program name (`EOF`, `)`, prose with capitals)
+/// are skipped. PowerShell blocks keep capitals (`Invoke-WebRequest`).
+fn fenced_commands(text: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    let (mut fence, mut shell, mut pwsh, mut continued) = (None::<&str>, false, false, false);
+    let mut heredoc: Option<String> = None;
+    for line in text.lines() {
+        let l = line.trim_start();
+        let marker = ["```", "~~~"].into_iter().find(|m| l.starts_with(m));
+        match (fence, marker) {
+            (None, Some(m)) => {
+                let info = l[m.len()..].split_whitespace().next().unwrap_or("").to_ascii_lowercase();
+                (fence, shell, continued, heredoc) = (Some(m), SHELL_FENCES.contains(&info.as_str()), false, None);
+                pwsh = matches!(info.as_str(), "powershell" | "pwsh" | "ps1");
+                continue;
+            }
+            (Some(f), Some(m)) if f == m => {
+                fence = None;
+                continue;
+            }
+            (None, _) => continue,
+            _ => {}
+        }
+        if let Some(end) = &heredoc {
+            if l.trim_end() == end {
+                heredoc = None;
+            }
+            continue;
+        }
+        let was_continued = std::mem::replace(&mut continued, l.ends_with('\\') || l.ends_with('`'));
+        if !shell || was_continued {
+            continue;
+        }
+        if let Some((_, rest)) = l.split_once("<<") {
+            let word = rest.trim_start_matches(['-', '~']).split_whitespace().next().unwrap_or("");
+            let word = word.trim_matches(['\'', '"']);
+            if !word.is_empty() {
+                heredoc = Some(word.to_string());
+            }
+        }
+        let l = ["$ ", "> ", "PS> ", "% "].iter().find_map(|p| l.strip_prefix(p)).unwrap_or(l);
+        for seg in l.split("&&").flat_map(|s| s.split("||")).flat_map(|s| s.split([';', '|'])) {
+            let mut words = seg.split_whitespace();
+            let mut w = words.next().unwrap_or("");
+            while w == "sudo" || w.contains('=') || SHELL_KEYWORDS.contains(&w) {
+                w = words.next().unwrap_or("");
+            }
+            let w = w.trim_end_matches('\\');
+            let name_char =
+                |c: char| c.is_ascii_digit() || c.is_ascii_lowercase() || "._+-".contains(c) || (pwsh && c.is_ascii_uppercase());
+            if w.starts_with(|c: char| c.is_ascii_alphanumeric())
+                && w.chars().all(name_char)
+                && w.len() <= 40
+                && !SHELL_KEYWORDS.contains(&w)
+            {
+                out.insert(w.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// Upper-case environment names: `$NAME`, `${NAME}`, `$env:NAME`, `env.NAME`, at least two characters.
+fn env_names(text: &str) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for (i, _) in text.match_indices(['$', '.']) {
+        let rest = &text[i..];
+        let after = ["${", "$env:", "$Env:", "$ENV:", "$", ".env."]
+            .iter()
+            .find_map(|p| rest.strip_prefix(p).filter(|_| *p != ".env." || text[..i].ends_with(char::is_alphanumeric)));
+        let Some(after) = after else { continue };
+        let name: String = after.chars().take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_').collect();
+        if name.len() >= 2 && name.starts_with(|c: char| c.is_ascii_uppercase()) {
+            out.insert(name);
+        }
     }
     out
 }
@@ -446,6 +585,32 @@ fn is_exec(_: &std::fs::Metadata) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_what_a_skill_reaches() {
+        let md = "Read ~/.config/gh/hosts.yml and https://api.github.com/repos (see <https://Docs.Example.com>).\n\
+                  ```bash\n$ gh pr list --json number | jq '.[0]' && sudo git push\nFOO=1 make \\\n  continued-arg\n# comment\ncat <<'EOF' > out.txt\nYou must not list this\nEOF\nif true; then echo ok; fi\n```\n\
+                  ```powershell\nInvoke-WebRequest https://x.example.net -OutFile a\n```\n\
+                  ```\nnot-a-command here\n```\n\
+                  ```python\nprint(os.environ['X'])\n```\n\
+                  Uses $GITHUB_TOKEN, ${HOME}, $env:APPDATA and process.env.NPM_TOKEN; not $1, $x or .env.local.\n";
+        let mut r = Reach::default();
+        r.add("SKILL.md", false, md.as_bytes());
+        r.add("scripts/run.sh", false, b"curl https://get.example.com\n");
+        r.add("bin/tool", true, &[0, 159, 146, 150]);
+        r.add("notes.txt", false, b"/etc/hosts\n");
+        let set = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<BTreeSet<_>>();
+        assert_eq!(
+            r.commands,
+            set(&["Invoke-WebRequest", "cat", "echo", "gh", "git", "jq", "make", "true"]),
+            "only shell fences; sudo, prompts, assignments, comments and continuations skipped"
+        );
+        assert_eq!(r.network, set(&["api.github.com", "docs.example.com", "get.example.com", "x.example.net"]));
+        assert_eq!(r.paths, set(&["/etc/hosts", "~/.config/gh/hosts.yml"]));
+        assert_eq!(r.env, set(&["APPDATA", "GITHUB_TOKEN", "HOME", "NPM_TOKEN"]));
+        assert_eq!(r.scripts, set(&["bin/tool", "scripts/run.sh"]));
+        assert!(Reach::default().is_empty() && !r.is_empty());
+    }
 
     #[test]
     fn reads_frontmatter() {

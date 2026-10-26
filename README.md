@@ -283,13 +283,14 @@ Every command except `publish` and `validate` takes `-g, --global`.
 | `info <vendor/name[@constraint]\|github:owner/repo\|skill>` | A package's skills, versions, description, license and requirements, or which package installs a skill. |
 | `status` | Exit 1 when manifest, lock or installed files disagree. |
 | `doctor [--fix]` | Broken or committed links, stale gitignore block, modified skills; lists each check it ran. |
+| `audit [--json\|--sarif]` | What each installed skill reaches (commands, hosts, paths, env vars, scripts) and its findings: modified files, risky lines, invisible characters. Exit 1 on any finding. |
 | `search <query>` | Packagist (`type=ai-agent-skill`) and skill packages of the other repositories, GitLab included. |
 | `auth set\|remove <host>` | Keep a registry token in git's credential helper (Keychain, Credential Manager, libsecret). |
 | `publish --vendor v --base-url URL --out DIR [--inline] [--dist-url TPL] [paths…]` | Build a static Composer repository from a monorepo. |
 | `validate [paths…]` | Check `SKILL.md` files against the Agent Skills spec, see below. |
 | `<other>` | Runs `skillcask-<other>` from `PATH`, like git and cargo plugins. |
 
-`status`, `outdated`, `info`, `search` and `doctor` take `--json`: one JSON document on one line of
+`status`, `outdated`, `info`, `search`, `doctor` and `audit` take `--json`: one JSON document on one line of
 stdout, with the same exit code; warnings and errors stay on stderr. Package text in it is
 escaped as in the terminal (`<U+202E>`). For example `skillcask outdated --json | jq
 '.packages[] | select(.within != .locked)'`.
@@ -432,6 +433,24 @@ too young falls back to an older commit when the server supports partial fetches
   Skills that teach shell setup trigger some of these legitimately, so they are warnings. With
   `deny-patterns = true` under `[policy]` (or enforced in `config.toml`) they fail the command
   with exit 1 and nothing is written.
+- `skillcask audit` reviews what is installed now, every skill in `.agents/skills` and the project
+  skills: the commands its shell code blocks run, the hosts of its URLs, the paths in the home
+  directory or under system roots, the environment variables it reads and the files an agent could
+  run. That is read from the text, so it is a hint for review, not a sandbox. It also reports a
+  locked skill that differs from the lock, and every risky line and invisible character above,
+  with no limit per file, and exits 1 on any of them. `--sarif` prints a SARIF 2.1.0 log for code
+  scanning, e.g. in GitHub Actions:
+
+  ```yaml
+  - uses: puniserv/skillcask@v0.8.0
+    with:
+      args: install --frozen
+  - run: skillcask audit --sarif > skills.sarif
+  - uses: github/codeql-action/upload-sarif@v3
+    if: always()
+    with:
+      sarif_file: skills.sarif
+  ```
 - Plain git sources pin the commit; the lock's `dist-sha256` hashes the commit's file list
   (path, mode, sha256 of the content), so it does not depend on how a server packs objects.
 - `min-release-age` for GitHub sources uses times GitHub sets: release publication for tags,

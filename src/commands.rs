@@ -1898,6 +1898,165 @@ pub fn doctor(ctx: &Ctx, fix: bool, json: bool) -> Result<()> {
     Ok(())
 }
 
+struct Finding {
+    rule: &'static str,
+    /// Relative to the project root (the home directory with `--global`), `/`-separated.
+    path: String,
+    line: Option<usize>,
+    message: String,
+}
+
+/// `(rule id, SARIF level, description)`; the rule ids are part of the output (D34).
+const AUDIT_RULES: [(&str, &str, &str); 3] = [
+    ("modified", "error", "Installed skill differs from skills.lock"),
+    ("risky-pattern", "warning", "Line matches a risky pattern (D31)"),
+    ("invisible-character", "warning", "Invisible or bidi control character (D23)"),
+];
+
+/// A skill directory `audit` reads: name, package and locked skill if locked, kind, path.
+type OnDisk<'a> = (String, Option<&'a Package>, Option<&'a LockedSkill>, &'static str, String);
+
+pub fn audit(ctx: &Ctx, json: bool, sarif: bool) -> Result<()> {
+    let s = &ctx.s;
+    let m = Manifest::load(&s.config, s.global)?;
+    let lock = Lock::load(&s.config)?;
+    let locked = locked_names(&lock)?;
+    let locals = project::local_names(s, &m.local)?;
+    let hand = hand_written(s, &lock, &project::block_managed(s)?, &locals)?;
+    let mut skills: Vec<OnDisk> =
+        locked.iter().map(|(n, (p, sk))| (n.clone(), Some(*p), Some(*sk), "package", format!("{STORE}/{n}"))).collect();
+    skills.extend(hand.iter().map(|n| (n.clone(), None, None, "hand-written", format!("{STORE}/{n}"))));
+    skills.extend(locals.iter().map(|n| (n.clone(), None, None, "project", format!("{}/{n}", m.local))));
+
+    let mut report = Vec::new();
+    let mut findings = Vec::new();
+    for (name, p, sk, kind, dir) in &skills {
+        let mut found = Vec::new();
+        let mut reach = skill::Reach::default();
+        let abs = s.root.join(dir);
+        if let Some(sk) = sk {
+            match tree_on_disk(s, name, &[&sk.tree_sha256]) {
+                None => found.push(Finding { rule: "modified", path: dir.clone(), line: None, message: "not installed".into() }),
+                Some(h) if h != sk.tree_sha256 => found.push(Finding {
+                    rule: "modified",
+                    path: dir.clone(),
+                    line: None,
+                    message: "modified after skillcask installed it; run `skillcask install` to restore".into(),
+                }),
+                Some(_) => {}
+            }
+        }
+        for e in skill::scan_dir(&abs).unwrap_or_default() {
+            let bytes = std::fs::read(abs.join(&e.path))?;
+            let path = format!("{dir}/{}", e.path);
+            reach.add(&e.path, e.exec, &bytes);
+            let Ok(text) = std::str::from_utf8(&bytes) else { continue };
+            for (line, why) in skill::risky(text) {
+                found.push(Finding { rule: "risky-pattern", path: path.clone(), line: Some(line), message: why.into() });
+            }
+            for i in skill::invisible(text) {
+                let message = format!("U+{:04X} {}", u32::from(i.ch), i.name);
+                found.push(Finding { rule: "invisible-character", path: path.clone(), line: Some(i.line), message });
+            }
+        }
+        report.push((name, *p, *kind, dir, reach, found.len()));
+        findings.extend(found.into_iter().map(|f| (name.clone(), f)));
+    }
+
+    let problems = findings.len();
+    if sarif {
+        print_json(&sarif_log(&findings));
+    } else if json {
+        let set = |b: &BTreeSet<String>| b.iter().map(|x| skill::shown(x)).collect::<Vec<_>>();
+        let entries: Vec<Value> = report
+            .iter()
+            .map(|(name, p, kind, dir, r, _)| {
+                let f: Vec<Value> = findings
+                    .iter()
+                    .filter(|(n, _)| n == *name)
+                    .map(|(_, f)| json!({ "rule": f.rule, "path": skill::shown(&f.path), "line": f.line, "message": f.message }))
+                    .collect();
+                json!({
+                    "skill": name, "kind": kind, "package": p.map(|p| &p.name), "version": p.map(|p| &p.version),
+                    "path": skill::shown(dir), "findings": f, "commands": set(&r.commands), "network": set(&r.network),
+                    "paths": set(&r.paths), "env": set(&r.env), "scripts": set(&r.scripts),
+                })
+            })
+            .collect();
+        print_json(&json!({ "ok": problems == 0, "skills": entries }));
+    } else {
+        for (name, p, kind, _, r, _) in &report {
+            let from = p.map_or(kind.to_string(), |p| format!("{} {}", p.name, p.version));
+            let head = format!("{} ({from})", skill::shown(name));
+            if ui::agent() && r.is_empty() && !findings.iter().any(|(n, _)| n == *name) {
+                continue;
+            }
+            println!("{}", if ui::agent() { head } else { ui::out(ui::Color::Cyan, head) });
+            for (_, f) in findings.iter().filter(|(n, _)| n == *name) {
+                let at = f.line.map_or(s.show(&f.path), |l| format!("{}:{l}", s.show(&f.path)));
+                let (mark, c) = if f.rule == "modified" { ("✗", ui::Color::Red) } else { ("!", ui::Color::Yellow) };
+                println!("  {} {}: {}", ui::out(c, mark), skill::shown(&at), f.message);
+            }
+            for (label, set) in
+                [("commands", &r.commands), ("network", &r.network), ("paths", &r.paths), ("env", &r.env), ("scripts", &r.scripts)]
+            {
+                if !set.is_empty() {
+                    let list = set.iter().map(|x| skill::shown(x)).collect::<Vec<_>>().join(", ");
+                    println!("  {label}: {list}");
+                }
+            }
+        }
+        let summary = format!("{} skill(s), {problems} finding(s)", report.len());
+        if ui::agent() {
+            println!("audit: {summary}");
+        } else {
+            let (mark, c) = if problems == 0 { ("✓", ui::Color::Green) } else { ("✗", ui::Color::Red) };
+            println!("{} {summary}", ui::out(c, mark));
+        }
+    }
+    if problems > 0 {
+        return Err(Error::new(MANIFEST, format!("{problems} finding(s)")));
+    }
+    Ok(())
+}
+
+/// SARIF 2.1.0, which GitHub code scanning and GitLab read; one result per finding.
+fn sarif_log(findings: &[(String, Finding)]) -> Value {
+    let rules: Vec<Value> = AUDIT_RULES
+        .iter()
+        .map(|(id, level, text)| json!({ "id": id, "shortDescription": { "text": text }, "defaultConfiguration": { "level": level } }))
+        .collect();
+    let results: Vec<Value> = findings
+        .iter()
+        .map(|(name, f)| {
+            let level = AUDIT_RULES.iter().find(|r| r.0 == f.rule).map_or("warning", |r| r.1);
+            let mut location = json!({ "artifactLocation": { "uri": f.path } });
+            if let Some(l) = f.line {
+                location["region"] = json!({ "startLine": l });
+            }
+            json!({
+                "ruleId": f.rule,
+                "level": level,
+                "message": { "text": format!("{}: {}", skill::shown(name), f.message) },
+                "locations": [{ "physicalLocation": location }],
+            })
+        })
+        .collect();
+    json!({
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [{
+            "tool": { "driver": {
+                "name": "skillcask",
+                "version": env!("CARGO_PKG_VERSION"),
+                "informationUri": "https://github.com/puniserv/skillcask",
+                "rules": rules,
+            } },
+            "results": results,
+        }],
+    })
+}
+
 pub fn search(ctx: &Ctx, query: &str, json: bool) -> Result<()> {
     let m = ctx.manifest_or_default()?;
     let results = Registry::new(ctx.http()?).search(&m.allowed_repositories(), query)?;
