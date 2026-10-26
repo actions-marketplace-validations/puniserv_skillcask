@@ -39,6 +39,8 @@ Conventional Commits with a lowercase subject that states the outcome, e.g.
 2. `git tag vX.Y.Z && git push origin vX.Y.Z`. `release.yml` builds all targets and publishes the
    GitHub Release, Homebrew formula and npm package.
 3. `cargo publish --locked` from the tag (manual).
+4. Edit the GitHub Release in the browser, tick "Publish this Action to the GitHub Marketplace" and
+   save (manual: GitHub has no API for it, and releases made by `release.yml` are not listed).
 
 `release.yml` comes from `dist generate`, but it is hand-edited; re-apply the edits after
 regenerating:
