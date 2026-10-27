@@ -163,7 +163,7 @@ follow `config.toml`.
 targets = ["claude", "kiro"]
 
 [search]
-skills-sh = true   # search also asks skills.sh (it receives the query); written by search --remember
+skills-sh = true   # search also asks skills.sh (it receives the query); written by search --remember or skillcask -g config search.skills-sh true
 ```
 
 When a target is dropped, the next `install` removes the links skillcask made there; `doctor`
@@ -291,7 +291,8 @@ Every command except `publish`, `validate` and `projects` takes `-g, --global`.
 | `status` | Exit 1 when manifest, lock or installed files disagree. Also lists the repositories in use (name, type, URL without credentials) and whether `allow-sources` admits each. |
 | `doctor [--fix]` | Broken or committed links, stale gitignore block, modified skills; lists each check it ran. |
 | `audit [--json\|--sarif]` | What each installed skill reaches (commands, hosts, paths, env vars, scripts) and its findings: modified files, risky lines, invisible characters. Exit 1 on any finding. |
-| `search <query> [--skills-sh\|--no-skills-sh [--remember]]` | Packagist (`type=ai-agent-skill`) and skill packages of the other repositories, GitLab included; with skills.sh on, also the GitHub skills it lists, as `github:owner/repo/skill` with their install count. skills.sh is off until you turn it on, since it receives the query: the first search in a terminal asks once, `--remember` saves a flag's choice, both in `config.toml`. |
+| `config [key [value…]] [--unset] [--json]` | Settings with where each comes from: `[policy]` and `[agents] targets` of `skills.toml`, or with `-g` of `config.toml` (also `policy.enforce` and `search.skills-sh`). `config policy.min-release-age 5d` sets a key, `--unset` removes it, each checked before the file is written; `config edit` opens the file in `$VISUAL`/`$EDITOR` and checks it afterwards. |
+| `search [query] [--skills-sh\|--no-skills-sh [--remember]]` | Packagist (`type=ai-agent-skill`) and skill packages of the other repositories, GitLab included; with skills.sh on, also the GitHub skills it lists, as `github:owner/repo/skill` with their install count. skills.sh is off until you turn it on, since it receives the query: the first search in a terminal asks once, `--remember` saves a flag's choice (no query needed), both in `config.toml`. |
 | `auth set\|remove <host>` | Keep a registry token in git's credential helper (Keychain, Credential Manager, libsecret). |
 | `publish --vendor v --base-url URL --out DIR [--inline] [--dist-url TPL] [paths…]` | Build a static Composer repository from a monorepo. |
 | `validate [paths…]` | Check `SKILL.md` files against the Agent Skills spec, see below. |
@@ -299,10 +300,10 @@ Every command except `publish`, `validate` and `projects` takes `-g, --global`.
 | `ui` | A terminal UI over the commands above: skills with their state and updates, `info`, SKILL.md and `audit` per skill, add, adopt (also offered when an add hits a skill skillcask does not manage), update (diff first), remove, doctor, a filter of the list, search of the registries (and skills.sh, asked once), the repositories in use (`R`) and a projects picker; `g` switches between the project and `--global`. |
 | `<other>` | Runs `skillcask-<other>` from `PATH`, like git and cargo plugins. |
 
-`status`, `outdated`, `info`, `search`, `doctor`, `audit` and `projects` take `--json`: one JSON document on one line of
+`status`, `outdated`, `info`, `search`, `doctor`, `audit`, `projects` and `config` take `--json`: one JSON document on one line of
 stdout, with the same exit code; warnings and errors stay on stderr. Package text in it is
 escaped as in the terminal (`<U+202E>`). `status --json` has `repositories`
-(`[{"name", "type", "url", "allowed"}]`); `search --json` results carry `source` (the repository
+(`[{"name", "type", "url", "allowed"}]`) and `skills-sh`; `search --json` results carry `source` (the repository
 name, or `skills.sh`) and `installs`, and the document has `"skills-sh": true|false|null` (`null`:
 never decided). For example `skillcask outdated --json | jq
 '.packages[] | select(.within != .locked)'`.

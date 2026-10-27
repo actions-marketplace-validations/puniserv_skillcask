@@ -557,7 +557,7 @@ pub fn parse_age(s: &str) -> Result<SignedDuration> {
     }
 }
 
-fn edit(root: &Path, global: bool, f: impl FnOnce(&mut DocumentMut) -> Result<()>) -> Result<()> {
+pub fn edit(root: &Path, global: bool, f: impl FnOnce(&mut DocumentMut) -> Result<()>) -> Result<()> {
     let path = root.join(FILE);
     // A missing manifest starts as the template and is created only if the edit succeeds.
     let text = if path.exists() { std::fs::read_to_string(&path).ctx(FILE)? } else { template(global).to_string() };
@@ -684,7 +684,7 @@ fn edit_lines(t: &mut InlineTable, req: &SkillReq) {
 }
 
 /// Sets `k` keeping the old value's comments, or removes it for `None`.
-fn set(t: &mut dyn TableLike, k: &str, v: Option<Value>) {
+pub fn set(t: &mut dyn TableLike, k: &str, v: Option<Value>) {
     let Some(mut v) = v else {
         t.remove(k);
         return;

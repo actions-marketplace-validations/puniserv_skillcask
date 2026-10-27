@@ -2,6 +2,7 @@
 
 mod archive;
 mod commands;
+mod config;
 mod credential;
 mod deps;
 mod diff;
@@ -176,7 +177,9 @@ enum Cmd {
     },
     /// Search for skill packages; with skills.sh on, also the GitHub skills it lists.
     Search {
-        query: String,
+        /// Optional with --remember, which then only saves the choice.
+        #[arg(required_unless_present = "remember")]
+        query: Option<String>,
         /// Print one JSON document instead of text (D32).
         #[arg(long)]
         json: bool,
@@ -189,6 +192,22 @@ enum Cmd {
         /// Save --skills-sh or --no-skills-sh as [search] skills-sh in config.toml.
         #[arg(long)]
         remember: bool,
+    },
+    /// Show or change settings with their origin: [policy] and [agents] targets of skills.toml, or
+    /// with --global of config.toml, which also has policy.enforce and search.skills-sh.
+    Config {
+        /// A key such as policy.min-release-age, or `edit` to open the file in $VISUAL or $EDITOR;
+        /// none lists every setting.
+        key: Option<String>,
+        /// The value to set; a list takes one argument per entry.
+        #[arg(conflicts_with = "unset")]
+        value: Vec<String>,
+        /// Remove the key from the file.
+        #[arg(long, requires = "key")]
+        unset: bool,
+        /// Print one JSON document instead of text (D32).
+        #[arg(long, conflicts_with_all = ["value", "unset"])]
+        json: bool,
     },
     /// Keep a registry token in git's credential helper (Keychain, Credential Manager, libsecret).
     #[command(subcommand)]
@@ -313,8 +332,9 @@ fn run(cli: Cli) -> Result<(), Error> {
             if remember && choice.is_none() {
                 return Err(Error::new(MANIFEST, "--remember needs --skills-sh or --no-skills-sh"));
             }
-            commands::search(&ctx, &query, json, choice, remember)
+            commands::search(&ctx, query.as_deref(), json, choice, remember)
         }
+        Cmd::Config { key, value, unset, json } => config::run(&ctx.s, key.as_deref(), &value, unset, json),
         Cmd::External(_) | Cmd::Auth(_) | Cmd::Validate { .. } | Cmd::Projects { .. } | Cmd::Ui => unreachable!("handled above"),
         Cmd::Publish { vendor, base_url, dist_url, inline, out, paths } => {
             if vendor.is_empty() {

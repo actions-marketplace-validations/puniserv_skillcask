@@ -182,11 +182,14 @@ pub fn outer() -> Result<Outer> {
 
 fn read_config(path: &Path) -> Result<Outer> {
     let shown = path.display().to_string();
-    let text = match std::fs::read_to_string(path) {
-        Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Outer::default()),
-        Err(e) => return Err(e).ctx(&shown),
-    };
+    match std::fs::read_to_string(path) {
+        Ok(t) => parse_config(&t, &shown),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Outer::default()),
+        Err(e) => Err(e).ctx(&shown),
+    }
+}
+
+pub fn parse_config(text: &str, shown: &str) -> Result<Outer> {
     let doc: DocumentMut = text.parse().map_err(|e| Error::new(MANIFEST, format!("{shown}: {e}")))?;
     if let Some((k, _)) = doc.iter().find(|(k, _)| !matches!(*k, "policy" | "agents" | "search")) {
         bail!(MANIFEST, "{shown}: only [policy], [agents] and [search] are read here, found {k}");
@@ -213,26 +216,45 @@ fn read_config(path: &Path) -> Result<Outer> {
                 Some(list.ok_or_else(|| Error::new(MANIFEST, format!("{shown}: agents.targets must be a list of agent names or paths")))?);
         }
     }
-    let config = layer(doc.get("policy").and_then(Item::as_table_like), &shown, true)?;
-    Ok(Outer { config, config_path: shown, env: Layer::default(), targets, skills_sh })
+    let config = layer(doc.get("policy").and_then(Item::as_table_like), shown, true)?;
+    Ok(Outer { config, config_path: shown.to_string(), env: Layer::default(), targets, skills_sh })
 }
 
-/// Writes `[search] skills-sh` into `config.toml`, keeping the rest of the file; returns its path.
-pub fn remember_skills_sh(on: bool) -> Result<std::path::PathBuf> {
-    let Some(path) = crate::scope::config_dir().map(|d| d.join(CONFIG)) else {
-        bail!(MANIFEST, "--remember needs HOME (or USERPROFILE) to be set")
-    };
+/// `config.toml` in the user's config dir, which need not exist yet.
+pub fn config_path() -> Result<std::path::PathBuf> {
+    match crate::scope::config_dir() {
+        Some(d) => Ok(d.join(CONFIG)),
+        None => bail!(MANIFEST, "{CONFIG} needs HOME (or USERPROFILE) to be set"),
+    }
+}
+
+/// Applies `f` to `config.toml`, keeping the rest of the file, and writes it only if the result is
+/// valid, also as the layer under an empty project; returns its path.
+pub fn edit_config(f: impl FnOnce(&mut DocumentMut) -> Result<()>) -> Result<std::path::PathBuf> {
+    let path = config_path()?;
+    let shown = path.display().to_string();
     let text = match std::fs::read_to_string(&path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(e).ctx(path.display()),
+        Err(e) => return Err(e).ctx(&shown),
     };
-    let mut doc: DocumentMut = text.parse().map_err(|e| Error::new(MANIFEST, format!("{}: {e}", path.display())))?;
-    let search = doc.entry("search").or_insert_with(toml_edit::table);
-    let Some(search) = search.as_table_like_mut() else { bail!(MANIFEST, "{}: search must be a table", path.display()) };
-    search.insert(SKILLS_SH, toml_edit::value(on));
-    crate::project::write_atomic(&path, &doc.to_string())?;
+    let mut doc: DocumentMut = text.parse().map_err(|e| Error::new(MANIFEST, format!("{shown}: {e}")))?;
+    f(&mut doc)?;
+    let text = doc.to_string();
+    // Targets are only checked against the presets when a manifest uses them.
+    crate::manifest::parse_with("", false, &parse_config(&text, &shown)?)?;
+    crate::project::write_atomic(&path, &text)?;
     Ok(path)
+}
+
+/// Writes `[search] skills-sh` into `config.toml`; returns its path.
+pub fn remember_skills_sh(on: bool) -> Result<std::path::PathBuf> {
+    edit_config(|doc| {
+        let search = doc.entry("search").or_insert_with(toml_edit::table);
+        let Some(search) = search.as_table_like_mut() else { bail!(MANIFEST, "search must be a table") };
+        search.insert(SKILLS_SH, toml_edit::value(on));
+        Ok(())
+    })
 }
 
 /// Set once the environment-over-`enforce` warnings are printed: a run loads the manifest more than once.

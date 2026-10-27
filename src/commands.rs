@@ -1863,6 +1863,7 @@ fn newer(req: &SkillReq, p: &Package, c: &Candidate) -> bool {
 
 pub fn status(ctx: &Ctx, json: bool) -> Result<()> {
     let m = Manifest::load(&ctx.s.config, ctx.s.global)?;
+    let skills_sh = crate::policy::outer()?.skills_sh;
     let lock = Lock::load(&ctx.s.config)?;
     let mut rows = vec![["package", "version", "skill", "state"].map(String::from)];
     let mut bad = 0;
@@ -1944,6 +1945,7 @@ pub fn status(ctx: &Ctx, json: bool) -> Result<()> {
             "policy": policy,
             "targets": { "entries": m.target_entries, "from": m.targets_from, "dirs": m.targets },
             "repositories": repositories,
+            "skills-sh": skills_sh,
         }));
         if bad > 0 {
             return Err(Error::new(MANIFEST, format!("{bad} problem(s)")).hint("run skillcask install"));
@@ -1996,6 +1998,8 @@ pub fn status(ctx: &Ctx, json: bool) -> Result<()> {
     if !ui::agent() {
         let dirs = if m.targets.is_empty() { format!("{STORE} only") } else { m.targets.join(", ") };
         println!("{}", ui::out(ui::Color::Dim, format!("agents.targets = {:?} ({}): {dirs}", m.target_entries, m.targets_from)));
+        let sh = skills_sh.map_or("not set".to_string(), |on| format!("= {on} ({})", crate::policy::CONFIG));
+        println!("{}", ui::out(ui::Color::Dim, format!("search.skills-sh {sh}")));
     }
     if bad > 0 {
         return Err(Error::new(MANIFEST, format!("{bad} problem(s)")).hint("run skillcask install"));
@@ -2325,15 +2329,17 @@ fn sarif_log(findings: &[(String, Finding)]) -> Value {
 }
 
 /// `skills_sh`: `--skills-sh` / `--no-skills-sh`, else `[search] skills-sh` of `config.toml`,
-/// else asked once in a terminal (D42).
-pub fn search(ctx: &Ctx, query: &str, json: bool, skills_sh: Option<bool>, remember: bool) -> Result<()> {
-    let m = ctx.manifest_or_default()?;
+/// else asked once in a terminal (D42). Without a query it only saves the choice.
+pub fn search(ctx: &Ctx, query: Option<&str>, json: bool, skills_sh: Option<bool>, remember: bool) -> Result<()> {
     let mut setting = crate::policy::outer()?.skills_sh;
     if let Some(on) = skills_sh.filter(|_| remember) {
         let path = crate::policy::remember_skills_sh(on)?;
         ui::note(format!("saved [search] skills-sh = {on} in {}", path.display()));
         setting = Some(on);
-    } else if setting.is_none() && skills_sh.is_none() && ctx.interactive && !json && !ui::agent() {
+    }
+    let Some(query) = query else { return Ok(()) };
+    let m = ctx.manifest_or_default()?;
+    if setting.is_none() && skills_sh.is_none() && ctx.interactive && !json && !ui::agent() {
         eprint!("Also search skills.sh? It receives your query. [y/N] ");
         let mut line = String::new();
         if std::io::stdin().read_line(&mut line)? == 0 {
@@ -2753,7 +2759,7 @@ fn print_json(v: &Value) {
     println!("{v}");
 }
 
-fn policy_value(v: &crate::policy::Value) -> Value {
+pub fn policy_value(v: &crate::policy::Value) -> Value {
     match v {
         crate::policy::Value::Age(a) => Value::from(format!("{a:#}")),
         crate::policy::Value::Bool(b) => Value::Bool(*b),
