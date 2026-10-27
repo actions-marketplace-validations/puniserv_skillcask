@@ -959,6 +959,24 @@ fn personal_skills_shadowing_project_ones_are_warned_about() {
 }
 
 #[test]
+fn a_personal_copy_with_the_same_content_is_not_warned_about() {
+    let s = Server::start();
+    s.simple("acme/one", "1.0.0", "one");
+    let p = Project::new(&s);
+    p.global_manifest(&s, "\"acme/one\" = \"^1.0\"\n");
+    p.global(&["install"], 0);
+    p.manifest(&s, "\"acme/one\" = \"^1.0\"\n");
+    let out = p.ok(&["install"]);
+    assert!(!out.contains("warning"), "{out}");
+    let out = p.ok(&["doctor"]);
+    assert!(!out.contains(" ! "), "{out}");
+    // Content, not the name, decides: an edited personal copy is warned about again.
+    std::fs::write(p.home().join(".agents/skills/one/SKILL.md"), "edited").unwrap();
+    let out = p.ok(&["install"]);
+    assert!(out.contains("warning: one: ~/.agents/skills/one also exists"), "{out}");
+}
+
+#[test]
 fn renamed_skill_installs_under_its_new_name() {
     let s = Server::start();
     s.simple("acme/one", "1.0.0", "one");

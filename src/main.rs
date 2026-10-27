@@ -370,7 +370,9 @@ fn main() {
         std::process::exit(if e.use_stderr() { MANIFEST.into() } else { 0 });
     });
     ui::init(cli.agent);
-    if let Err(e) = run(cli) {
+    let r = run(cli);
+    project::end_runs();
+    if let Err(e) = r {
         ui::error(&e.msg, e.hint.as_deref());
         std::process::exit(e.code.into());
     }

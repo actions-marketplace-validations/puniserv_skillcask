@@ -120,6 +120,16 @@ fn write_atomic_io(path: &Path, text: &str) -> std::io::Result<()> {
     tmp.persist(&path).map(drop).map_err(|e| e.error)
 }
 
+/// Drops this process's run locks; called on exit, which skips destructors.
+pub fn end_runs() {
+    let mut runs = RUNS.lock().unwrap_or_else(|e| e.into_inner());
+    for (store, f) in runs.drain(..) {
+        // Unlocked first: Windows refuses to delete an open file.
+        drop(f);
+        let _ = std::fs::remove_file(store.join(format!("{RUN}{}", std::process::id())));
+    }
+}
+
 /// A sibling temp dir in the store, so the final rename stays on one filesystem.
 pub fn temp_dir(s: &Scope) -> Result<tempfile::TempDir> {
     no_symlink(s, STORE)?;

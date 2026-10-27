@@ -522,11 +522,15 @@ impl Ctx {
             req.rename.insert(upstream.to_string(), to);
             Ok(())
         };
+        // A dependency has no manifest entry to hold `rename`; `preflight` names the fix.
+        let offer = |c: &Conflict| c.rename && newcomers.contains(&c.package) && m.skill(&c.package).is_some();
+        // `preflight` fails on a conflict no rename here solves; answers given before it would be lost.
+        if self.conflicts(m, lock, old, newcomers)?.iter().any(|c| !offer(c)) {
+            return Ok(Vec::new());
+        }
         let mut last: Option<(String, String)> = None;
         loop {
             let taken = self.taken_names(m, lock)?;
-            // A dependency has no manifest entry to hold `rename`; `preflight` names the fix.
-            let offer = |c: &Conflict| c.rename && newcomers.contains(&c.package) && m.skill(&c.package).is_some();
             let Some(c) = self.conflicts(m, lock, old, newcomers)?.into_iter().find(offer) else {
                 break;
             };
@@ -547,12 +551,12 @@ impl Ctx {
                 .map(|(p, s)| (p.name.clone(), s.clone()))
                 .collect();
             for (p, s) in news {
-                let Some(w) = shadows(&self.s, m, [&s.name]).into_iter().next() else { continue };
+                let Some(w) = shadows(&self.s, m, [(&s.name, Some(s.tree_sha256.as_str()))]).into_iter().next() else { continue };
                 let taken = self.taken_names(m, lock)?;
                 let upstream = s.from.clone().unwrap_or(s.name.clone());
                 let mut suggestion = suggest(&p, &upstream, &taken);
                 while let Some(to) = ask(&question(&w, &p), suggestion.as_deref(), &taken)? {
-                    if let Some(why) = shadows(&self.s, m, [&to]).into_iter().next() {
+                    if let Some(why) = shadows(&self.s, m, [(&to, None)]).into_iter().next() {
                         eprintln!("{why}");
                         suggestion = None;
                         continue;
@@ -696,7 +700,7 @@ impl Ctx {
             project::git_untrack(s, &tracked)?;
             crate::ui::warn(format!("removed managed paths from the git index (files kept): {}", tracked.join(", ")));
         }
-        for w in shadows(s, m, locked.keys().chain(&hand).chain(&locals)) {
+        for w in shadows(s, m, with_hashes(&locked, &hand, &locals)) {
             crate::ui::warn(w);
         }
         Ok(())
@@ -890,13 +894,16 @@ fn ask(question: &str, suggestion: Option<&str>, taken: &BTreeSet<String>) -> Re
 }
 
 /// Personal skills with the same name as project ones. Claude Code runs the personal one;
-/// Codex lists both. Empty for the global scope.
-fn shadows<'a>(s: &Scope, m: &Manifest, names: impl IntoIterator<Item = &'a String>) -> Vec<String> {
+/// Codex lists both. Each name comes with the tree hash of the project's copy, if locked: a
+/// personal copy with the same content is not reported (D45). Empty for the global scope.
+fn shadows<'a>(s: &Scope, m: &Manifest, names: impl IntoIterator<Item = (&'a String, Option<&'a str>)>) -> Vec<String> {
     let Some(home) = crate::scope::home().filter(|_| !s.global) else { return Vec::new() };
     let mut out = Vec::new();
-    for n in names {
+    for (n, want) in names {
         for d in std::iter::once(STORE).chain(m.targets.iter().map(String::as_str)) {
-            if home.join(d).join(n).symlink_metadata().is_ok() {
+            let dir = home.join(d).join(n);
+            let same = || skill::scan_dir(&dir).ok().filter(|_| dir.is_dir()).is_some_and(|e| Some(skill::tree_hash(&e).as_str()) == want);
+            if dir.symlink_metadata().is_ok() && !same() {
                 out.push(if d == ".claude/skills" {
                     format!("{n}: ~/{d}/{n} shadows the project skill in Claude Code")
                 } else {
@@ -906,6 +913,14 @@ fn shadows<'a>(s: &Scope, m: &Manifest, names: impl IntoIterator<Item = &'a Stri
         }
     }
     out
+}
+
+fn with_hashes<'a>(
+    locked: &'a BTreeMap<String, (&Package, &'a LockedSkill)>,
+    hand: &'a BTreeSet<String>,
+    locals: &'a BTreeSet<String>,
+) -> impl Iterator<Item = (&'a String, Option<&'a str>)> {
+    locked.iter().map(|(n, (_, sk))| (n, Some(sk.tree_sha256.as_str()))).chain(hand.iter().chain(locals).map(|n| (n, None)))
 }
 
 fn locked_names(lock: &Lock) -> Result<BTreeMap<String, (&Package, &LockedSkill)>> {
@@ -2048,7 +2063,7 @@ pub fn doctor(ctx: &Ctx, fix: bool, json: bool) -> Result<()> {
         passed.push(format!("installed: {} skill(s) match skills.lock", locked.len()));
     }
 
-    let warnings = shadows(s, &m, locked.keys().chain(&hand).chain(&locals));
+    let warnings = shadows(s, &m, with_hashes(&locked, &hand, &locals));
     if json {
         print_json(&json!({ "ok": open.is_empty(), "passed": passed, "problems": open, "fixed": fixed, "warnings": warnings }));
         if !open.is_empty() {
