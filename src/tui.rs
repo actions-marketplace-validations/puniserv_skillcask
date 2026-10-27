@@ -601,10 +601,8 @@ fn rows(status: &Value, outdated: &Value) -> Vec<Row> {
         .into_iter()
         .flatten()
         .map(|e| {
-            // A dependency's label is `name (via requirer, …)`.
-            let label = e["package"].as_str();
-            let package = label.and_then(|p| p.split(' ').next()).map(String::from);
-            let via = label.and_then(|p| p.split_once(" (via ")).map(|(_, v)| v.trim_end_matches(')').to_string());
+            let package = s(&e["package"]);
+            let via = e["via"].as_array().map(|v| v.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", "));
             Row {
                 via,
                 update: package.as_deref().and_then(|p| updates.get(p)).map(|u| u.to_string()),
@@ -830,7 +828,7 @@ mod tests {
     fn sample() -> Vec<Row> {
         let st = json!({ "ok": false, "entries": [
             { "package": "acme/one", "version": "1.0.0", "skill": "one", "state": "ok", "ok": true, "adopt": null },
-            { "package": "acme/dep (via acme/one)", "version": "2.0.0", "skill": "dep", "state": "modified", "ok": false, "adopt": null },
+            { "package": "acme/dep", "version": "2.0.0", "skill": "dep", "state": "modified", "ok": false, "adopt": null, "via": ["acme/one"] },
             { "package": null, "version": null, "skill": "mine", "state": "not managed", "ok": true, "adopt": "github:o/r/mine" },
         ]});
         let od = json!({ "packages": [

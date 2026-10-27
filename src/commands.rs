@@ -1840,11 +1840,15 @@ pub fn status(ctx: &Ctx, json: bool) -> Result<()> {
         }
     };
     let w = deps::wanted(&m, &lock)?;
+    let mut via: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for req in &w.reqs {
-        let label = match w.by.get(&req.name).filter(|_| m.skill(&req.name).is_none()) {
-            Some(by) => format!("{} (via {})", req.name, by.iter().map(|(r, _)| r.as_str()).collect::<Vec<_>>().join(", ")),
-            None => req.name.clone(),
-        };
+        let by: Vec<&str> =
+            w.by.get(&req.name).filter(|_| m.skill(&req.name).is_none()).into_iter().flatten().map(|(r, _)| r.as_str()).collect();
+        // JSON keeps `package` a valid name for callers to pass on; the requirers go in `via`.
+        let label = if by.is_empty() || json { req.name.clone() } else { format!("{} (via {})", req.name, by.join(", ")) };
+        if !by.is_empty() {
+            via.insert(&req.name, by);
+        }
         let p = lock.get(&req.name);
         if let Some(why) = drift(&m, req, p) {
             row(&mut rows, &label, p.map_or("-", |p| &p.version), "-", &why);
@@ -1889,7 +1893,7 @@ pub fn status(ctx: &Ctx, json: bool) -> Result<()> {
             .iter()
             .map(|r| {
                 let adopt = if r[3] == "not managed" { unmanaged.get(&r[2]).cloned().flatten() } else { None };
-                json!({ "package": opt(&r[0]), "version": opt(&r[1]), "skill": opt(&r[2]), "state": r[3], "ok": healthy(&r[3]), "adopt": adopt })
+                json!({ "package": opt(&r[0]), "version": opt(&r[1]), "skill": opt(&r[2]), "state": r[3], "ok": healthy(&r[3]), "adopt": adopt, "via": via.get(r[0].as_str()) })
             })
             .collect();
         let policy: serde_json::Map<String, Value> =

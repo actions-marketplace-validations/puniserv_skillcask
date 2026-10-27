@@ -24,7 +24,7 @@ fn status_outdated_info_and_doctor() {
     assert_eq!(st["ok"], true);
     assert_eq!(
         st["entries"][0],
-        json!({ "package": "acme/one", "version": "1.0.0", "skill": "one", "state": "ok", "ok": true, "adopt": null })
+        json!({ "package": "acme/one", "version": "1.0.0", "skill": "one", "state": "ok", "ok": true, "adopt": null, "via": null })
     );
     assert_eq!(st["policy"]["packagist"], json!({ "value": false, "from": "skills.toml" }));
     assert_eq!(
