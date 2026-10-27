@@ -16,7 +16,7 @@ use serde_json::Value;
 use crate::error::{Error, IO, MANIFEST, Result};
 
 /// Keys that do not depend on the selected row; those that do are listed in the actions box.
-const HELP: [&str; 12] = [
+const HELP: [&str; 13] = [
     "↑↓/jk move",
     "pgup/pgdn scroll",
     "tab info/audit/output",
@@ -25,7 +25,8 @@ const HELP: [&str; 12] = [
     "a add",
     "o doctor",
     "f doctor --fix",
-    "/ search",
+    "/ filter list",
+    "s search registries",
     "p find projects",
     "r refresh",
     "q quit",
@@ -119,6 +120,8 @@ enum Then {
     Adopt,
     Projects,
     Search,
+    /// Narrows the list while typing; Enter keeps the filter, Esc clears it.
+    Filter,
     Switch,
     /// A picked search result, to edit before `add`.
     Prefill,
@@ -165,6 +168,9 @@ struct App {
     global: bool,
     home: Option<PathBuf>,
     rows: Vec<Row>,
+    /// Shows only rows whose skill or package contains it, ignoring case.
+    filter: String,
+    /// Index into `visible()`.
     sel: usize,
     audit: Vec<Value>,
     details: HashMap<String, Vec<String>>,
@@ -185,6 +191,7 @@ impl App {
             global,
             home,
             rows: Vec::new(),
+            filter: String::new(),
             sel: 0,
             audit: Vec::new(),
             details: HashMap::new(),
@@ -206,8 +213,16 @@ impl App {
         !self.global && self.project.as_ref().is_none_or(|p| !p.join(crate::manifest::FILE).is_file())
     }
 
+    fn visible(&self) -> Vec<&Row> {
+        let f = self.filter.to_lowercase();
+        self.rows
+            .iter()
+            .filter(|r| [&r.skill, &r.package].iter().any(|v| v.as_ref().is_some_and(|v| v.to_lowercase().contains(&f))))
+            .collect()
+    }
+
     fn selected(&self) -> Option<&Row> {
-        self.rows.get(self.sel)
+        self.visible().get(self.sel).copied()
     }
 
     fn missing_detail(&self) -> Option<Job> {
@@ -228,6 +243,24 @@ impl App {
         }
         match std::mem::replace(&mut self.mode, Mode::List) {
             Mode::List => self.list_key(k.code),
+            Mode::Input { then: Then::Filter, mut text, prompt } => {
+                match k.code {
+                    KeyCode::Esc => text.clear(),
+                    KeyCode::Enter => return None,
+                    KeyCode::Backspace => {
+                        text.pop();
+                    }
+                    KeyCode::Char(c) => text.push(c),
+                    _ => {}
+                }
+                self.filter = text.clone();
+                self.sel = 0;
+                self.scroll = 0;
+                if k.code != KeyCode::Esc {
+                    self.mode = Mode::Input { prompt, text, then: Then::Filter };
+                }
+                None
+            }
             Mode::Input { prompt, mut text, then } => match k.code {
                 KeyCode::Esc => None,
                 KeyCode::Enter if !text.trim().is_empty() => self.submit(then, text.trim().to_string()),
@@ -272,7 +305,7 @@ impl App {
         match code {
             KeyCode::Char('q') => self.quit = true,
             KeyCode::Down | KeyCode::Char('j') => {
-                self.sel = (self.sel + 1).min(self.rows.len().saturating_sub(1));
+                self.sel = (self.sel + 1).min(self.visible().len().saturating_sub(1));
                 self.scroll = 0;
             }
             KeyCode::Up | KeyCode::Char('k') => {
@@ -319,7 +352,10 @@ impl App {
             }
             KeyCode::Char('o') => return Some(Job::Doctor),
             KeyCode::Char('f') => return Some(Job::Run(args(&["doctor", "--fix"]))),
-            KeyCode::Char('/') => self.mode = Mode::Input { prompt: "search", text: String::new(), then: Then::Search },
+            KeyCode::Char('/') => self.mode = Mode::Input { prompt: "filter", text: self.filter.clone(), then: Then::Filter },
+            KeyCode::Char('s') => {
+                self.mode = Mode::Input { prompt: "search Packagist and [repositories]", text: String::new(), then: Then::Search }
+            }
             KeyCode::Char('p') => {
                 let home = self.home.as_ref().map_or(".".into(), |h| h.display().to_string());
                 self.mode = Mode::Input { prompt: "find projects under", text: home, then: Then::Projects };
@@ -335,6 +371,7 @@ impl App {
             Then::Adopt => Some(Job::Run(args(&["add", "--adopt", "--", &v]))),
             Then::Projects => Some(Job::Projects(v)),
             Then::Search => Some(Job::Search(v)),
+            Then::Filter => None,
             Then::Prefill => {
                 self.mode = Mode::Input { prompt: "add source", text: v, then: Then::Add };
                 None
@@ -373,7 +410,7 @@ impl App {
                 self.message = e;
             }
         }
-        self.sel = self.sel.min(self.rows.len().saturating_sub(1));
+        self.sel = self.sel.min(self.visible().len().saturating_sub(1));
     }
 
     fn detail_lines(&self) -> Vec<String> {
@@ -606,6 +643,7 @@ fn audit_lines(audit: &[Value], skill: &str) -> Vec<String> {
 /// The keys of the current mode.
 fn keys(app: &App) -> Vec<&'static str> {
     match &app.mode {
+        Mode::Input { then: Then::Filter, .. } => vec!["type to filter", "enter keep", "esc clear"],
         Mode::Input { .. } => vec!["enter submit", "esc cancel", "backspace delete"],
         Mode::Confirm { .. } => vec!["y yes", "any other key no"],
         Mode::Pick { .. } => vec!["↑↓/jk move", "enter choose", "esc cancel"],
@@ -663,8 +701,8 @@ fn draw(f: &mut Frame, app: &App) {
         f.render_stateful_widget(list, left, &mut ListState::default().with_selected(Some(*sel)));
     } else {
         let items: Vec<ListItem> = app
-            .rows
-            .iter()
+            .visible()
+            .into_iter()
             .map(|r| {
                 let name = r.skill.as_ref().or(r.package.as_ref()).map_or("-", |s| s.as_str());
                 let up = r.update.as_ref().map_or(String::new(), |u| format!("  ↑ {u}"));
@@ -679,7 +717,13 @@ fn draw(f: &mut Frame, app: &App) {
                 ListItem::new(clean(&line).join(" ")).style(Style::new().fg(color))
             })
             .collect();
-        let list = List::new(items).block(Block::bordered().title("skills")).highlight_style(highlight);
+        let list = List::new(items)
+            .block(Block::bordered().title(if app.filter.is_empty() {
+                "skills".to_string()
+            } else {
+                clean(&format!("skills matching {:?}  (/ to change, esc in it to clear)", app.filter)).join(" ")
+            }))
+            .highlight_style(highlight);
         f.render_stateful_widget(list, left, &mut ListState::default().with_selected(Some(app.sel)));
     }
 
@@ -822,6 +866,25 @@ mod tests {
         a.sel = 0;
         press(&mut a, KeyCode::Char('m'));
         assert_eq!((&a.mode, a.message.as_str()), (&Mode::List, "only a not managed skill can be adopted"));
+    }
+
+    #[test]
+    fn slash_filters_the_list_and_s_searches_the_registries() {
+        // Regression: `/` searched Packagist, which looked like a filter of the list that found nothing.
+        let mut a = app(sample(), true);
+        press(&mut a, KeyCode::Char('/'));
+        typed(&mut a, "MI");
+        assert_eq!(a.visible().iter().map(|r| r.skill.as_deref()).collect::<Vec<_>>(), [Some("mine")]);
+        assert_eq!(a.selected().and_then(|r| r.skill.as_deref()), Some("mine"));
+        assert_eq!(press(&mut a, KeyCode::Enter), None);
+        assert_eq!((&a.mode, a.filter.as_str()), (&Mode::List, "MI"));
+        press(&mut a, KeyCode::Char('/'));
+        press(&mut a, KeyCode::Esc);
+        assert_eq!((&a.mode, a.visible().len()), (&Mode::List, 3));
+
+        press(&mut a, KeyCode::Char('s'));
+        typed(&mut a, "jira");
+        assert_eq!(press(&mut a, KeyCode::Enter), Some(Job::Search("jira".into())));
     }
 
     #[test]
