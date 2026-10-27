@@ -482,7 +482,13 @@ fn perform(app: &mut App, job: Job) {
                         let name = r["name"].as_str()?;
                         Some((name.to_string(), format!("{name}  {}", r["description"].as_str().unwrap_or(""))))
                     });
-                    app.mode = Mode::Pick { title: format!("search {q}"), items, sel: 0, then: Then::Prefill };
+                    if items.is_empty() {
+                        app.message = format!(
+                            "no skill packages match {q:?} on Packagist or [repositories]; GitHub skills: a github:owner/repo/skill"
+                        );
+                    } else {
+                        app.mode = Mode::Pick { title: format!("search {q}"), items, sel: 0, then: Then::Prefill };
+                    }
                 }
                 Err(e) => app.message = e,
             }
