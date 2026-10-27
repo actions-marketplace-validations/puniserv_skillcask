@@ -900,11 +900,19 @@ fn ask(question: &str, suggestion: Option<&str>, taken: &BTreeSet<String>) -> Re
 /// personal copy with the same content is not reported (D45). Empty for the global scope.
 fn shadows<'a>(s: &Scope, m: &Manifest, names: impl IntoIterator<Item = (&'a String, Option<&'a str>)>) -> Vec<String> {
     let Some(home) = crate::scope::home().filter(|_| !s.global) else { return Vec::new() };
+    // Without exec bits on disk, the global store records them; the lock's hash includes them.
+    let modes = if cfg!(unix) { BTreeSet::new() } else { project::read_modes(&Scope::project(home.clone())) };
     let mut out = Vec::new();
     for (n, want) in names {
         for d in std::iter::once(STORE).chain(m.targets.iter().map(String::as_str)) {
             let dir = home.join(d).join(n);
-            let same = || skill::scan_dir(&dir).ok().filter(|_| dir.is_dir()).is_some_and(|e| Some(skill::tree_hash(&e).as_str()) == want);
+            let same = || {
+                let Some(mut e) = skill::scan_dir(&dir).ok().filter(|_| dir.is_dir()) else { return false };
+                if !cfg!(unix) {
+                    e.iter_mut().for_each(|f| f.exec = modes.contains(&format!("{n}/{}", f.path)));
+                }
+                Some(skill::tree_hash(&e).as_str()) == want
+            };
             if dir.symlink_metadata().is_ok() && !same() {
                 out.push(if d == ".claude/skills" {
                     format!("{n}: ~/{d}/{n} shadows the project skill in Claude Code")
