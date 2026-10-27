@@ -1,6 +1,6 @@
 use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 use jiff::{SignedDuration, Timestamp};
 use serde_json::{Value, json};
@@ -997,13 +997,15 @@ fn npx_sources(s: &Scope) -> BTreeMap<String, String> {
 
 /// D38: moves what stands where `pkg`'s skills go and skillcask does not manage (a target entry
 /// that is not a link into the store, then the store dir) to `<config>/adopted/<unix time>/`.
-fn adopt(s: &Scope, m: &Manifest, lock: &Lock, pkg: &str) -> Result<()> {
+/// Returns the moves, for [`unadopt`].
+fn adopt(s: &Scope, m: &Manifest, lock: &Lock, pkg: &str) -> Result<Vec<(PathBuf, PathBuf)>> {
     if !s.global {
         bail!(MANIFEST, "--adopt applies only with --global");
     }
     let managed = project::block_managed(s)?;
     let to = s.config.join("adopted").join(Timestamp::now().as_second().to_string());
     let p = lock.get(pkg).expect("the package was just locked");
+    let mut moved = Vec::new();
     for sk in p.skills.iter().filter(|sk| !managed.contains(&sk.name)) {
         // A clash with another package is a conflict, not something to adopt.
         if lock.skills().any(|(o, k)| o.name != pkg && k.name == sk.name) {
@@ -1021,9 +1023,19 @@ fn adopt(s: &Scope, m: &Manifest, lock: &Lock, pkg: &str) -> Result<()> {
             std::fs::create_dir_all(dest.parent().expect("rel has a parent")).ctx(dest.display())?;
             std::fs::rename(&from, &dest).ctx(format!("moving {} to {}", s.show(&rel), dest.display()))?;
             crate::ui::done("adopted", format!("{} (moved to {})", s.show(&rel), dest.display()));
+            moved.push((from, dest));
         }
     }
-    Ok(())
+    Ok(moved)
+}
+
+/// Puts back what `adopt` moved when `add` fails before installing, so a failed add loses nothing.
+fn unadopt(moved: &[(PathBuf, PathBuf)]) {
+    for (from, dest) in moved.iter().rev() {
+        if std::fs::rename(dest, from).is_ok() {
+            crate::ui::done("restored", from.display());
+        }
+    }
 }
 
 /// Every link as (directory, source directory, name): project skills into the store, then all
@@ -1522,16 +1534,19 @@ fn finish_add(ctx: &Ctx, m: &Manifest, req: &SkillReq, repo: &Repository, c: &Ca
     let mut view = m.clone();
     view.skills.retain(|r| r.name != req.name);
     view.skills.push(req.clone());
-    if ctx.adopt {
-        adopt(&ctx.s, &view, &lock, &req.name)?;
-    }
-    let mut skip = drifted(m, &old);
-    skip.remove(&req.name);
-    let mut newcomers = BTreeSet::from([req.name.clone()]);
-    let report = settle_deps(ctx, &view, &mut lock, &mut prepared, &mut newcomers, &skip)?;
-    let changed = ctx.settle_conflicts(&view, &mut lock, &old, &prepared, &newcomers, true)?;
-    let req = &changed.into_iter().find(|r| r.name == req.name).unwrap_or_else(|| req.clone());
-    ctx.preflight(&view, &lock, &old)?;
+    let moved = if ctx.adopt { adopt(&ctx.s, &view, &lock, &req.name)? } else { Vec::new() };
+    let checked = (|| -> Result<_> {
+        let mut skip = drifted(m, &old);
+        skip.remove(&req.name);
+        let mut newcomers = BTreeSet::from([req.name.clone()]);
+        let report = settle_deps(ctx, &view, &mut lock, &mut prepared, &mut newcomers, &skip)?;
+        let changed = ctx.settle_conflicts(&view, &mut lock, &old, &prepared, &newcomers, true)?;
+        let req = changed.into_iter().find(|r| r.name == req.name).unwrap_or_else(|| req.clone());
+        ctx.preflight(&view, &lock, &old)?;
+        Ok((report, req))
+    })();
+    let (report, req) = checked.inspect_err(|_| unadopt(&moved))?;
+    let req = &req;
 
     manifest::write_skill(&ctx.s.config, ctx.s.global, req)?;
     lock.save(&ctx.s.config)?;

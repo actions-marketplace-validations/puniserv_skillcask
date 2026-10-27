@@ -1184,3 +1184,24 @@ fn global_adopt_moves_target_links_that_share_the_store_entrys_foreign_source() 
     assert_eq!(std::fs::read_to_string(h.join(".agents/skills/two/SKILL.md")).unwrap(), skill_md("two"));
     assert_eq!(std::fs::read_to_string(h.join(".aiassistant/skills/two/SKILL.md")).unwrap(), "old");
 }
+
+#[cfg(unix)]
+#[test]
+fn global_adopt_puts_the_copy_back_when_add_fails() {
+    let s = Server::start();
+    let sha = "a".repeat(40);
+    s.put("/repos/acme/tools/tags", "[]");
+    s.put("/repos/acme/tools/commits/HEAD", gh_commit(&sha, 240).to_string());
+    let md = "---\nname: two\ndescription: d\nrequires:\n  \"github:acme/other\": \"^1\"\n---\n# two\n";
+    s.put(&format!("/repos/acme/tools/zipball/{sha}"), zipball(&[("skills/two/SKILL.md", md)]));
+    let p = with_github(Project::new(&s), &s);
+    p.global_manifest(&s, "");
+    let h = p.home().to_path_buf();
+    std::fs::create_dir_all(h.join(".agents/skills/two")).unwrap();
+    std::fs::write(h.join(".agents/skills/two/SKILL.md"), "old").unwrap();
+
+    // Regression guard: adopt moved the copy aside, then add failed and left no skill at all.
+    let out = p.global(&["add", "--adopt", "github:acme/tools/two"], 1);
+    assert!(out.contains("github-requires = true"), "{out}");
+    assert_eq!(std::fs::read_to_string(h.join(".agents/skills/two/SKILL.md")).unwrap(), "old");
+}
