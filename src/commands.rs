@@ -1630,6 +1630,10 @@ pub fn install(ctx: &Ctx, frozen: bool) -> Result<()> {
     if filled && why.is_empty() {
         lock.save(&ctx.s.config)?;
     }
+    // D46: with nothing to install a person saw no output at all and took it for a hang or a bug.
+    if !crate::ui::agent() {
+        println!("{} {} skill(s) match skills.lock", ui::out(ui::Color::Green, "✓"), lock.skills().count());
+    }
     Ok(())
 }
 

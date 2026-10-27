@@ -115,3 +115,13 @@ fn ui_refuses_to_start_without_a_terminal() {
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("skillcask ui needs a terminal"), "{out:?}");
 }
+
+#[test]
+fn install_confirms_what_is_installed_to_a_person_only() {
+    let s = Server::start();
+    let mut p = installed(&s);
+    // Regression: with nothing to do, install printed nothing and looked hung or broken.
+    assert_eq!(p.ok(&["install"]).trim(), "✓ 1 skill(s) match skills.lock");
+    p.env.push(("SKILLCASK_AGENT".into(), "1".into()));
+    assert_eq!(p.ok(&["install"]).trim(), "");
+}
