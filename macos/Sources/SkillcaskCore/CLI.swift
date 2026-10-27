@@ -37,6 +37,14 @@ public enum CLI {
         return parts.count == 3 ? parts : nil
     }
 
+    /// `config` (D48) came in 0.9.4; only the Settings window needs it.
+    public static let configMinimum = [0, 9, 4]
+
+    /// Whether `output` of `skillcask --version` names a version at least `minimum`.
+    public static func atLeast(_ minimum: [Int], _ output: String) -> Bool {
+        version(output).map { !$0.lexicographicallyPrecedes(minimum) } ?? false
+    }
+
     /// Why `output` of `skillcask --version` is not usable, or nil when it is.
     public static func tooOld(_ output: String) -> String? {
         let want = minimum.map(String.init).joined(separator: ".")

@@ -551,8 +551,9 @@ file through the GitLab raw files API
 
 `macos/` holds a small SwiftUI app (macOS 14+) over the CLI: open a project folder (or Global for
 `-g`), see its skills with their state and available updates, read `info`, and run `install`,
-`add` (with `search`), `update`, `remove` and `doctor`. It runs the `skillcask` binary and reads
-its `--json` output (D35), so install skillcask first; the app finds it on `PATH`, in
+`add` (with `search`), `update`, `remove` and `doctor`, and change the settings of `config.toml`
+(`skillcask -g config`, 0.9.4 or newer) in its Settings window. It runs the `skillcask` binary and
+reads its `--json` output (D35), so install skillcask first; the app finds it on `PATH`, in
 `/opt/homebrew/bin`, `/usr/local/bin` or `~/.cargo/bin`, or at the path set in its Settings.
 
 ```sh

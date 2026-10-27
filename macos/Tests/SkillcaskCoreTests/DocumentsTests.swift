@@ -133,3 +133,28 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String, status: Int32 
     #expect(notes.findings.map(\.line) == [5, nil])
     #expect(notes.findings[0].rule == "risky-pattern")
 }
+
+@Test func config() throws {
+    // `-g config --json` of a master build with SKILLCASK_ALLOW_SOURCES set; `later` is a key no version prints yet.
+    let json = #"""
+        {"file":"/Users/me/.config/skillcask/config.toml","settings":{"agents.targets":{"from":"config.toml","value":["claude","codex"]},"policy.allow-ranges":{"from":"config.toml, enforced","value":false},"policy.allow-sources":{"from":"environment","value":["github","packagist"]},"policy.enforce":{"from":null,"value":null},"policy.min-release-age":{"from":"default","value":"72h"},"search.skills-sh":{"from":"config.toml","value":true},"later":{"from":"default","value":3}}}
+        """#
+    let doc = try #require(decode(ConfigDoc.self, json))
+    #expect(doc.file == "/Users/me/.config/skillcask/config.toml")
+    #expect(doc.settings["agents.targets"]?.value == .list(["claude", "codex"]))
+    #expect(doc.settings["policy.allow-ranges"]?.value == .bool(false))
+    #expect(doc.settings["policy.allow-ranges"]?.from == "config.toml, enforced")
+    #expect(doc.settings["policy.allow-sources"]?.from == "environment")
+    #expect(doc.settings["policy.enforce"]?.value == ConfigDoc.Value.none)
+    #expect(doc.settings["policy.enforce"]?.from == nil)
+    #expect(doc.settings["policy.min-release-age"]?.value == .string("72h"))
+    #expect(doc.settings["search.skills-sh"]?.value == .bool(true))
+    #expect(doc.settings["later"]?.value == .string("3.0"))
+}
+
+@Test func configVersionGate() {
+    #expect(CLI.atLeast(CLI.configMinimum, "skillcask 0.9.4 (abc)"))
+    #expect(CLI.atLeast(CLI.configMinimum, "skillcask 0.10.0"))
+    #expect(!CLI.atLeast(CLI.configMinimum, "skillcask 0.9.3 (abc)"))
+    #expect(!CLI.atLeast(CLI.configMinimum, "error"))
+}

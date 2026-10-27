@@ -26,6 +26,9 @@ final class AppModel {
     var last: RunResult?
     var busy = 0
     var scanning = false
+    var config: ConfigDoc?
+    /// Why the settings cannot be read, or the CLI's refusal of the last change.
+    var configMessage: String?
 
     func open(_ url: URL) {
         let path = url.standardizedFileURL.path
@@ -145,6 +148,39 @@ final class AppModel {
         let doc = await run(["search", "--json"] + answer + [query], show: false)?.decode(SearchDoc.self)
         searchResults = doc?.results ?? []
         asksSkillsSh = doc?.asksSkillsSh ?? false
+        if skillsSh != nil, config != nil { await loadConfig() }
+    }
+
+    private var home: URL { FileManager.default.homeDirectoryForCurrentUser }
+
+    /// `-g config --json` (D48), whatever the sidebar shows: the Settings window edits config.toml only.
+    func loadConfig() async {
+        guard let exe = locate() else {
+            config = nil
+            configMessage = last?.stderr
+            return
+        }
+        let r = await CLI.run(exe, ["-g", "config", "--json"], in: home)
+        if let doc = r.decode(ConfigDoc.self) {
+            config = doc
+            return
+        }
+        config = nil
+        // An older CLI rejects `config` with a usage error that explains nothing.
+        let v = await CLI.run(exe, ["--version"], in: home)
+        configMessage = CLI.atLeast(CLI.configMinimum, String(decoding: v.stdout, as: UTF8.self))
+            ? r.output
+            : "Settings need skillcask 0.9.4 or newer. Update skillcask (brew upgrade skillcask, npm install -g skillcask or cargo install skillcask)."
+    }
+
+    /// `skillcask -g config <args>`; the CLI validates, and its error and hint are shown as printed.
+    func setConfig(_ args: [String]) async {
+        guard let exe = locate() else { return }
+        busy += 1
+        defer { busy -= 1 }
+        let r = await CLI.run(exe, ["-g", "config"] + args, in: home)
+        configMessage = r.ok ? nil : r.output
+        await loadConfig()
     }
 
     func runDoctor(fix: Bool = false) async {

@@ -15,7 +15,7 @@ struct SkillcaskApp: App {
         WindowGroup("skillcask") {
             ContentView().environment(model)
         }
-        Settings { SettingsView() }
+        Settings { SettingsView().environment(model) }
     }
 }
 
@@ -444,14 +444,132 @@ struct OutputView: View {
 }
 
 struct SettingsView: View {
+    @Environment(AppModel.self) private var model
     @AppStorage("skillcaskPath") private var path = ""
 
     var body: some View {
         Form {
-            TextField("skillcask binary", text: $path, prompt: Text("found on PATH"))
-            LabeledContent("Using", value: CLI.locate(configured: path)?.path ?? "not found")
+            Section("App") {
+                TextField("skillcask binary", text: $path, prompt: Text("found on PATH"))
+                LabeledContent("Using", value: CLI.locate(configured: path)?.path ?? "not found")
+            }
+            if let message = model.configMessage {
+                Text(message).monospaced().font(.caption).foregroundStyle(.red).textSelection(.enabled)
+            }
+            if let doc = model.config {
+                Section {
+                    ForEach(doc.settings.keys.sorted(), id: \.self) { key in
+                        if let setting = doc.settings[key] { SettingRow(key: key, setting: setting) }
+                    }
+                } header: {
+                    HStack {
+                        Text(doc.file).textSelection(.enabled)
+                        Spacer()
+                        Button("Show in Finder") { reveal(doc.file) }
+                            .disabled(!FileManager.default.fileExists(atPath: (doc.file as NSString).deletingLastPathComponent))
+                    }
+                }
+            }
         }
-        .padding()
-        .frame(width: 480)
+        .formStyle(.grouped)
+        .disabled(model.busy > 0)
+        .frame(width: 600, height: 640)
+        .task(id: path) {
+            model.configMessage = nil
+            await model.loadConfig()
+        }
+    }
+
+    /// Selects config.toml, or opens its folder when the file is not written yet.
+    private func reveal(_ file: String) {
+        let url = URL(fileURLWithPath: file)
+        if FileManager.default.fileExists(atPath: file) {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        } else {
+            NSWorkspace.shared.open(url.deletingLastPathComponent())
+        }
+    }
+}
+
+/// One key of `-g config --json`, with a control for the type of its value.
+struct SettingRow: View {
+    @Environment(AppModel.self) private var model
+    let key: String
+    let setting: ConfigDoc.Setting
+    @State private var text = ""
+    @State private var items: [String] = []
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            control
+            HStack {
+                Text(setting.from ?? "not set").font(.caption).foregroundStyle(.secondary)
+                if setting.from == "environment" {
+                    Text("Set by an environment variable: a change to config.toml has no effect while it is set.")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+                Spacer()
+                if setting.from?.hasPrefix("config.toml") == true {
+                    Button("Reset") { Task { await model.setConfig(["--unset", key]) } }
+                        .help("skillcask -g config --unset \(key)")
+                }
+            }
+        }
+        .onAppear(perform: load)
+        .onChange(of: setting.value, load)
+    }
+
+    @ViewBuilder private var control: some View {
+        switch setting.value {
+        case .bool(let on):
+            Toggle(key, isOn: Binding(get: { on }, set: { v in set([String(v)]) }))
+        case .string(let current):
+            LabeledContent(key) {
+                TextField(key, text: $text).labelsHidden().onSubmit { set([text]) }
+                Button("Set") { set([text]) }.disabled(text == current)
+            }
+        case .none:
+            // The document gives no type for an unset key: entries go as separate arguments, as a list needs.
+            LabeledContent(key) {
+                TextField(key, text: $text, prompt: Text("values separated by spaces")).labelsHidden()
+                    .onSubmit { set(words) }
+                Button("Set") { set(words) }.disabled(words.isEmpty)
+            }
+        case .list(let current):
+            LabeledContent(key) {
+                VStack(alignment: .trailing) {
+                    ForEach(items.indices, id: \.self) { i in
+                        HStack {
+                            TextField("entry", text: Binding(
+                                get: { i < items.count ? items[i] : "" },
+                                set: { if i < items.count { items[i] = $0 } })
+                            ).labelsHidden()
+                            Button("Remove", systemImage: "minus.circle") { items.remove(at: i) }
+                                .labelStyle(.iconOnly).buttonStyle(.borderless)
+                        }
+                    }
+                    HStack {
+                        Button("Add Entry", systemImage: "plus.circle") { items.append("") }
+                            .labelStyle(.iconOnly).buttonStyle(.borderless)
+                        Button("Set") { set(entries) }.disabled(entries.isEmpty || entries == current)
+                    }
+                }
+            }
+        }
+    }
+
+    private var words: [String] { text.split(whereSeparator: \.isWhitespace).map(String.init) }
+    private var entries: [String] { items.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty } }
+
+    private func load() {
+        switch setting.value {
+        case .string(let s): text = s
+        case .list(let l): items = l
+        case .bool, .none: text = ""
+        }
+    }
+
+    private func set(_ values: [String]) {
+        Task { await model.setConfig([key] + values) }
     }
 }

@@ -136,3 +136,36 @@ public struct ProjectsDoc: Decodable, Sendable {
     }
     public let projects: [Project]
 }
+
+/// `-g config --json` (D48), CLI 0.9.4 and newer: every setting with its value and the layer it comes from.
+public struct ConfigDoc: Decodable, Sendable {
+    public enum Value: Decodable, Sendable, Equatable {
+        case bool(Bool)
+        case string(String)
+        case list([String])
+        /// Nothing sets the key, so the document gives no type for it.
+        case none
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.singleValueContainer()
+            if c.decodeNil() {
+                self = .none
+            } else if let b = try? c.decode(Bool.self) {
+                self = .bool(b)
+            } else if let l = try? c.decode([String].self) {
+                self = .list(l)
+            } else if let s = try? c.decode(String.self) {
+                self = .string(s)
+            } else {
+                self = .string(String(describing: try c.decode(Double.self)))
+            }
+        }
+    }
+    public struct Setting: Decodable, Sendable {
+        public let value: Value
+        /// `config.toml`, `config.toml, enforced`, `environment`, `default`, or nil when not set.
+        public let from: String?
+    }
+    public let file: String
+    public let settings: [String: Setting]
+}
