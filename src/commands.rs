@@ -312,7 +312,9 @@ impl Ctx {
                 match kept.iter().find(|(n, ..)| *n == name) {
                     Some((_, first, _)) if depth(first) < depth(&dir) => {
                         if req.skills.as_ref().is_none_or(|sel| sel.contains(&name)) {
-                            crate::ui::warn(format!("{}: skill {name:?} is in {first} and {dir}; using {first}", c.name));
+                            let msg = format!("{}: skill {name:?} is in {first} and {dir}; using {first}", c.name);
+                            // A plugin bundle repeating the repository's skills is the expected layout.
+                            if dir.starts_with("plugins/") { crate::ui::note(msg) } else { crate::ui::warn(msg) }
                         }
                     }
                     _ => kept.push((name, dir, md)),
@@ -1024,6 +1026,7 @@ fn adopt(s: &Scope, m: &Manifest, lock: &Lock, pkg: &str) -> Result<Vec<(PathBuf
     let to = s.config.join("adopted").join(Timestamp::now().as_second().to_string());
     let p = lock.get(pkg).expect("the package was just locked");
     let mut moved = Vec::new();
+    let mut names = BTreeSet::new();
     for sk in p.skills.iter().filter(|sk| !managed.contains(&sk.name)) {
         // A clash with another package is a conflict, not something to adopt.
         if lock.skills().any(|(o, k)| o.name != pkg && k.name == sk.name) {
@@ -1040,9 +1043,13 @@ fn adopt(s: &Scope, m: &Manifest, lock: &Lock, pkg: &str) -> Result<Vec<(PathBuf
             let dest = to.join(&rel);
             std::fs::create_dir_all(dest.parent().expect("rel has a parent")).ctx(dest.display())?;
             std::fs::rename(&from, &dest).ctx(format!("moving {} to {}", s.show(&rel), dest.display()))?;
-            crate::ui::done("adopted", format!("{} (moved to {})", s.show(&rel), dest.display()));
             moved.push((from, dest));
+            names.insert(&sk.name);
         }
+    }
+    if !names.is_empty() {
+        let shown = to.strip_prefix(&s.root).map_or_else(|_| to.display().to_string(), |r| s.show(&r.to_string_lossy()));
+        crate::ui::done("adopted", format!("{} skill(s): copies moved to {shown}/", names.len()));
     }
     Ok(moved)
 }
@@ -1412,7 +1419,7 @@ pub fn add(ctx: &Ctx, spec: &str, repository: Option<String>) -> Result<()> {
     // Before the constraint check: `@main` is a valid ref for a GitHub entry.
     if let Some(e) = existing.as_ref().filter(|e| e.github.is_some() && repository.is_none()) {
         return match &e.git {
-            Some(url) => add_vcs(ctx, name.clone(), Some(url.clone()), None, constraint),
+            Some(url) => add_vcs(ctx, name.clone(), Some(url.clone()), Vec::new(), constraint),
             None => add_github(ctx, spec),
         };
     }
@@ -1432,7 +1439,7 @@ pub fn add(ctx: &Ctx, spec: &str, repository: Option<String>) -> Result<()> {
     let constraint = constraint.unwrap_or_else(|| default_constraint(&c, m.policy.allow_ranges));
     let (skills, rename) = existing.map(|e| (e.skills, e.rename)).unwrap_or_default();
     let req = SkillReq { name, constraint, repository, skills, rename, ..Default::default() };
-    finish_add(ctx, &m, &req, &repo, &c, None)
+    finish_add(ctx, &m, &req, &repo, &c, &[])
 }
 
 /// `owner/repo[/skill][@constraint-or-ref]`, the form skills.sh shows as `owner/repo/skill`.
@@ -1446,10 +1453,8 @@ fn add_github(ctx: &Ctx, spec: &str) -> Result<()> {
     if !manifest::valid_package_name(&name) {
         bail!(MANIFEST, "{spec:?}: expected github:owner/repo[/skill][@version-or-ref]");
     }
-    let skill = parts.next().map(String::from);
-    if let Some(s) = &skill
-        && !skill::valid_name(s)
-    {
+    let skill: Vec<String> = parts.next().map(String::from).into_iter().collect();
+    if let Some(s) = skill.iter().find(|s| !skill::valid_name(s)) {
         bail!(MANIFEST, "{s:?} is not a valid skill name ([a-z0-9][a-z0-9-]*)");
     }
     add_vcs(ctx, name, None, skill, at)
@@ -1478,27 +1483,26 @@ fn add_git(ctx: &Ctx, spec: &str) -> Result<()> {
         let had = e.git.as_deref().map_or("another source", |_| "another git URL");
         bail!(MANIFEST, "{name} is already in {} from {had}; remove it first", manifest::FILE);
     }
-    add_vcs(ctx, name, Some(url.to_string()), None, at)
+    add_vcs(ctx, name, Some(url.to_string()), Vec::new(), at)
 }
 
-/// Adds a GitHub (`git` = `None`) or plain git entry. `skill`: one skill to select.
-fn add_vcs(ctx: &Ctx, name: String, git: Option<String>, skill: Option<String>, at: Option<String>) -> Result<()> {
-    let must_have = skill.clone();
+/// Adds a GitHub (`git` = `None`) or plain git entry. `skills`: the skills to select, none for
+/// the entry's current selection.
+fn add_vcs(ctx: &Ctx, name: String, git: Option<String>, skills: Vec<String>, at: Option<String>) -> Result<()> {
+    let must_have = skills.clone();
     let m = ctx.manifest_or_default()?;
     let probe = SkillReq { name: name.clone(), git: git.clone(), ..Default::default() };
     m.check_source(&probe)?;
     let existing = m.skill(&name).filter(|e| e.github.is_some()).cloned();
-    let skills = match (skill, existing.as_ref().map(|e| e.skills.clone())) {
-        (None, have) => have.flatten(),
+    let skills = match (skills.is_empty(), existing.as_ref().map(|e| e.skills.clone())) {
+        (true, have) => have.flatten(),
         // Already installs every skill of the repository.
-        (Some(_), Some(None)) => None,
-        (Some(s), Some(Some(mut have))) => {
-            if !have.contains(&s) {
-                have.push(s);
-            }
+        (false, Some(None)) => None,
+        (false, Some(Some(mut have))) => {
+            have.extend(skills.into_iter().filter(|s| !have.contains(s)).collect::<Vec<_>>());
             Some(have)
         }
-        (Some(s), None) => Some(vec![s]),
+        (false, None) => Some(skills),
     };
     let (given, mode) = match (at, &existing) {
         (Some(a), _) => {
@@ -1531,19 +1535,17 @@ fn add_vcs(ctx: &Ctx, name: String, git: Option<String>, skill: Option<String>, 
             (GitHub::Ref, false) => c.dist.reference.clone().expect("GitHub candidates carry their sha"),
         };
     }
-    finish_add(ctx, &m, &req, &github::repository_of(&req), &c, must_have.as_deref())
+    finish_add(ctx, &m, &req, &github::repository_of(&req), &c, &must_have)
 }
 
-/// `must_have`: a skill named on the command line, checked also when the entry selects all.
-fn finish_add(ctx: &Ctx, m: &Manifest, req: &SkillReq, repo: &Repository, c: &Candidate, must_have: Option<&str>) -> Result<()> {
+/// `must_have`: skills named on the command line, checked also when the entry selects all.
+fn finish_add(ctx: &Ctx, m: &Manifest, req: &SkillReq, repo: &Repository, c: &Candidate, must_have: &[String]) -> Result<()> {
     let mut prepared = HashMap::new();
     let pkg = ctx.lock_candidate(req, repo, c, None, &mut prepared)?;
     scan_new(&prepared[&pkg.name], &pkg, m.policy.deny_patterns)?;
-    if let Some(s) = must_have {
-        let have: Vec<&str> = pkg.skills.iter().map(|k| k.from.as_deref().unwrap_or(&k.name)).collect();
-        if !have.contains(&s) {
-            bail!(MANIFEST, "{}: no skill {s:?} in {} (it has: {})", req.name, c.version, have.join(", "));
-        }
+    let have: Vec<&str> = pkg.skills.iter().map(|k| k.from.as_deref().unwrap_or(&k.name)).collect();
+    if let Some(s) = must_have.iter().find(|s| !have.contains(&s.as_str())) {
+        bail!(MANIFEST, "{}: no skill {s:?} in {} (it has: {})", req.name, c.version, have.join(", "));
     }
     let mut lock = Lock::load(&ctx.s.config)?;
     let old = lock.clone();
@@ -1573,6 +1575,40 @@ fn finish_add(ctx: &Ctx, m: &Manifest, req: &SkillReq, repo: &Repository, c: &Ca
         say(&r);
     }
     ctx.materialize(&Manifest::load(&ctx.s.config, ctx.s.global)?, &lock, &old, prepared)
+}
+
+/// `add --adopt --all` (D47): adopts every `not managed` skill with a source recorded by
+/// `npx skills`, one `add` per repository; a failed repository does not stop the others.
+pub fn adopt_all(ctx: &Ctx) -> Result<()> {
+    if !ctx.s.global {
+        bail!(MANIFEST, "--adopt applies only with --global");
+    }
+    let m = ctx.manifest_or_default()?;
+    let lock = Lock::load(&ctx.s.config)?;
+    let mut repos: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut unknown = Vec::new();
+    for (n, src) in not_managed(&ctx.s, &m, &lock)? {
+        // npx_sources records `github:owner/repo/skill`, the skill named as it is installed.
+        match src.as_deref().and_then(|s| s.strip_prefix("github:")).and_then(|s| s.rsplit_once('/')) {
+            Some((repo, skill)) => repos.entry(repo.to_lowercase()).or_default().push(skill.to_string()),
+            None => unknown.push(ui::printable(&n)),
+        }
+    }
+    let mut failed = 0;
+    for (repo, skills) in repos {
+        if let Err(e) = add_vcs(ctx, repo, None, skills, None) {
+            ui::error(&e.msg, e.hint.as_deref());
+            failed += 1;
+        }
+    }
+    if !unknown.is_empty() {
+        ui::wrapped(&format!("{} skill(s) kept, no source recorded:", unknown.len()), &unknown);
+        ui::note("add one with skillcask -g add --adopt github:owner/repo/skill");
+    }
+    if failed > 0 {
+        bail!(MANIFEST, "{failed} repository(ies) could not be adopted");
+    }
+    Ok(())
 }
 
 pub fn remove(ctx: &Ctx, names: &[String]) -> Result<()> {
@@ -1844,8 +1880,8 @@ pub fn status(ctx: &Ctx, json: bool) -> Result<()> {
     for req in &w.reqs {
         let by: Vec<&str> =
             w.by.get(&req.name).filter(|_| m.skill(&req.name).is_none()).into_iter().flatten().map(|(r, _)| r.as_str()).collect();
-        // JSON keeps `package` a valid name for callers to pass on; the requirers go in `via`.
-        let label = if by.is_empty() || json { req.name.clone() } else { format!("{} (via {})", req.name, by.join(", ")) };
+        // `package` stays a valid name for callers to pass on; the requirers go in `via`.
+        let label = req.name.clone();
         if !by.is_empty() {
             via.insert(&req.name, by);
         }
@@ -1914,12 +1950,31 @@ pub fn status(ctx: &Ctx, json: bool) -> Result<()> {
         }
         return Ok(());
     }
-    if rows.len() > 1 {
-        ui::table(&rows, |i, c| match (i, healthy(c)) {
-            (3, true) => Some(ui::Color::Green),
-            (3, false) => Some(ui::Color::Red),
+    // A person gets the skills skillcask does not manage as one wrapped list after the table: as
+    // rows they outnumbered the managed ones.
+    let shown: Vec<[String; 5]> = rows
+        .iter()
+        .enumerate()
+        .filter(|(i, r)| *i == 0 || r[3] != "not managed")
+        .map(|(i, r)| {
+            let by = via.get(r[0].as_str()).filter(|_| i > 0).map_or(String::new(), |b| format!("via {}", b.join(", ")));
+            [r[0].clone(), r[1].clone(), r[2].clone(), r[3].clone(), by]
+        })
+        .collect();
+    if shown.len() > 1 {
+        // Only `ok` is green, so a column of other healthy states does not read as installed.
+        ui::table(&shown, |i, c| match (i, c, healthy(c)) {
+            (3, "ok", _) => Some(ui::Color::Green),
+            (3, _, false) => Some(ui::Color::Red),
             _ => None,
         });
+    }
+    if !unmanaged.is_empty() && !ui::agent() {
+        let names: Vec<String> = unmanaged.keys().map(|n| ui::printable(n)).collect();
+        ui::wrapped(&format!("{} skill(s) not managed:", names.len()), &names);
+        let dim = |s: &str| println!("{}", ui::out(ui::Color::Dim, s));
+        dim("not managed: skillcask -g add --adopt <source> installs a package's skill in its place");
+        dim("             skillcask -g add --adopt --all adopts every one with a recorded source");
     }
     // An agent learns the policy's origin from the error a blocked source raises, and the
     // sources from --json.
@@ -1937,9 +1992,6 @@ pub fn status(ctx: &Ctx, json: bool) -> Result<()> {
     }
     for (k, (v, from)) in m.policy.effective.iter().filter(|_| !ui::agent()) {
         println!("{}", ui::out(ui::Color::Dim, format!("policy.{k} = {v} ({from})")));
-    }
-    if !unmanaged.is_empty() && !ui::agent() {
-        println!("{}", ui::out(ui::Color::Dim, "not managed: skillcask -g add --adopt <source> installs a package's skill in its place"));
     }
     if !ui::agent() {
         let dirs = if m.targets.is_empty() { format!("{STORE} only") } else { m.targets.join(", ") };

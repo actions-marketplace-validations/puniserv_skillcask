@@ -9,6 +9,7 @@ use std::process::{Command, Stdio};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::{DefaultTerminal, Frame};
 use serde_json::Value;
@@ -94,7 +95,9 @@ impl Row {
     /// The keys that act on this row, for the actions box.
     fn actions(&self) -> Vec<String> {
         match (&self.package, &self.via) {
-            _ if self.state == "not managed" => vec!["m adopt: move this copy aside and install it from a package".into()],
+            _ if self.state == "not managed" => {
+                vec!["m adopt: move this copy aside and install it from a package".into(), "M adopt all with a recorded source".into()]
+            }
             (Some(p), Some(via)) => vec![format!("u diff, then update {p}"), format!("a dependency of {via}: remove that to drop it")],
             (Some(p), None) => vec![format!("u diff, then update {p}"), format!("x remove {p}")],
             (None, _) => vec!["none: a project skill, edit it in the repository".into()],
@@ -346,6 +349,17 @@ impl App {
             KeyCode::Char('i') if self.no_manifest() && self.project.is_some() => return Some(Job::Run(args(&["init"]))),
             KeyCode::Char('i') => return Some(Job::Run(args(&["install"]))),
             KeyCode::Char('a') => self.mode = Mode::Input { prompt: "add source", text: String::new(), then: Then::Add },
+            KeyCode::Char('M') => {
+                let n = self.rows.iter().filter(|r| r.state == "not managed" && r.adopt.is_some()).count();
+                if n == 0 {
+                    self.message = "no not managed skill has a recorded source".into();
+                } else {
+                    self.mode = Mode::Confirm {
+                        question: format!("adopt {n} skill(s): move the copies aside and install them from their packages? (y/n)"),
+                        args: args(&["add", "--adopt", "--all"]),
+                    };
+                }
+            }
             KeyCode::Char('m') => {
                 self.mode = match self.selected().filter(|r| r.state == "not managed").map(|r| r.adopt.clone()) {
                     Some(Some(src)) => Mode::Input { prompt: "adopt with add --adopt", text: src, then: Then::Adopt },
@@ -754,16 +768,21 @@ fn draw(f: &mut Frame, app: &App) {
             .into_iter()
             .map(|r| {
                 let name = r.skill.as_ref().or(r.package.as_ref()).map_or("-", |s| s.as_str());
-                let up = r.update.as_ref().map_or(String::new(), |u| format!("  ↑ {u}"));
-                let line = format!("{name:<24} {:<10} {}{up}", r.version.as_deref().unwrap_or("-"), r.state);
-                let color = if !r.ok {
-                    Color::Red
-                } else if r.update.is_some() {
-                    Color::Yellow
-                } else {
-                    Color::Reset
+                let span = |s: String, c: Color| Span::styled(clean(&s).join(" "), Style::new().fg(c));
+                let state = match (r.ok, r.state.as_str()) {
+                    (false, _) => Color::Red,
+                    (true, "ok") => Color::Green,
+                    _ => Color::Reset,
                 };
-                ListItem::new(clean(&line).join(" ")).style(Style::new().fg(color))
+                let mut line = vec![
+                    span(format!("{name:<24} "), if r.ok { Color::Reset } else { Color::Red }),
+                    span(format!("{:<10} ", r.version.as_deref().unwrap_or("-")), Color::Cyan),
+                    span(r.state.clone(), state),
+                ];
+                if let Some(u) = &r.update {
+                    line.push(span(format!("  ↑ {u}"), Color::Yellow));
+                }
+                ListItem::new(Line::from(line))
             })
             .collect();
         let list = List::new(items)
@@ -794,7 +813,7 @@ fn draw(f: &mut Frame, app: &App) {
         Mode::Pick { .. } | Mode::List => app.message.clone(),
     };
     f.render_widget(Paragraph::new(clean(&line).join(" ")), msg);
-    f.render_widget(Paragraph::new(legend.join("\n")), help);
+    f.render_widget(Paragraph::new(legend.join("\n")).style(Style::new().fg(Color::Cyan)), help);
 }
 
 #[cfg(test)]
@@ -917,6 +936,10 @@ mod tests {
 
         press(&mut a, KeyCode::Char('m'));
         assert_eq!(press(&mut a, KeyCode::Esc), None);
+
+        press(&mut a, KeyCode::Char('M'));
+        assert!(matches!(&a.mode, Mode::Confirm { question, .. } if question.starts_with("adopt 1 skill(s)")));
+        assert_eq!(press(&mut a, KeyCode::Char('y')), Some(Job::Run(args(&["add", "--adopt", "--all"]))));
 
         // Regression: an unmanaged skill without a recorded source got a plain add prompt.
         a.rows[2].adopt = None;

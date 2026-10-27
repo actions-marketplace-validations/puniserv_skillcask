@@ -1168,13 +1168,52 @@ fn global_lists_unmanaged_skills_and_adopts_one() {
     assert!(p.expect(&["add", "--adopt", "github:acme/tools/two"], 1).contains("--adopt applies only with --global"));
 
     let out = p.global(&["add", "--adopt", "github:acme/tools/two"], 0);
-    assert!(out.contains("is in skills/two and plugins/p/skills/two; using skills/two"), "{out}");
+    assert!(out.contains("note: acme/tools: skill \"two\" is in skills/two and plugins/p/skills/two; using skills/two"), "{out}");
+    assert!(out.contains("adopted 1 skill(s): copies moved to ~/.config/skillcask/adopted/"), "{out}");
     let moved: Vec<_> = std::fs::read_dir(h.join(".config/skillcask/adopted")).unwrap().flatten().collect();
     assert_eq!(std::fs::read_to_string(moved[0].path().join(".agents/skills/two/SKILL.md")).unwrap(), "old");
     assert_eq!(std::fs::read_to_string(h.join(".agents/skills/two/SKILL.md")).unwrap(), skill_md("two"));
     assert_eq!(std::fs::read_link(h.join(".claude/skills/two")).unwrap(), h.join(".agents/skills/two"));
     let doc: serde_json::Value = serde_json::from_str(&p.global(&["status", "--json"], 0)).unwrap();
     assert!(doc["entries"].as_array().unwrap().iter().any(|e| e["skill"] == "two" && e["state"] == "ok"), "{doc}");
+}
+
+#[cfg(unix)]
+#[test]
+fn global_adopt_all_adopts_each_recorded_repository_once_and_keeps_the_rest() {
+    let s = Server::start();
+    let sha = "a".repeat(40);
+    s.put("/repos/acme/tools/tags", "[]");
+    s.put("/repos/acme/tools/commits/HEAD", gh_commit(&sha, 240).to_string());
+    s.put(
+        &format!("/repos/acme/tools/zipball/{sha}"),
+        zipball(&[
+            ("skills/two/SKILL.md", &skill_md("two")),
+            ("skills/three/SKILL.md", &skill_md("three")),
+            ("skills/four/SKILL.md", &skill_md("four")),
+        ]),
+    );
+    let p = with_github(Project::new(&s), &s);
+    p.global_manifest(&s, "");
+    let h = p.home().to_path_buf();
+    for n in ["two", "three", "mine"] {
+        std::fs::create_dir_all(h.join(".agents/skills").join(n)).unwrap();
+        std::fs::write(h.join(".agents/skills").join(n).join("SKILL.md"), "old").unwrap();
+    }
+    let rec = json!({ "source": "Acme/tools", "sourceType": "github" });
+    let npx = json!({ "version": 3, "skills": { "two": rec, "three": rec } });
+    std::fs::write(h.join(".agents/.skill-lock.json"), npx.to_string()).unwrap();
+
+    assert!(p.global(&["add", "--all"], 1).contains("--adopt"));
+    let out = p.global(&["add", "--adopt", "--all"], 0);
+    assert!(out.contains("1 skill(s) kept, no source recorded: mine"), "{out}");
+    let toml = std::fs::read_to_string(h.join(".config/skillcask/skills.toml")).unwrap();
+    assert!(toml.contains("skills = [\"three\", \"two\"]"), "one entry selects both, not the whole repository: {toml}");
+    for n in ["two", "three"] {
+        assert_eq!(std::fs::read_to_string(h.join(".agents/skills").join(n).join("SKILL.md")).unwrap(), skill_md(n));
+    }
+    assert_eq!(std::fs::read_to_string(h.join(".agents/skills/mine/SKILL.md")).unwrap(), "old");
+    assert!(!h.join(".agents/skills/four").exists());
 }
 
 #[cfg(unix)]

@@ -92,8 +92,8 @@ fn colour_follows_clicolor_force_and_no_color() {
     let mut p = Project::new(&s);
     p.env.push(("CLICOLOR_FORCE".into(), "1".into()));
     let out = p.expect(&["status"], 1);
-    assert!(out.contains("\x1b[1;31merror\x1b[0m: skills.toml not found"), "{out:?}");
-    assert!(out.contains("\x1b[1;36mhint\x1b[0m: run skillcask init"), "{out:?}");
+    assert!(out.contains("\x1b[31merror\x1b[0m: skills.toml not found"), "{out:?}");
+    assert!(out.contains("\x1b[36mhint\x1b[0m: run skillcask init"), "{out:?}");
     p.env.push(("NO_COLOR".into(), "1".into()));
     let out = p.expect(&["status"], 1);
     assert!(!out.contains('\x1b') && out.contains("error: skills.toml not found\n  hint: run skillcask init"), "{out:?}");

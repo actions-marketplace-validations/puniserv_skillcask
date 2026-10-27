@@ -88,7 +88,8 @@ enum Cmd {
     Add {
         /// vendor/name[@constraint], github:owner/repo[/skill][@version-or-ref], or
         /// git:https://host/owner/repo.git[@version-or-ref]
-        package: String,
+        #[arg(required_unless_present = "all")]
+        package: Option<String>,
         /// Repository name from [repositories].
         #[arg(long)]
         repository: Option<String>,
@@ -96,6 +97,9 @@ enum Cmd {
         /// ~/.config/skillcask/adopted/ and install the package's in its place.
         #[arg(long)]
         adopt: bool,
+        /// With --adopt: adopt every skill not managed whose source `npx skills` recorded.
+        #[arg(long, requires = "adopt", conflicts_with_all = ["package", "repository"])]
+        all: bool,
     },
     /// Remove packages from skills.toml and skills.lock, with their files and links.
     Remove {
@@ -285,9 +289,12 @@ fn run(cli: Cli) -> Result<(), Error> {
     ctx.read_only = matches!(cli.cmd, Cmd::Info { .. } | Cmd::Diff { .. });
     match cli.cmd {
         Cmd::Init => commands::init(&ctx),
-        Cmd::Add { package, repository, adopt } => {
+        Cmd::Add { package, repository, adopt, .. } => {
             ctx.adopt = adopt;
-            commands::add(&ctx, &package, repository)
+            match package {
+                Some(p) => commands::add(&ctx, &p, repository),
+                None => commands::adopt_all(&ctx),
+            }
         }
         Cmd::Remove { packages } => commands::remove(&ctx, &packages),
         Cmd::Install { frozen } => commands::install(&ctx, frozen || ci()),

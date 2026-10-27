@@ -49,7 +49,7 @@ fn add_locks_and_installs_dependencies_and_a_frozen_clone_reproduces_them() {
         assert!(p.exists(&format!(".agents/skills/{n}/SKILL.md")) && p.exists(&format!(".claude/skills/{n}")), "{n}");
     }
     let st = p.ok(&["status"]);
-    assert!(st.contains("acme/ssdlc (via acme/mr)"), "{st}");
+    assert!(st.lines().any(|l| l.starts_with("acme/ssdlc ") && l.ends_with(" via acme/mr")), "{st}");
     // Regression: the JSON `package` held the text label, and the apps passed it on as a name.
     let js: serde_json::Value = serde_json::from_str(&p.ok(&["status", "--json"])).unwrap();
     let dep = js["entries"].as_array().unwrap().iter().find(|e| e["skill"] == "ssdlc").unwrap();
