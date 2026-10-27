@@ -80,8 +80,9 @@ Sources:
 - Requirements on one package must agree on its kind: GitHub vs Composer, and for GitHub ref vs
   tags; two different refs are a conflict. A GitHub dependency installs the union of the skills
   its requirers name, or all of them when any requirer names none.
-- A manifest entry for the same package wins on source, `skills` and `rename`; requirers add
-  constraints. A requirer asking for a skill its `skills = [...]` does not select: exit 1.
+- A manifest entry for the same package wins on source and `rename`; requirers add constraints
+  and widen its `skills = [...]` with the skills they name, or to all of them when one names
+  none (D44).
 - `policy.allow-ranges = false` applies to the manifest only; the lock pins exact versions anyway.
 
 ## Lock
