@@ -27,6 +27,15 @@ fn status_outdated_info_and_doctor() {
         json!({ "package": "acme/one", "version": "1.0.0", "skill": "one", "state": "ok", "ok": true, "adopt": null })
     );
     assert_eq!(st["policy"]["packagist"], json!({ "value": false, "from": "skills.toml" }));
+    assert_eq!(
+        st["repositories"],
+        json!([
+            { "name": "fix", "type": "composer", "url": s.url("/packages.json"), "allowed": true },
+            { "name": "github", "type": "github", "url": "https://api.github.com/", "allowed": true },
+        ])
+    );
+    let text = p.ok(&["status"]);
+    assert!(text.contains("repository fix: composer https://127.0.0.1:") && text.contains("repository packagist: off"), "{text}");
     std::fs::write(p.path().join(".agents/skills/one/SKILL.md"), "changed").unwrap();
     let st = doc(&p, &["status", "--json"], 1);
     assert_eq!((st["ok"].clone(), st["entries"][0]["state"].clone()), (json!(false), json!("modified")));
@@ -81,5 +90,8 @@ fn search_escapes_package_text() {
         &format!("[repositories]\ngl = {{ type = \"composer\", url = \"{}\" }}\n[policy]\npackagist = false\n", s.url("/gl")),
     );
     let out = doc(&p, &["search", "beta", "--json"], 0);
-    assert_eq!(out, json!({ "results": [{ "name": "acme/beta", "description": "beta <U+202E>txt" }] }));
+    assert_eq!(
+        out,
+        json!({ "results": [{ "name": "acme/beta", "description": "beta <U+202E>txt", "source": "gl", "installs": null }], "skills-sh": null })
+    );
 }

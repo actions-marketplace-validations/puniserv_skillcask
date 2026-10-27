@@ -178,6 +178,14 @@ impl Manifest {
         Some(format!("source {shown} is not in policy.allow-sources ({from})"))
     }
 
+    /// GitHub is on and `allow-sources` admits at least some GitHub repository.
+    pub fn github_allowed(&self) -> bool {
+        let repos = format!("{}/repos/", crate::github::api());
+        self.github.is_some()
+            && (self.allows(&repos)
+                || self.policy.allow_sources.iter().flatten().any(|e| e.starts_with("https://") && crate::policy::under(e, &repos)))
+    }
+
     /// Repositories lookups may contact.
     pub fn allowed_repositories(&self) -> Vec<Repository> {
         self.repositories.iter().filter(|r| self.allows(&r.url)).cloned().collect()

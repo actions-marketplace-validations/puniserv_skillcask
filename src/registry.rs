@@ -250,15 +250,15 @@ impl<'a> Registry<'a> {
         bail!(MANIFEST, "package {package} not found in repositories {}", names.join(", "))
     }
 
-    /// (name, description) of skill packages whose name contains `query`, or that Packagist's
-    /// search finds. A repository that fails is skipped with a warning; all failing is an error.
-    pub fn search(&self, repos: &[Repository], query: &str) -> Result<Vec<(String, String)>> {
-        let mut out: Vec<(String, String)> = Vec::new();
+    /// (name, description, repository name) of skill packages whose name contains `query`, or that
+    /// Packagist's search finds. A repository that fails is skipped with a warning; all failing is an error.
+    pub fn search(&self, repos: &[Repository], query: &str) -> Result<Vec<(String, String, String)>> {
+        let mut out = Vec::new();
         let (mut failed, mut errors) = (None, 0);
         for repo in repos {
             let found = if is_packagist(repo) { self.search_packagist(query) } else { self.search_names(repo, query) };
             match found {
-                Ok(f) => out.extend(f),
+                Ok(f) => out.extend(f.into_iter().map(|(n, d)| (n, d, repo.name.clone()))),
                 Err(e) => {
                     crate::ui::warn(format!("repository {}: {}", repo.name, e.msg));
                     (failed, errors) = (Some(e), errors + 1);
@@ -269,7 +269,7 @@ impl<'a> Registry<'a> {
             return Err(e);
         }
         let mut seen = std::collections::HashSet::new();
-        out.retain(|(n, _)| seen.insert(n.clone()));
+        out.retain(|(n, _, _)| seen.insert(n.clone()));
         Ok(out)
     }
 
@@ -338,6 +338,30 @@ impl<'a> Registry<'a> {
         }
         Ok(out)
     }
+}
+
+/// `SKILLCASK_SKILLS_SH` points at a test server.
+fn skills_sh_base() -> String {
+    std::env::var("SKILLCASK_SKILLS_SH").ok().filter(|v| !v.is_empty()).unwrap_or_else(|| "https://skills.sh".into())
+}
+
+/// `github:owner/repo/skill` and install count of what skills.sh's search (the API `npx skills
+/// find` calls, undocumented) finds for `query` (D42).
+pub fn search_skills_sh(http: &Http, query: &str) -> Result<Vec<(String, Option<u64>)>> {
+    let url = Url::parse_with_params(&format!("{}/api/search", skills_sh_base().trim_end_matches('/')), [("q", query), ("limit", "20")])
+        .map_err(|e| Error::new(NETWORK, e.to_string()))?;
+    Ok(http.get_json(url.as_str())?.map_or_else(Vec::new, |v| skills_sh_results(&v)))
+}
+
+/// Entries whose `source` is not `owner/repo` or whose `skillId` is not a skill name are dropped.
+fn skills_sh_results(v: &Value) -> Vec<(String, Option<u64>)> {
+    let entry = |e: &Value| {
+        let source = e.get("source")?.as_str()?.to_lowercase();
+        let skill = e.get("skillId")?.as_str()?;
+        (crate::manifest::valid_package_name(&source) && crate::skill::valid_name(skill))
+            .then(|| (format!("github:{source}/{skill}"), e.get("installs").and_then(Value::as_u64)))
+    };
+    v.get("skills").and_then(Value::as_array).into_iter().flatten().filter_map(entry).collect()
 }
 
 pub fn select(cands: &[Candidate], name: &str, constraint: &str, min_age: SignedDuration, now: Timestamp) -> Result<Candidate> {
@@ -422,6 +446,21 @@ mod tests {
         let v = p2();
         let list = v["packages"]["acme/x"].as_array().unwrap();
         candidates("acme/x", expand(list, true), &Url::parse("https://repo.example.com/p2/acme/x.json").unwrap())
+    }
+
+    #[test]
+    fn reads_skills_sh_defensively() {
+        let v = serde_json::json!({ "skills": [
+            { "source": "Owner/Repo", "skillId": "one", "installs": 5 },
+            { "source": "o/r", "skillId": "two", "installs": "many" },
+            { "source": "o/r/../x", "skillId": "bad" },
+            { "source": "o/r", "skillId": "Bad\u{1b}" },
+            { "source": "o/r" },
+            7,
+        ]});
+        assert_eq!(skills_sh_results(&v), [("github:owner/repo/one".to_string(), Some(5)), ("github:o/r/two".to_string(), None)]);
+        assert!(skills_sh_results(&serde_json::json!({ "skills": "x" })).is_empty());
+        assert!(skills_sh_results(&serde_json::json!([])).is_empty());
     }
 
     #[test]

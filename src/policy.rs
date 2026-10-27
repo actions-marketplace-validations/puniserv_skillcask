@@ -11,6 +11,7 @@ use crate::bail;
 use crate::error::{Error, MANIFEST, Result};
 
 pub const CONFIG: &str = "config.toml";
+pub const SKILLS_SH: &str = "skills-sh";
 pub const REPOSITORY_AGES: &str = "repository-min-release-age";
 pub const KEYS: [&str; 6] = ["min-release-age", "allow-ranges", "packagist", "github-requires", "allow-sources", "deny-patterns"];
 
@@ -53,6 +54,8 @@ pub struct Outer {
     pub env: Layer,
     /// `[agents] targets` of `config.toml` (D29).
     pub targets: Option<Vec<String>>,
+    /// `[search] skills-sh` of `config.toml` (D42); `None`: never decided.
+    pub skills_sh: Option<bool>,
 }
 
 /// Each key that is set, its value and the layer it came from.
@@ -174,20 +177,29 @@ pub fn outer() -> Result<Outer> {
     let Some(path) = crate::scope::config_dir().map(|d| d.join(CONFIG)) else {
         return Ok(Outer { env, ..Default::default() });
     };
-    let (config, targets, config_path) = read_config(&path)?;
-    Ok(Outer { config, config_path, env, targets })
+    Ok(Outer { env, ..read_config(&path)? })
 }
 
-fn read_config(path: &Path) -> Result<(Layer, Option<Vec<String>>, String)> {
+fn read_config(path: &Path) -> Result<Outer> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Layer::default(), None, String::new())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Outer::default()),
         Err(e) => return Err(e.into()),
     };
     let shown = path.display().to_string();
     let doc: DocumentMut = text.parse().map_err(|e| Error::new(MANIFEST, format!("{shown}: {e}")))?;
-    if let Some((k, _)) = doc.iter().find(|(k, _)| !matches!(*k, "policy" | "agents")) {
-        bail!(MANIFEST, "{shown}: only [policy] and [agents] are read here, found {k}");
+    if let Some((k, _)) = doc.iter().find(|(k, _)| !matches!(*k, "policy" | "agents" | "search")) {
+        bail!(MANIFEST, "{shown}: only [policy], [agents] and [search] are read here, found {k}");
+    }
+    let mut skills_sh = None;
+    if let Some(s) = doc.get("search") {
+        let s = s.as_table_like().ok_or_else(|| Error::new(MANIFEST, format!("{shown}: search must be a table")))?;
+        for (k, item) in s.iter() {
+            if k != SKILLS_SH {
+                bail!(MANIFEST, "{shown}: search.{k} is not read here, only search.{SKILLS_SH}");
+            }
+            skills_sh = Some(item.as_bool().ok_or_else(|| Error::new(MANIFEST, format!("{shown}: search.{k} must be true or false")))?);
+        }
     }
     let mut targets = None;
     if let Some(a) = doc.get("agents") {
@@ -201,7 +213,26 @@ fn read_config(path: &Path) -> Result<(Layer, Option<Vec<String>>, String)> {
                 Some(list.ok_or_else(|| Error::new(MANIFEST, format!("{shown}: agents.targets must be a list of agent names or paths")))?);
         }
     }
-    Ok((layer(doc.get("policy").and_then(Item::as_table_like), &shown, true)?, targets, shown))
+    let config = layer(doc.get("policy").and_then(Item::as_table_like), &shown, true)?;
+    Ok(Outer { config, config_path: shown, env: Layer::default(), targets, skills_sh })
+}
+
+/// Writes `[search] skills-sh` into `config.toml`, keeping the rest of the file; returns its path.
+pub fn remember_skills_sh(on: bool) -> Result<std::path::PathBuf> {
+    let Some(path) = crate::scope::config_dir().map(|d| d.join(CONFIG)) else {
+        bail!(MANIFEST, "--remember needs HOME (or USERPROFILE) to be set")
+    };
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e.into()),
+    };
+    let mut doc: DocumentMut = text.parse().map_err(|e| Error::new(MANIFEST, format!("{}: {e}", path.display())))?;
+    let search = doc.entry("search").or_insert_with(toml_edit::table);
+    let Some(search) = search.as_table_like_mut() else { bail!(MANIFEST, "{}: search must be a table", path.display()) };
+    search.insert(SKILLS_SH, toml_edit::value(on));
+    crate::project::write_atomic(&path, &doc.to_string())?;
+    Ok(path)
 }
 
 /// Set once the environment-over-`enforce` warnings are printed: a run loads the manifest more than once.
@@ -315,12 +346,16 @@ mod tests {
         assert!(env_layer(|_| Some(" ".into())).unwrap().values.is_empty());
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join(CONFIG), "[repositories]\nx = 1\n").unwrap();
-        assert!(read_config(&dir.path().join(CONFIG)).unwrap_err().msg.contains("only [policy] and [agents]"));
-        assert_eq!(read_config(&dir.path().join("missing.toml")).unwrap().0, Layer::default());
+        assert!(read_config(&dir.path().join(CONFIG)).unwrap_err().msg.contains("only [policy], [agents] and [search]"));
+        assert_eq!(read_config(&dir.path().join("missing.toml")).unwrap().config, Layer::default());
         std::fs::write(dir.path().join(CONFIG), "[agents]\ntargets = [\"claude\", \"./x\"]\n").unwrap();
-        assert_eq!(read_config(&dir.path().join(CONFIG)).unwrap().1, Some(vec!["claude".into(), "./x".into()]));
+        assert_eq!(read_config(&dir.path().join(CONFIG)).unwrap().targets, Some(vec!["claude".into(), "./x".into()]));
         std::fs::write(dir.path().join(CONFIG), "[agents]\nlocal = \".skills\"\n").unwrap();
         assert!(read_config(&dir.path().join(CONFIG)).unwrap_err().msg.contains("agents.local is not read here"));
+        std::fs::write(dir.path().join(CONFIG), "[search]\nskills-sh = \"yes\"\n").unwrap();
+        assert!(read_config(&dir.path().join(CONFIG)).unwrap_err().msg.contains("search.skills-sh must be true or false"));
+        std::fs::write(dir.path().join(CONFIG), "[search]\nskills-sh = false\n").unwrap();
+        assert_eq!(read_config(&dir.path().join(CONFIG)).unwrap().skills_sh, Some(false));
     }
 
     #[test]

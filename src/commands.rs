@@ -1856,11 +1856,16 @@ pub fn status(ctx: &Ctx, json: bool) -> Result<()> {
             .collect();
         let policy: serde_json::Map<String, Value> =
             m.policy.effective.iter().map(|(k, (v, from))| (k.to_string(), json!({ "value": policy_value(v), "from": from }))).collect();
+        let repositories: Vec<Value> = repositories(&m)
+            .into_iter()
+            .map(|(name, kind, url, allowed)| json!({ "name": name, "type": kind, "url": url, "allowed": allowed }))
+            .collect();
         print_json(&json!({
             "ok": bad == 0,
             "entries": entries,
             "policy": policy,
             "targets": { "entries": m.target_entries, "from": m.targets_from, "dirs": m.targets },
+            "repositories": repositories,
         }));
         if bad > 0 {
             return Err(Error::new(MANIFEST, format!("{bad} problem(s)")).hint("run skillcask install"));
@@ -1874,7 +1879,20 @@ pub fn status(ctx: &Ctx, json: bool) -> Result<()> {
             _ => None,
         });
     }
-    // An agent learns the policy's origin from the error a blocked source raises.
+    // An agent learns the policy's origin from the error a blocked source raises, and the
+    // sources from --json.
+    if !ui::agent() {
+        let dim = |s: String| println!("{}", ui::out(ui::Color::Dim, s));
+        for (name, kind, url, allowed) in repositories(&m) {
+            dim(format!("repository {name}: {kind} {url}{}", if allowed { "" } else { ", not in policy.allow-sources" }));
+        }
+        if !m.policy.packagist {
+            dim("repository packagist: off (policy.packagist = false)".into());
+        }
+        if m.github.is_none() {
+            dim(format!("repository github: off (github = false in {})", manifest::FILE));
+        }
+    }
     for (k, (v, from)) in m.policy.effective.iter().filter(|_| !ui::agent()) {
         println!("{}", ui::out(ui::Color::Dim, format!("policy.{k} = {v} ({from})")));
     }
@@ -1894,6 +1912,20 @@ pub fn status(ctx: &Ctx, json: bool) -> Result<()> {
         println!("{} {skills} skill(s) match skills.lock", ui::out(ui::Color::Green, "✓"));
     }
     Ok(())
+}
+
+/// (name, type, URL without credentials, allowed by `allow-sources`) of every source `m` may
+/// resolve in: `[repositories]` with Packagist, GitHub, and the plain git entries.
+fn repositories(m: &Manifest) -> Vec<(String, &'static str, String, bool)> {
+    let shown = crate::http::shown_url;
+    let mut out: Vec<_> = m.repositories.iter().map(|r| (r.name.clone(), "composer", shown(&r.url), m.allows(&r.url))).collect();
+    if let Some(api) = &m.github {
+        out.push(("github".into(), "github", shown(api), m.github_allowed()));
+    }
+    for (name, url) in m.skills.iter().filter_map(|r| Some((&r.name, r.git.as_ref()?))) {
+        out.push((name.clone(), git::KIND, shown(url), m.allows(url)));
+    }
+    out
 }
 
 pub fn doctor(ctx: &Ctx, fix: bool, json: bool) -> Result<()> {
@@ -2198,20 +2230,67 @@ fn sarif_log(findings: &[(String, Finding)]) -> Value {
     })
 }
 
-pub fn search(ctx: &Ctx, query: &str, json: bool) -> Result<()> {
+/// `skills_sh`: `--skills-sh` / `--no-skills-sh`, else `[search] skills-sh` of `config.toml`,
+/// else asked once in a terminal (D42).
+pub fn search(ctx: &Ctx, query: &str, json: bool, skills_sh: Option<bool>, remember: bool) -> Result<()> {
     let m = ctx.manifest_or_default()?;
+    let mut setting = crate::policy::outer()?.skills_sh;
+    if let Some(on) = skills_sh.filter(|_| remember) {
+        let path = crate::policy::remember_skills_sh(on)?;
+        ui::note(format!("saved [search] skills-sh = {on} in {}", path.display()));
+        setting = Some(on);
+    } else if setting.is_none() && skills_sh.is_none() && ctx.interactive && !json && !ui::agent() {
+        eprint!("Also search skills.sh? It receives your query. [y/N] ");
+        let mut line = String::new();
+        if std::io::stdin().read_line(&mut line)? == 0 {
+            eprintln!();
+        } else {
+            let on = matches!(line.trim(), "y" | "Y" | "yes");
+            let path = crate::policy::remember_skills_sh(on)?;
+            ui::note(format!(
+                "saved [search] skills-sh = {on} in {}; change it with --skills-sh/--no-skills-sh --remember",
+                path.display()
+            ));
+            setting = Some(on);
+        }
+    }
     let results = Registry::new(ctx.http()?).search(&m.allowed_repositories(), query)?;
+    let mut found = Vec::new();
+    if skills_sh.or(setting).unwrap_or(false) {
+        if !m.github_allowed() {
+            if skills_sh == Some(true) {
+                ui::note("skills.sh not searched: its skills are on GitHub, which this project's policy or [repositories] does not allow");
+            }
+        } else {
+            match registry::search_skills_sh(ctx.http()?, query) {
+                Ok(f) => found = f,
+                Err(e) => ui::warn(format!("skills.sh: {}", e.msg)),
+            }
+            // A GitHub URL prefix in allow-sources admits only some owners.
+            found.retain(|(n, _)| m.check_github(n["github:".len()..].rsplit_once('/').map_or("", |(r, _)| r)).is_ok());
+        }
+    }
     if json {
-        let list: Vec<Value> = results.iter().map(|(n, d)| json!({ "name": skill::shown(n), "description": skill::shown(d) })).collect();
-        print_json(&json!({ "results": list }));
+        let mut list: Vec<Value> = results
+            .iter()
+            .map(
+                |(n, d, r)| json!({ "name": skill::shown(n), "description": skill::shown(d), "source": skill::shown(r), "installs": null }),
+            )
+            .collect();
+        list.extend(found.iter().map(|(n, i)| json!({ "name": n, "description": null, "source": "skills.sh", "installs": i })));
+        print_json(&json!({ "results": list, "skills-sh": setting }));
         return Ok(());
     }
-    if results.is_empty() {
+    if results.is_empty() && found.is_empty() {
         println!("no skill packages match {query:?}");
     }
-    let results: Vec<(String, String)> = results.iter().map(|(n, d)| (ui::printable(n), ui::printable(d))).collect();
-    let width = results.iter().map(|(n, _)| n.chars().count()).max().unwrap_or(0);
-    for (n, d) in results {
+    let mut rows: Vec<(String, String)> = results.iter().map(|(n, d, _)| (ui::printable(n), ui::printable(d))).collect();
+    rows.extend(found.iter().map(|(n, i)| {
+        let installs = i.map_or(String::new(), |i| format!("{i} installs, "));
+        (n.clone(), format!("{installs}from skills.sh"))
+    }));
+    let width = rows.iter().map(|(n, _)| n.chars().count()).max().unwrap_or(0);
+    for (n, d) in rows {
         if ui::agent() {
             println!("{n}\t{d}");
         } else {

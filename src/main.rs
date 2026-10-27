@@ -170,12 +170,21 @@ enum Cmd {
         #[arg(long)]
         sarif: bool,
     },
-    /// Search for skill packages.
+    /// Search for skill packages; with skills.sh on, also the GitHub skills it lists.
     Search {
         query: String,
         /// Print one JSON document instead of text (D32).
         #[arg(long)]
         json: bool,
+        /// Also search skills.sh (it receives the query) for this run.
+        #[arg(long, conflicts_with = "no_skills_sh")]
+        skills_sh: bool,
+        /// Do not search skills.sh for this run.
+        #[arg(long)]
+        no_skills_sh: bool,
+        /// Save --skills-sh or --no-skills-sh as [search] skills-sh in config.toml.
+        #[arg(long)]
+        remember: bool,
     },
     /// Keep a registry token in git's credential helper (Keychain, Credential Manager, libsecret).
     #[command(subcommand)]
@@ -292,7 +301,13 @@ fn run(cli: Cli) -> Result<(), Error> {
         Cmd::Status { json } => commands::status(&ctx, json),
         Cmd::Doctor { fix, json } => commands::doctor(&ctx, fix, json),
         Cmd::Audit { json, sarif } => commands::audit(&ctx, json, sarif),
-        Cmd::Search { query, json } => commands::search(&ctx, &query, json),
+        Cmd::Search { query, json, skills_sh, no_skills_sh, remember } => {
+            let choice = (skills_sh || no_skills_sh).then_some(skills_sh);
+            if remember && choice.is_none() {
+                return Err(Error::new(MANIFEST, "--remember needs --skills-sh or --no-skills-sh"));
+            }
+            commands::search(&ctx, &query, json, choice, remember)
+        }
         Cmd::External(_) | Cmd::Auth(_) | Cmd::Validate { .. } | Cmd::Projects { .. } | Cmd::Ui => unreachable!("handled above"),
         Cmd::Publish { vendor, base_url, dist_url, inline, out, paths } => {
             if vendor.is_empty() {

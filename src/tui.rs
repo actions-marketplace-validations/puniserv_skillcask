@@ -16,7 +16,7 @@ use serde_json::Value;
 use crate::error::{Error, IO, MANIFEST, Result};
 
 /// Keys that do not depend on the selected row; those that do are listed in the actions box.
-const HELP: [&str; 13] = [
+const HELP: [&str; 14] = [
     "↑↓/jk move",
     "pgup/pgdn scroll",
     "tab info/audit/output",
@@ -28,6 +28,7 @@ const HELP: [&str; 13] = [
     "/ filter list",
     "s search registries",
     "p find projects",
+    "R repositories",
     "r refresh",
     "q quit",
 ];
@@ -111,7 +112,8 @@ enum Job {
     Diff(String),
     Doctor,
     Projects(String),
-    Search(String),
+    /// A query, and the skills.sh choice to save with it (D42).
+    Search(String, Option<bool>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -139,6 +141,8 @@ enum Mode {
         question: String,
         args: Vec<String>,
     },
+    /// Whether `search` should also ask skills.sh, before rerunning the query.
+    AskSkillsSh(String),
     /// `items` are (value, label).
     Pick {
         title: String,
@@ -173,6 +177,8 @@ struct App {
     /// Index into `visible()`.
     sel: usize,
     audit: Vec<Value>,
+    /// `repositories` of `status --json`.
+    repositories: Vec<Value>,
     details: HashMap<String, Vec<String>>,
     view: View,
     output: Vec<String>,
@@ -194,6 +200,7 @@ impl App {
             filter: String::new(),
             sel: 0,
             audit: Vec::new(),
+            repositories: Vec::new(),
             details: HashMap::new(),
             view: View::Info,
             output: Vec::new(),
@@ -281,6 +288,14 @@ impl App {
                 self.message = "cancelled".into();
                 None
             }
+            Mode::AskSkillsSh(q) => match k.code {
+                KeyCode::Char('y') => Some(Job::Search(q, Some(true))),
+                KeyCode::Char('n') => Some(Job::Search(q, Some(false))),
+                _ => {
+                    self.message = "cancelled; s asks again".into();
+                    None
+                }
+            },
             Mode::Pick { title, items, mut sel, then } => match k.code {
                 KeyCode::Esc => None,
                 KeyCode::Enter => match items.get(sel) {
@@ -356,6 +371,11 @@ impl App {
             KeyCode::Char('s') => {
                 self.mode = Mode::Input { prompt: "search Packagist and [repositories]", text: String::new(), then: Then::Search }
             }
+            KeyCode::Char('R') => {
+                self.output = repository_lines(&self.repositories);
+                self.view = View::Output;
+                self.scroll = 0;
+            }
             KeyCode::Char('p') => {
                 let home = self.home.as_ref().map_or(".".into(), |h| h.display().to_string());
                 self.mode = Mode::Input { prompt: "find projects under", text: home, then: Then::Projects };
@@ -370,7 +390,7 @@ impl App {
             Then::Add => Some(Job::Run(args(&["add", "--", &v]))),
             Then::Adopt => Some(Job::Run(args(&["add", "--adopt", "--", &v]))),
             Then::Projects => Some(Job::Projects(v)),
-            Then::Search => Some(Job::Search(v)),
+            Then::Search => Some(Job::Search(v, None)),
             Then::Filter => None,
             Then::Prefill => {
                 self.mode = Mode::Input { prompt: "add source", text: v, then: Then::Add };
@@ -399,6 +419,7 @@ impl App {
         self.audit = json(audit).ok().and_then(|a| a["skills"].as_array().cloned()).unwrap_or_default();
         match json(status) {
             Ok(st) => {
+                self.repositories = st["repositories"].as_array().cloned().unwrap_or_default();
                 let od = json(outdated).unwrap_or_else(|e| {
                     self.message = format!("outdated: {e}");
                     Value::Null
@@ -511,18 +532,25 @@ fn perform(app: &mut App, job: Job) {
                 Err(e) => app.message = e,
             }
         }
-        Job::Search(q) => {
-            let out = app.cli(&args(&["search", "--json", "--", &q]));
-            match json(&out) {
+        Job::Search(q, choice) => {
+            let mut a = args(&["search", "--json"]);
+            if let Some(on) = choice {
+                a.extend(args(&[if on { "--skills-sh" } else { "--no-skills-sh" }, "--remember"]));
+            }
+            a.extend(args(&["--", &q]));
+            match json(&app.cli(&a)) {
+                Ok(d) if d["skills-sh"].is_null() && choice.is_none() => app.mode = Mode::AskSkillsSh(q),
                 Ok(d) => {
                     let items = list(&d["results"], |r| {
                         let name = r["name"].as_str()?;
-                        Some((name.to_string(), format!("{name}  {}", r["description"].as_str().unwrap_or(""))))
+                        let installs = r["installs"].as_u64().map_or(String::new(), |i| format!(" {i} installs"));
+                        let source = r["source"].as_str().unwrap_or("");
+                        Some((name.to_string(), format!("{name}  [{source}{installs}]  {}", r["description"].as_str().unwrap_or(""))))
                     });
                     if items.is_empty() {
-                        app.message = format!(
-                            "no skill packages match {q:?} on Packagist or [repositories]; GitHub skills: a github:owner/repo/skill"
-                        );
+                        let sh = if d["skills-sh"] == true { ", skills.sh" } else { "" };
+                        app.message =
+                            format!("no skills match {q:?} on Packagist, [repositories]{sh}; GitHub skills: a github:owner/repo/skill");
                     } else {
                         app.mode = Mode::Pick { title: format!("search {q}"), items, sel: 0, then: Then::Prefill };
                     }
@@ -577,6 +605,16 @@ fn rows(status: &Value, outdated: &Value) -> Vec<Row> {
             }
         })
         .collect()
+}
+
+fn repository_lines(repos: &[Value]) -> Vec<String> {
+    let mut out = vec!["repositories (status --json):".to_string()];
+    for r in repos {
+        let s = |k: &str| r[k].as_str().unwrap_or("").to_string();
+        let blocked = if r["allowed"] == false { "  not in policy.allow-sources" } else { "" };
+        out.push(format!("  {}  {}  {}{blocked}", s("name"), s("type"), s("url")));
+    }
+    out.iter().flat_map(|l| clean(l)).collect()
 }
 
 /// Text from a child or a skill with control and invisible characters shown as `<U+XXXX>`,
@@ -646,6 +684,7 @@ fn keys(app: &App) -> Vec<&'static str> {
         Mode::Input { then: Then::Filter, .. } => vec!["type to filter", "enter keep", "esc clear"],
         Mode::Input { .. } => vec!["enter submit", "esc cancel", "backspace delete"],
         Mode::Confirm { .. } => vec!["y yes", "any other key no"],
+        Mode::AskSkillsSh(_) => vec!["y yes", "n no", "any other key cancel"],
         Mode::Pick { .. } => vec!["↑↓/jk move", "enter choose", "esc cancel"],
         Mode::List => HELP.to_vec(),
     }
@@ -741,6 +780,7 @@ fn draw(f: &mut Frame, app: &App) {
     let line = match &app.mode {
         Mode::Input { prompt, text, .. } => format!("{prompt}: {text}_"),
         Mode::Confirm { question, .. } => question.clone(),
+        Mode::AskSkillsSh(_) => "also search skills.sh? it receives your queries (y/n)".into(),
         Mode::Pick { .. } | Mode::List => app.message.clone(),
     };
     f.render_widget(Paragraph::new(clean(&line).join(" ")), msg);
@@ -884,7 +924,37 @@ mod tests {
 
         press(&mut a, KeyCode::Char('s'));
         typed(&mut a, "jira");
-        assert_eq!(press(&mut a, KeyCode::Enter), Some(Job::Search("jira".into())));
+        assert_eq!(press(&mut a, KeyCode::Enter), Some(Job::Search("jira".into(), None)));
+    }
+
+    #[test]
+    fn search_asks_about_skills_sh_once_and_r_lists_repositories() {
+        let mut a = app(sample(), true);
+        a.mode = Mode::AskSkillsSh("jira".into());
+        assert_eq!(press(&mut a, KeyCode::Char('y')), Some(Job::Search("jira".into(), Some(true))));
+        a.mode = Mode::AskSkillsSh("jira".into());
+        assert_eq!(press(&mut a, KeyCode::Char('n')), Some(Job::Search("jira".into(), Some(false))));
+        a.mode = Mode::AskSkillsSh("jira".into());
+        assert_eq!((press(&mut a, KeyCode::Esc), &a.mode), (None, &Mode::List));
+
+        a.mode = Mode::Pick { title: "t".into(), items: vec![("github:o/r/s".into(), "x".into())], sel: 0, then: Then::Prefill };
+        press(&mut a, KeyCode::Enter);
+        assert!(matches!(&a.mode, Mode::Input { text, then: Then::Add, .. } if text == "github:o/r/s"));
+        a.mode = Mode::List;
+
+        a.repositories = vec![
+            json!({ "name": "packagist", "type": "composer", "url": "https://repo.packagist.org/", "allowed": true }),
+            json!({ "name": "github", "type": "github", "url": "https://api.github.com/", "allowed": false }),
+        ];
+        press(&mut a, KeyCode::Char('R'));
+        assert_eq!(a.view, View::Output);
+        assert_eq!(
+            a.output[1..],
+            [
+                "  packagist  composer  https://repo.packagist.org/",
+                "  github  github  https://api.github.com/  not in policy.allow-sources"
+            ]
+        );
     }
 
     #[test]
