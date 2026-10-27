@@ -296,7 +296,7 @@ Every command except `publish`, `validate` and `projects` takes `-g, --global`.
 | `publish --vendor v --base-url URL --out DIR [--inline] [--dist-url TPL] [paths…]` | Build a static Composer repository from a monorepo. |
 | `validate [paths…]` | Check `SKILL.md` files against the Agent Skills spec, see below. |
 | `projects [dirs…]` | Directories that hold `skills.toml` under the given ones (default: the current one), up to 6 levels down; hidden directories, `node_modules`, `vendor`, `target` and `Library` are skipped. |
-| `ui` | A terminal UI over the commands above: skills with their state and updates, `info`, SKILL.md and `audit` per skill, add, adopt, update (diff first), remove, doctor, a filter of the list, search of the registries (and skills.sh, asked once), the repositories in use (`R`) and a projects picker; `g` switches between the project and `--global`. |
+| `ui` | A terminal UI over the commands above: skills with their state and updates, `info`, SKILL.md and `audit` per skill, add, adopt (also offered when an add hits a skill skillcask does not manage), update (diff first), remove, doctor, a filter of the list, search of the registries (and skills.sh, asked once), the repositories in use (`R`) and a projects picker; `g` switches between the project and `--global`. |
 | `<other>` | Runs `skillcask-<other>` from `PATH`, like git and cargo plugins. |
 
 `status`, `outdated`, `info`, `search`, `doctor`, `audit` and `projects` take `--json`: one JSON document on one line of

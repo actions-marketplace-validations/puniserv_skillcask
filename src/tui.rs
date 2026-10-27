@@ -459,6 +459,15 @@ impl App {
     }
 }
 
+/// An `add` that failed on an unmanaged skill in the way asks to rerun it with `--adopt`.
+fn adopt_offer(a: &[String], out: &Out) -> Option<Mode> {
+    let pkg = a.last().filter(|_| a.first().is_some_and(|c| c == "add") && !a.iter().any(|x| x == "--adopt"))?;
+    (out.code != Some(0) && out.stderr.contains(crate::commands::ADOPT_HINT)).then(|| Mode::Confirm {
+        question: format!("adopt: move the copy aside and install {pkg}? (y/n)"),
+        args: args(&["add", "--adopt", "--", pkg]),
+    })
+}
+
 fn args(a: &[&str]) -> Vec<String> {
     a.iter().map(|s| s.to_string()).collect()
 }
@@ -506,6 +515,9 @@ fn perform(app: &mut App, job: Job) {
             let out = app.cli(&a);
             app.show(&a, &out);
             perform(app, Job::Refresh);
+            if let Some(m) = adopt_offer(&a, &out) {
+                app.mode = m;
+            }
         }
         Job::Diff(p) => {
             let a = args(&["diff", "--", &p]);
@@ -876,6 +888,19 @@ mod tests {
         assert_eq!(a.missing_detail(), None);
         let lines = a.detail_lines();
         assert!(lines.iter().any(|l| l.contains("github:o/r/mine")) && lines.iter().any(|l| l.starts_with("press m")), "{lines:?}");
+    }
+
+    #[test]
+    fn a_failed_add_on_an_unmanaged_skill_offers_adopt() {
+        let failed = |stderr: &str| Out { code: Some(1), stdout: String::new(), stderr: stderr.into() };
+        let err = failed(&format!(
+            "error: ~/.agents/skills/two exists and is not managed by skillcask, but acme/two provides a skill with that name{}",
+            crate::commands::ADOPT_HINT
+        ));
+        let offer = adopt_offer(&args(&["add", "--", "acme/two"]), &err);
+        assert!(matches!(&offer, Some(Mode::Confirm { args: a, .. }) if *a == args(&["add", "--adopt", "--", "acme/two"])));
+        assert!(adopt_offer(&args(&["add", "--adopt", "--", "acme/two"]), &err).is_none());
+        assert!(adopt_offer(&args(&["add", "--", "acme/two"]), &failed("error: other")).is_none());
     }
 
     #[test]

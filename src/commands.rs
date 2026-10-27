@@ -995,6 +995,9 @@ fn npx_sources(s: &Scope) -> BTreeMap<String, String> {
         .collect()
 }
 
+/// Ends the error of an unmanaged global skill in the way; the TUI offers adopt when it sees it.
+pub const ADOPT_HINT: &str = " (`add --adopt` replaces it)";
+
 /// D38: moves what stands where `pkg`'s skills go and skillcask does not manage (a target entry
 /// that is not a link into the store, then the store dir) to `<config>/adopted/<unix time>/`.
 /// Returns the moves, for [`unadopt`].
@@ -1082,7 +1085,7 @@ fn store_conflict(s: &Scope, p: &Package, sk: &LockedSkill, old: &Lock, owned: &
         return None;
     }
     let (Some(h), Some((op, os))) = (h, old_skill) else {
-        let adopt = if s.global { " (`add --adopt` replaces it)" } else { "" };
+        let adopt = if s.global { ADOPT_HINT } else { "" };
         return Some((
             format!("{shown} exists and is not managed by skillcask, but {} provides a skill with that name{adopt}", p.name),
             true,
