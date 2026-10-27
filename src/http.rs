@@ -9,7 +9,7 @@ use ureq::tls::{PemItem, RootCerts, TlsConfig};
 use url::Url;
 
 use crate::bail;
-use crate::error::{AUTH, Error, IO, NETWORK, Result};
+use crate::error::{AUTH, Context, Error, IO, NETWORK, Result};
 
 const MAX_REDIRECTS: usize = 5;
 const JSON_LIMIT: u64 = 50 * 1024 * 1024;
@@ -17,11 +17,22 @@ const ATTEMPTS: u32 = 3;
 /// A longer `Retry-After` (a rate limit window) fails at once instead of stalling the command.
 const MAX_RETRY_AFTER: u64 = 60;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 enum Cred {
     Basic(String, String),
     Bearer(String),
     PrivateToken(String),
+}
+
+/// The variant only: a token, or a username that is one, must not reach a panic or a log.
+impl std::fmt::Debug for Cred {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Cred::Basic(..) => "Basic(…)",
+            Cred::Bearer(_) => "Bearer(…)",
+            Cred::PrivateToken(_) => "PrivateToken(…)",
+        })
+    }
 }
 
 impl Cred {
@@ -55,7 +66,7 @@ impl Auth {
             match std::fs::read_to_string(&path) {
                 Ok(text) => auth.add(&text, &path.display().to_string())?,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => return Err(e.into()),
+                Err(e) => return Err(e).ctx(path.display()),
             }
         }
         let token = ["GITHUB_TOKEN", "GH_TOKEN"].iter().find_map(|k| std::env::var(k).ok().filter(|t| !t.is_empty()));
@@ -369,6 +380,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn an_unreadable_auth_json_names_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("auth.json")).unwrap();
+        let e = Auth::load(dir.path()).unwrap_err();
+        assert!(e.msg.starts_with(&format!("{}: ", dir.path().join("auth.json").display())), "{}", e.msg);
+    }
+
+    #[test]
     fn only_broken_connections_are_transient() {
         use std::io::{Error as IoError, ErrorKind};
         let io = |e: IoError| transient(&ureq::Error::Io(e));
@@ -415,6 +434,17 @@ mod tests {
         assert_eq!(get("https://h.example.com/x"), None);
         assert_eq!(get("https://127.0.0.1:9/x"), None);
         assert_eq!(get("https://gl.example.com/x"), Some(Cred::PrivateToken("pt".into())));
+    }
+
+    #[test]
+    fn debug_hides_secrets() {
+        let mut a = Auth::default();
+        a.add(r#"{"http-basic":{"h.example.com":{"username":"ghp_user","password":"s3cret"}},"bearer":{"b.example.com":"tok"}}"#, "x")
+            .unwrap();
+        a.lookup(&Url::parse("https://b.example.com/x").unwrap());
+        let shown = format!("{a:?}");
+        assert!(shown.contains("h.example.com") && shown.contains("Basic(…)") && shown.contains("Bearer(…)"), "{shown}");
+        assert!(!shown.contains("ghp_user") && !shown.contains("s3cret") && !shown.contains("tok\""), "{shown}");
     }
 
     #[test]
