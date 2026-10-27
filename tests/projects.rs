@@ -18,7 +18,10 @@ fn lists_projects_and_skips_hidden_dependency_and_deep_dirs() {
     assert_eq!(code, 0);
     let doc: serde_json::Value = serde_json::from_str(&out).unwrap();
     let found: Vec<_> = doc["projects"].as_array().unwrap().iter().map(|p| p["path"].as_str().unwrap().to_string()).collect();
-    let want: Vec<_> = ["", "1/2/3/4/5/6", "a", "b/c"].iter().map(|d| root.join(d).to_string_lossy().into_owned()).collect();
+    let want: Vec<_> = ["", "1/2/3/4/5/6", "a", "b/c"]
+        .iter()
+        .map(|d| d.split('/').fold(root.clone(), |p, s| p.join(s)).to_string_lossy().into_owned())
+        .collect();
     assert_eq!(found, want.iter().map(|p| p.trim_end_matches(['/', '\\']).to_string()).collect::<Vec<_>>());
 }
 
