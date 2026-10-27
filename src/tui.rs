@@ -17,7 +17,7 @@ use serde_json::Value;
 use crate::error::{Error, IO, MANIFEST, Result};
 
 /// Keys that do not depend on the selected row; those that do are listed in the actions box.
-const HELP: [&str; 14] = [
+const HELP: [&str; 15] = [
     "↑↓/jk move",
     "pgup/pgdn scroll",
     "tab info/audit/output",
@@ -30,6 +30,7 @@ const HELP: [&str; 14] = [
     "s search registries",
     "p find projects",
     "R repositories",
+    "S skills.sh on/off",
     "r refresh",
     "q quit",
 ];
@@ -117,6 +118,8 @@ enum Job {
     Projects(String),
     /// A query, and the skills.sh choice to save with it (D42).
     Search(String, Option<bool>),
+    /// Saves the skills.sh choice through `--global config search.skills-sh`.
+    SkillsSh(bool),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -182,6 +185,8 @@ struct App {
     audit: Vec<Value>,
     /// `repositories` of `status --json`.
     repositories: Vec<Value>,
+    /// `skills-sh` of `status --json`: `true`, `false` or `null` (not set).
+    skills_sh: Value,
     details: HashMap<String, Vec<String>>,
     view: View,
     output: Vec<String>,
@@ -204,6 +209,7 @@ impl App {
             sel: 0,
             audit: Vec::new(),
             repositories: Vec::new(),
+            skills_sh: Value::Null,
             details: HashMap::new(),
             view: View::Info,
             output: Vec::new(),
@@ -386,10 +392,11 @@ impl App {
                 self.mode = Mode::Input { prompt: "search Packagist and [repositories]", text: String::new(), then: Then::Search }
             }
             KeyCode::Char('R') => {
-                self.output = repository_lines(&self.repositories);
+                self.output = repository_lines(&self.repositories, &self.skills_sh);
                 self.view = View::Output;
                 self.scroll = 0;
             }
+            KeyCode::Char('S') => return Some(Job::SkillsSh(self.skills_sh != true)),
             KeyCode::Char('p') => {
                 let home = self.home.as_ref().map_or(".".into(), |h| h.display().to_string());
                 self.mode = Mode::Input { prompt: "find projects under", text: home, then: Then::Projects };
@@ -434,6 +441,7 @@ impl App {
         match json(status) {
             Ok(st) => {
                 self.repositories = st["repositories"].as_array().cloned().unwrap_or_default();
+                self.skills_sh = st["skills-sh"].clone();
                 let od = json(outdated).unwrap_or_else(|e| {
                     self.message = format!("outdated: {e}");
                     Value::Null
@@ -558,6 +566,18 @@ fn perform(app: &mut App, job: Job) {
                 Err(e) => app.message = e,
             }
         }
+        Job::SkillsSh(on) => {
+            let out = spawn(&app.exe, &app.cwd, true, &args(&["config", "search.skills-sh", if on { "true" } else { "false" }]));
+            if out.code == Some(0) {
+                app.skills_sh = Value::Bool(on);
+            }
+            perform(app, Job::Refresh);
+            app.output = repository_lines(&app.repositories, &app.skills_sh);
+            app.output.extend(clean(&out.stdout));
+            app.output.extend(clean(&out.stderr));
+            app.view = View::Output;
+            app.scroll = 0;
+        }
         Job::Search(q, choice) => {
             let mut a = args(&["search", "--json"]);
             if let Some(on) = choice {
@@ -631,13 +651,15 @@ fn rows(status: &Value, outdated: &Value) -> Vec<Row> {
         .collect()
 }
 
-fn repository_lines(repos: &[Value]) -> Vec<String> {
+fn repository_lines(repos: &[Value], skills_sh: &Value) -> Vec<String> {
     let mut out = vec!["repositories (status --json):".to_string()];
     for r in repos {
         let s = |k: &str| r[k].as_str().unwrap_or("").to_string();
         let blocked = if r["allowed"] == false { "  not in policy.allow-sources" } else { "" };
         out.push(format!("  {}  {}  {}{blocked}", s("name"), s("type"), s("url")));
     }
+    let sh = if skills_sh.is_boolean() { format!("{skills_sh} (config.toml)") } else { "not set (off)".into() };
+    out.push(format!("search.skills-sh = {sh}; S turns it on or off"));
     out.iter().flat_map(|l| clean(l)).collect()
 }
 
@@ -998,9 +1020,15 @@ mod tests {
             a.output[1..],
             [
                 "  packagist  composer  https://repo.packagist.org/",
-                "  github  github  https://api.github.com/  not in policy.allow-sources"
+                "  github  github  https://api.github.com/  not in policy.allow-sources",
+                "search.skills-sh = not set (off); S turns it on or off",
             ]
         );
+        assert_eq!(press(&mut a, KeyCode::Char('S')), Some(Job::SkillsSh(true)));
+        a.skills_sh = json!(true);
+        assert_eq!(press(&mut a, KeyCode::Char('S')), Some(Job::SkillsSh(false)));
+        press(&mut a, KeyCode::Char('R'));
+        assert_eq!(a.output[3], "search.skills-sh = true (config.toml); S turns it on or off");
     }
 
     #[test]
