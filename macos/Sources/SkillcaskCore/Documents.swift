@@ -17,9 +17,17 @@ public struct StatusDoc: Decodable, Sendable {
         public let entries: [String]
         public let dirs: [String]
     }
+    /// Since 0.9.0 (D42): every source the project may resolve in.
+    public struct Repository: Decodable, Sendable, Hashable {
+        public let name: String
+        public let type: String
+        public let url: String
+        public let allowed: Bool
+    }
     public let ok: Bool
     public let entries: [Entry]
     public let targets: Targets?
+    public let repositories: [Repository]?
 }
 
 public struct OutdatedDoc: Decodable, Sendable {
@@ -69,8 +77,24 @@ public struct SearchDoc: Decodable, Sendable {
     public struct Result: Decodable, Sendable, Hashable {
         public let name: String
         public let description: String?
+        /// Since 0.9.0: the repository name, or `skills.sh` (D42).
+        public let source: String?
+        public let installs: Int?
     }
     public let results: [Result]
+    /// `"skills-sh": null` means the user never decided; 0.8.0 prints no key and has no flag to ask with.
+    public let asksSkillsSh: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case results
+        case skillsSh = "skills-sh"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        results = try c.decode([Result].self, forKey: .results)
+        asksSkillsSh = try c.contains(.skillsSh) && c.decodeNil(forKey: .skillsSh)
+    }
 }
 
 public struct DoctorDoc: Decodable, Sendable {

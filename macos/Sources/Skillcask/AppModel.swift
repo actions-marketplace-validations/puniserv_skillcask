@@ -22,6 +22,7 @@ final class AppModel {
     var diff: (package: String, text: String)?
     var doctor: DoctorDoc?
     var searchResults: [SearchDoc.Result] = []
+    var asksSkillsSh = false
     var last: RunResult?
     var busy = 0
     var scanning = false
@@ -138,8 +139,12 @@ final class AppModel {
         await refresh()
     }
 
-    func search(_ query: String) async {
-        searchResults = await run(["search", "--json", query], show: false)?.decode(SearchDoc.self)?.results ?? []
+    /// `skillsSh` is the user's answer to "also search skills.sh?", saved in config.toml (D42).
+    func search(_ query: String, skillsSh: Bool? = nil) async {
+        let answer = skillsSh.map { [$0 ? "--skills-sh" : "--no-skills-sh", "--remember"] } ?? []
+        let doc = await run(["search", "--json"] + answer + [query], show: false)?.decode(SearchDoc.self)
+        searchResults = doc?.results ?? []
+        asksSkillsSh = doc?.asksSkillsSh ?? false
     }
 
     func runDoctor(fix: Bool = false) async {

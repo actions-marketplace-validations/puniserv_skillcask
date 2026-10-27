@@ -177,6 +177,23 @@ struct DetailView: View {
             .sheet(isPresented: Binding(get: { model.diff != nil }, set: { if !$0 { model.diff = nil } })) {
                 DiffView()
             }
+        } else if let repos = model.status?.repositories, !repos.isEmpty {
+            Form {
+                Section("Repositories") {
+                    ForEach(repos, id: \.self) { r in
+                        LabeledContent {
+                            Text(r.url)
+                        } label: {
+                            Text(r.name)
+                            Text(r.type + (r.allowed ? "" : ", not in policy.allow-sources"))
+                                .foregroundStyle(r.allowed ? Color.secondary : Color.orange)
+                        }
+                    }
+                }
+                Text("Select a skill to see its details.").foregroundStyle(.secondary)
+            }
+            .formStyle(.grouped)
+            .textSelection(.enabled)
         } else {
             ContentUnavailableView("Select a Skill", systemImage: "sidebar.right")
         }
@@ -329,11 +346,23 @@ struct AddView: View {
                 Button("Search") { Task { await model.search(query) } }
                 Button("Add as Typed") { add(query) }.disabled(query.isEmpty)
             }
+            if model.asksSkillsSh {
+                HStack {
+                    Text("Also search skills.sh? It receives your query; the answer is saved.")
+                    Spacer()
+                    Button("No") { Task { await model.search(query, skillsSh: false) } }
+                    Button("Search skills.sh") { Task { await model.search(query, skillsSh: true) } }
+                }
+                .padding(8)
+                .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+            }
             List(model.searchResults, id: \.self) { r in
                 HStack {
                     VStack(alignment: .leading) {
                         Text(r.name).bold()
                         if let d = r.description { Text(d).font(.caption).foregroundStyle(.secondary) }
+                        let from = [r.source.map { "from \($0)" }, r.installs.map { "\($0.formatted()) installs" }].compactMap { $0 }
+                        if !from.isEmpty { Text(from.joined(separator: ", ")).font(.caption).foregroundStyle(.secondary) }
                     }
                     Spacer()
                     Button("Add") { add(r.name) }

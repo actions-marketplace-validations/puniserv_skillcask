@@ -63,6 +63,22 @@ private func decode<T: Decodable>(_ type: T.Type, _ json: String, status: Int32 
         {"results":[{"description":"Netresearch AI skill for Jira API operations and wiki markup syntax","name":"netresearch/jira-skill"},{"description":null,"name":"acme/x"}]}
         """#))
     #expect(doc.results.map(\.name) == ["netresearch/jira-skill", "acme/x"])
+    #expect(!doc.asksSkillsSh)
+}
+
+@Test func searchSkillsSh() throws {
+    let doc = try #require(decode(SearchDoc.self, #"""
+        {"results":[{"description":null,"installs":594431,"name":"github:juliusbrussee/caveman/caveman","source":"skills.sh"}],"skills-sh":null}
+        """#))
+    #expect(doc.asksSkillsSh && doc.results[0].installs == 594431 && doc.results[0].source == "skills.sh")
+    #expect(try #require(decode(SearchDoc.self, #"{"results":[],"skills-sh":false}"#)).asksSkillsSh == false)
+}
+
+@Test func statusRepositories() throws {
+    let doc = try #require(decode(StatusDoc.self, #"""
+        {"entries":[],"ok":true,"repositories":[{"allowed":true,"name":"packagist","type":"composer","url":"https://repo.packagist.org/"},{"allowed":false,"name":"github","type":"github","url":"https://api.github.com/"}]}
+        """#))
+    #expect(doc.repositories?.map(\.allowed) == [true, false])
 }
 
 @Test func doctor() throws {
