@@ -1637,6 +1637,7 @@ dependencies = [
  "hex",
  "icu_normalizer",
  "jiff",
+ "percent-encoding",
  "ratatui",
  "rcgen",
  "rustls",
