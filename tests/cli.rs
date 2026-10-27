@@ -1158,3 +1158,29 @@ fn global_lists_unmanaged_skills_and_adopts_one() {
     let doc: serde_json::Value = serde_json::from_str(&p.global(&["status", "--json"], 0)).unwrap();
     assert!(doc["entries"].as_array().unwrap().iter().any(|e| e["skill"] == "two" && e["state"] == "ok"), "{doc}");
 }
+
+#[cfg(unix)]
+#[test]
+fn global_adopt_moves_target_links_that_share_the_store_entrys_foreign_source() {
+    let s = Server::start();
+    let sha = "a".repeat(40);
+    s.put("/repos/acme/tools/tags", "[]");
+    s.put("/repos/acme/tools/commits/HEAD", gh_commit(&sha, 240).to_string());
+    s.put(&format!("/repos/acme/tools/zipball/{sha}"), zipball(&[("skills/two/SKILL.md", &skill_md("two"))]));
+    let p = with_github(Project::new(&s), &s);
+    p.global_manifest(&s, "");
+    let h = p.home().to_path_buf();
+    // grskill's layout: the store entry and the target link both point at its own copy. Both
+    // canonicalize to one dir, which used to pass the target link as "into the store" and leave it.
+    std::fs::create_dir_all(h.join(".aiassistant/skills/two")).unwrap();
+    std::fs::write(h.join(".aiassistant/skills/two/SKILL.md"), "old").unwrap();
+    std::fs::create_dir_all(h.join(".agents/skills")).unwrap();
+    std::fs::create_dir_all(h.join(".claude/skills")).unwrap();
+    std::os::unix::fs::symlink("../../.aiassistant/skills/two", h.join(".agents/skills/two")).unwrap();
+    std::os::unix::fs::symlink("../../.aiassistant/skills/two", h.join(".claude/skills/two")).unwrap();
+
+    p.global(&["add", "--adopt", "github:acme/tools/two"], 0);
+    assert_eq!(std::fs::read_link(h.join(".claude/skills/two")).unwrap(), h.join(".agents/skills/two"));
+    assert_eq!(std::fs::read_to_string(h.join(".agents/skills/two/SKILL.md")).unwrap(), skill_md("two"));
+    assert_eq!(std::fs::read_to_string(h.join(".aiassistant/skills/two/SKILL.md")).unwrap(), "old");
+}

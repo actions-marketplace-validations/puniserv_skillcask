@@ -1012,7 +1012,9 @@ fn adopt(s: &Scope, m: &Manifest, lock: &Lock, pkg: &str) -> Result<()> {
         for at in m.targets.iter().map(String::as_str).chain([STORE]) {
             let rel = format!("{at}/{}", sk.name);
             let from = s.root.join(&rel);
-            if from.symlink_metadata().is_err() || (at != STORE && project::link_state(s, at, STORE, &sk.name) == LinkState::Ok) {
+            // Not link_state: a target link and an unmanaged store entry pointing at one foreign dir
+            // canonicalize alike and would pass as a link into the store.
+            if from.symlink_metadata().is_err() || (at != STORE && project::points_into(s, &from, STORE)) {
                 continue;
             }
             let dest = to.join(&rel);
