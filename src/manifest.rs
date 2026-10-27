@@ -162,10 +162,16 @@ impl Manifest {
         let Some(list) = &self.policy.allow_sources else { return true };
         list.iter().any(|e| match e.as_str() {
             "packagist" => crate::policy::under(url, PACKAGIST_URL),
-            "github" => crate::policy::under(url, &format!("{}/repos/", crate::github::api())),
+            "github" => crate::policy::under(url, &format!("{}/repos/", self.github_api())),
             e if e.starts_with("https://") => crate::policy::under(url, e),
             name => self.repository(name).is_some_and(|r| r.url == url),
         })
+    }
+
+    /// The API `"github"` in `allow-sources` stands for: the one in use, unless the list comes from
+    /// the environment or an enforced key, which a project's `github` url must not widen (D43).
+    fn github_api(&self) -> String {
+        if crate::policy::fixed(&self.policy.effective, "allow-sources") { crate::github::trusted_api() } else { crate::github::api() }
     }
 
     /// Why packages from `url` are refused, or `None` when they are allowed.
@@ -175,7 +181,17 @@ impl Manifest {
         }
         let from = self.policy.effective.get("allow-sources").map_or("", |(_, f)| f);
         let shown = url::Url::parse(url).map_or_else(|_| url.to_string(), |u| crate::http::redact(&u));
-        Some(format!("source {shown} is not in policy.allow-sources ({from})"))
+        let github = self.policy.allow_sources.as_ref().is_some_and(|l| l.iter().any(|e| e == "github"))
+            && crate::policy::under(url, &format!("{}/repos/", crate::github::api()));
+        let why = if github {
+            format!(
+                "; \"github\" there means {} (SKILLCASK_GITHUB_API names another)",
+                crate::http::shown_url(&crate::github::trusted_api())
+            )
+        } else {
+            String::new()
+        };
+        Some(format!("source {shown} is not in policy.allow-sources ({from}){why}"))
     }
 
     /// GitHub is on and `allow-sources` admits at least some GitHub repository.
@@ -323,7 +339,7 @@ pub fn parse_with(text: &str, global: bool, outer: &crate::policy::Outer) -> Res
     }
     // A public package must never shadow a private one with the same name.
     repositories.sort_by_key(is_packagist);
-    if let Some((V::Age(enforced), "config.toml, enforced")) = policy.effective.get("min-release-age") {
+    if let Some((V::Age(enforced), crate::policy::ENFORCED)) = policy.effective.get("min-release-age") {
         for r in &mut repositories {
             let floor = crate::policy::repository_floor(outer, &r.url, *enforced);
             match r.min_release_age {
