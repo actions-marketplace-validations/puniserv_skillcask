@@ -166,24 +166,41 @@ fn search_remember_without_a_query_only_saves() {
     p.expect(&["search", "--skills-sh"], 1);
 }
 
-#[cfg(unix)]
+/// Writes an editor script that appends `lines` to the file it is given.
+fn fake_editor(path: &std::path::Path, lines: &[&str]) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let body: String = lines.iter().map(|l| format!("echo '{l}' >> \"$1\"\n")).collect();
+        std::fs::write(path, format!("#!/bin/sh\n{body}")).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        // The redirect goes first so `= 1` is not read as `1>>`.
+        let body: String = lines.iter().map(|l| format!(">>%1 echo {l}\r\n")).collect();
+        std::fs::write(path, format!("@echo off\r\n{body}")).unwrap();
+    }
+}
+
 #[test]
 fn edit_checks_the_file_and_keeps_a_broken_edit() {
-    use std::os::unix::fs::PermissionsExt;
     let s = Server::start();
     let mut p = Project::new(&s);
     p.write("skills.toml", "[policy]\nallow-ranges = true\n");
-    let editor = p.home().join("editor.sh");
-    std::fs::write(&editor, "#!/bin/sh\necho 'allow-ranges = 1' >> \"$1\"\n").unwrap();
-    std::fs::set_permissions(&editor, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // Regression guard: the editor runs through the shell as in git, so a quoted path with spaces works.
+    let dir = p.home().join("my editor");
+    std::fs::create_dir_all(&dir).unwrap();
+    let editor = dir.join(if cfg!(windows) { "edit.cmd" } else { "edit.sh" });
+    fake_editor(&editor, &["allow-ranges = 1"]);
     p.env.push(("VISUAL".into(), String::new()));
-    p.env.push(("EDITOR".into(), editor.display().to_string()));
+    p.env.push(("EDITOR".into(), format!("\"{}\"", editor.display())));
     let e = p.expect(&["config", "edit"], 1);
     assert!(e.contains("duplicate key") && e.contains("hint: your edit is kept in skills.toml"), "{e}");
-    assert!(p.read("skills.toml").ends_with("allow-ranges = 1\n"));
+    assert!(p.read("skills.toml").replace("\r\n", "\n").ends_with("allow-ranges = 1\n"));
 
-    std::fs::write(&editor, "#!/bin/sh\nprintf '[search]\\nskills-sh = true\\n' >> \"$1\"\n").unwrap();
+    fake_editor(&editor, &["[search]", "skills-sh = true"]);
     let out = p.global(&["config", "edit"], 0);
     assert!(out.contains("checked"), "{out}");
-    assert_eq!(config_toml(&p), "[search]\nskills-sh = true\n");
+    assert_eq!(config_toml(&p).replace("\r\n", "\n"), "[search]\nskills-sh = true\n");
 }

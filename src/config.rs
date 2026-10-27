@@ -195,13 +195,22 @@ fn edit(s: &Scope) -> Result<()> {
         .iter()
         .find_map(|v| std::env::var(v).ok().filter(|e| !e.trim().is_empty()))
         .unwrap_or_else(|| if cfg!(windows) { "notepad" } else { "vi" }.to_string());
-    // Like git, `code --wait` and other editors with arguments work; a path with spaces does not.
-    let mut words = editor.split_whitespace();
-    let status = std::process::Command::new(words.next().expect("not blank"))
-        .args(words)
-        .arg(&path)
-        .status()
-        .map_err(|e| Error::new(IO, format!("{editor}: {e}")))?;
+    // As in git, the editor is a shell command: `code --wait` works, and a path with spaces is quoted.
+    #[cfg(not(windows))]
+    let mut cmd = {
+        let mut c = std::process::Command::new("sh");
+        c.arg("-c").arg(format!("{editor} \"$@\"")).arg(&editor).arg(&path);
+        c
+    };
+    #[cfg(windows)]
+    let mut cmd = {
+        use std::os::windows::process::CommandExt;
+        // `/S` makes cmd drop only the outer quotes and run the rest as typed.
+        let mut c = std::process::Command::new("cmd");
+        c.raw_arg(format!("/S /C \"{editor} \"{}\"\"", path.display()));
+        c
+    };
+    let status = cmd.status().map_err(|e| Error::new(IO, format!("{editor}: {e}")))?;
     if !status.success() {
         bail!(MANIFEST, "{editor} exited with {status}; {shown} is as the editor left it");
     }
