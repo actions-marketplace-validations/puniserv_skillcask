@@ -207,10 +207,14 @@ impl<'a> Registry<'a> {
             return Ok(r.clone());
         }
         let url = packages_url(repo)?;
-        let json = self
-            .http
-            .get_json(url.as_str())?
-            .ok_or_else(|| Error::new(NETWORK, format!("repository {}: {} not found", repo.name, crate::http::redact(&url))))?;
+        let json = self.http.get_json(url.as_str())?.ok_or_else(|| {
+            // GitLab answers 404, not 401, for a private project read without a token.
+            let hint = match crate::http::auth_key(&url) {
+                Some(host) if !self.http.has_credential(url.as_str()) => format!(" (private repository? `skillcask auth set {host}`)"),
+                _ => String::new(),
+            };
+            Error::new(NETWORK, format!("repository {}: {} not found{hint}", repo.name, crate::http::redact(&url)))
+        })?;
         let r = Rc::new((url, json));
         self.roots.borrow_mut().insert(repo.url.clone(), r.clone());
         Ok(r)
@@ -260,7 +264,8 @@ impl<'a> Registry<'a> {
             match found {
                 Ok(f) => out.extend(f.into_iter().map(|(n, d)| (n, d, repo.name.clone()))),
                 Err(e) => {
-                    crate::ui::warn(format!("repository {}: {}", repo.name, e.msg));
+                    let prefix = format!("repository {}: ", repo.name);
+                    crate::ui::warn(if e.msg.starts_with(&prefix) { e.msg.clone() } else { format!("{prefix}{}", e.msg) });
                     (failed, errors) = (Some(e), errors + 1);
                 }
             }
