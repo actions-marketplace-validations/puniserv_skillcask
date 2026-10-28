@@ -17,7 +17,7 @@ import SkillcaskDomain
 /// stay wired to `newVersionFindings`, which only the planned capability (findings of the new version, from the
 /// CLI) fills; today only the `flags-planned` preview sets it.
 ///
-/// Matches, flags and counts are computed once per diff (and per query for matches), not on every read (SUI-18).
+/// Matches, flags and counts are computed once per diff (and per query for matches), not on every read.
 @MainActor @Observable public final class ReviewStore {
     public enum Phase: Hashable, Sendable {
         /// `diff` is running.
@@ -196,7 +196,34 @@ import SkillcaskDomain
 
     /// Review-only: asked so, or the tag moved. Update stays offered but is never the default button (Q3).
     public var isReviewOnly: Bool {
-        reviewOnlyRequested || tagMove != nil
+        reviewOnlyRequested || tagMove != nil || readsWaitingVersion != nil
+    }
+
+    /// The version waiting for the minimum release age that this sheet reads (the Versions cooldown's "Read the
+    /// changes…"): the row offered exactly the package's `Update.cooldown` version. Then `load` runs `diff --to`
+    /// (cooldown not applied) and Update is never offered, because `update` would not lock it yet.
+    public var readsWaitingVersion: Update.Cooldown? {
+        guard !isAll, let offeredVersion, let update = entry?.update, update.available == nil,
+            let cooldown = update.cooldown, Update.bare(cooldown.version) == Update.bare(offeredVersion)
+        else { return nil }
+        return cooldown
+    }
+
+    /// The single package's newer version that waits for the minimum release age, while `update` locks nothing
+    /// newer: the up-to-date state names it with its date.
+    public var waitingInRange: Update.Cooldown? {
+        guard !isAll, let update = entry?.update, update.available == nil else { return nil }
+        return update.cooldown
+    }
+
+    /// The row offered an update, but `diff` (what `update` would lock now) found nothing newer. On a GitHub or
+    /// git source this is the minimum release age: `github::newest` ignores it and `outdated` prints no cooldown
+    /// note there (src/github.rs 285–297), so the offer can name a version `update` will not lock yet.
+    public var offeredButNothingToLock: String? {
+        guard !isAll, isUpToDate, readsWaitingVersion == nil, let to = entry?.update?.available?.to else {
+            return nil
+        }
+        return to
     }
 
     /// Update is the default (Return) button: never while review-only.
@@ -215,19 +242,22 @@ import SkillcaskDomain
         snapshot?.targets?.entries.map(ShellCopy.agentName) ?? []
     }
 
-    /// Skills left out because their newer version waits for the minimum release age (Update All's note):
-    /// nothing newer in range (`within` is the lock) and a cooldown end known, grouped by the waiting version.
+    /// Skills left out because the newest version their range allows waits for the minimum release age
+    /// (`Update.cooldown`: `outdated` names `within` in its note, and `update` would not lock it), grouped by the
+    /// waiting version: Update All's note, and a single package's up-to-date state. Only the reviewed package for a
+    /// single review; nothing that `diff` lists.
     public var waiting: [(skills: [String], version: String?)] {
         let inDiff = Set(packages.map(\.name))
         var groups: [(skills: [String], version: String?)] = []
         for entry in snapshot?.entries ?? [] {
-            guard let package = entry.package, !inDiff.contains(package), let update = entry.update,
-                update.eligible != nil, update.available == nil
+            guard let package = entry.package, isAll || package == self.package, !inDiff.contains(package),
+                let update = entry.update, update.available == nil, let cooldown = update.cooldown
             else { continue }
-            if let index = groups.firstIndex(where: { $0.version == update.latest }) {
+            let version = Update.bare(cooldown.version)
+            if let index = groups.firstIndex(where: { $0.version == version }) {
                 groups[index].skills.append(entry.name)
             } else {
-                groups.append(([entry.name], update.latest))
+                groups.append(([entry.name], version))
             }
         }
         return groups
@@ -353,7 +383,8 @@ import SkillcaskDomain
     // MARK: - Load
 
     /// `diff [-- package]`, once per attempt: what the sheet's `.task(id: attempt)` runs. A preloaded or loaded
-    /// review runs nothing; a cancelled load (the sheet closed) records nothing.
+    /// review runs nothing. Every attempt that ran is recorded in Activity, a cancelled one (the sheet closed) as a
+    /// Cancelled row; only the sheet's state ignores a cancelled or superseded result.
     public func load() async {
         guard phase == .loading else { return }
         generation += 1
@@ -362,7 +393,13 @@ import SkillcaskDomain
         var trace = ActionRunner.ReadTrace(command: ActionCopy.unbuilt)
         let outcome: Result<UnifiedDiff, CLIError>
         do {
-            let invocation = try Invocation(.diff(package: package), in: scope, capabilities: capabilities)
+            let command: Invocation.Command =
+                if let package, let waiting = readsWaitingVersion {
+                    .diffTo(package: package, version: waiting.version)
+                } else {
+                    .diff(package: package)
+                }
+            let invocation = try Invocation(command, in: scope, capabilities: capabilities)
             trace.command = invocation.displayCommand
             let result = try await client.run(invocation)
             trace.status = result.status
@@ -521,9 +558,14 @@ import SkillcaskDomain
     }
 
     /// The primary button while the sheet's run is (`isRunning`) or is not in flight.
-    public func primaryButton(isRunning: Bool) -> PrimaryButton {
-        if isUpToDate {
+    /// `failure` is the sheet's last update failure: after an integrity failure (exit 4, a tamper-suspected
+    /// download) Update is neither the default nor enabled, so Return never retries it.
+    public func primaryButton(isRunning: Bool, failure: UserMessage? = nil) -> PrimaryButton {
+        if isDoneAlone {
             return .done
+        }
+        if failure?.isIntegrity == true {
+            return .update(isDefault: false, isEnabled: false)
         }
         if case .failed = phase, !isRunning {
             return .retry
@@ -531,8 +573,24 @@ import SkillcaskDomain
         return .update(isDefault: updateIsDefault, isEnabled: phase == .loaded && !packages.isEmpty && !isRunning)
     }
 
-    /// The title words: `Update pdf`, `Update 2 packages`; `Update All` until the packages are known.
+    /// Nothing can run, so the footer is Done alone (Esc still closes): nothing to update, or reading a version
+    /// that waits (`update` would not lock it) unless its `diff --to` failed (then Retry).
+    public var isDoneAlone: Bool {
+        if isUpToDate {
+            return true
+        }
+        if readsWaitingVersion != nil, case .failed = phase {
+            return false
+        }
+        return readsWaitingVersion != nil
+    }
+
+    /// The title words: `Update pdf`, `Update 2 packages`; `Update All` until the packages are known; `Changes in
+    /// jira-communication 4.3.0` while reading a version that waits.
     public var titleWords: String {
+        if let displayName, let waiting = readsWaitingVersion {
+            return ReviewUpdateCopy.changesTitle(displayName, version: Update.bare(waiting.version))
+        }
         if let displayName {
             return ReviewUpdateCopy.title(package: displayName)
         }
@@ -543,7 +601,7 @@ import SkillcaskDomain
     /// `1.2.0 → 1.4.0` once `diff` named the versions; before that (loading, fetch failed) the installed version
     /// and the one the row offered. Nil for Update All and once `diff` found nothing newer.
     public var versions: String? {
-        guard !isAll else { return nil }
+        guard !isAll, readsWaitingVersion == nil else { return nil }
         if let package = packages.first {
             return ReviewUpdateCopy.versions(from: package.from, to: package.to)
         }
@@ -571,6 +629,9 @@ import SkillcaskDomain
     /// What Update does, or what Update All runs; nil while nothing can be updated.
     public var footnote: String? {
         guard phase == .loaded, !isUpToDate else { return nil }
+        if let waiting = readsWaitingVersion {
+            return ReviewUpdateCopy.waitingFootnote(Update.bare(waiting.version), eligible: waiting.eligible)
+        }
         if isAll {
             return ReviewUpdateCopy.footerAll(count: packages.count)
         }
@@ -588,9 +649,27 @@ import SkillcaskDomain
         displayName.map(ReviewUpdateCopy.upToDateTitle) ?? ReviewUpdateCopy.upToDateAllTitle
     }
 
+    /// The up-to-date body. Update All names the skills left out by the minimum release age ("not included");
+    /// one package names its own waiting version and date, or, when the row offered a version that `diff` does
+    /// not reach, says the command-line tool has nothing to lock now. Either replaces "Nothing newer exists…".
     public var upToDateBody: String {
-        guard let displayName else { return ReviewUpdateCopy.upToDateAllBody }
-        return ReviewUpdateCopy.upToDateBody(name: displayName, version: entry?.version, range: allowedRange)
+        guard let displayName else {
+            let notes = waiting.map { ReviewUpdateCopy.notIncluded($0.skills, version: $0.version) }
+            return notes.isEmpty ? ReviewUpdateCopy.upToDateAllBody : notes.joined(separator: " ")
+        }
+        var instead: [String] = []
+        if let cooldown = waitingInRange {
+            instead = [ReviewUpdateCopy.waitsInRange(Update.bare(cooldown.version), eligible: cooldown.eligible)]
+        } else if let offered = offeredButNothingToLock {
+            instead = [ReviewUpdateCopy.nothingToLockNow(offered: offered)]
+        }
+        return ReviewUpdateCopy.upToDateBody(
+            name: displayName, version: entry?.version, range: allowedRange, waiting: instead)
+    }
+
+    /// `Fetching changes for 1.4.0…` while `diff` runs: the offered version, else the package's name.
+    public var fetchingText: String {
+        ReviewUpdateCopy.fetching(offeredVersion ?? displayName)
     }
 
     /// `Couldn’t fetch the changes for 1.4.0`.
@@ -637,8 +716,36 @@ import SkillcaskDomain
     ) -> Task<Void, Never>? {
         guard phase == .loaded, !packages.isEmpty else { return nil }
         let toast = outcomeText
+        let reviewed = packages.map {
+            ReviewUpdateCopy.Reviewed(package: $0.name, name: name(of: $0.name), from: $0.from, to: $0.to)
+        }
+        let single = !isAll
         return run.start(
             updateCommand, title: runTitle, failure: ReviewUpdateCopy.couldNotUpdate(displayName),
-            outcome: { _ in toast }, in: store, runner: runner, onSuccess: onSuccess)
+            outcome: { _ in toast },
+            report: { _, transcript in
+                Self.lockedOther(reviewed, transcript: transcript)
+                    .map { ReviewUpdateCopy.updatedOther(reviewed, $0, single: single) } ?? toast
+            },
+            tone: { transcript in Self.lockedOther(reviewed, transcript: transcript) == nil ? .success : .warning },
+            in: store, runner: runner, onSuccess: onSuccess)
+    }
+
+    /// The reviewed packages `update` did not lock at the version the sheet showed, from its report lines
+    /// (`src/commands.rs` `update`, 1645-1651): `updated <package> <from> -> <to>` with another `to` (the same
+    /// `new.version` the diff names), or no `updated`/`locked` line at all, which the CLI prints nothing for when
+    /// it resolved the version already locked. Nil when every reviewed package got the reviewed version. A
+    /// dependency the update also moved is not reviewed and not reported.
+    nonisolated static func lockedOther(
+        _ reviewed: [ReviewUpdateCopy.Reviewed], transcript: [OutputLine]
+    ) -> [ReviewUpdateCopy.Locked]? {
+        let report = MutationReport(verbLines: ActionRunner.stdout(of: transcript))
+        let other = reviewed.compactMap { item -> ReviewUpdateCopy.Locked? in
+            if let line = report.updated.first(where: { $0.package == item.package }) {
+                return line.to == item.to ? nil : ReviewUpdateCopy.Locked(item, locked: line.to)
+            }
+            return report.locked.contains(item.package) ? nil : ReviewUpdateCopy.Locked(item, locked: nil)
+        }
+        return other.isEmpty ? nil : other
     }
 }

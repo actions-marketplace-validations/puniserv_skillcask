@@ -30,7 +30,7 @@ public struct DetailActions: Hashable, Sendable {
     public let showsSourcePill: Bool
     /// The mono path (`.skills/my-notes`, Detail-States) on the third line of a project or local skill, where a
     /// package row shows its package name; the header draws the kind pill ("Project", "Local") beside it, as
-    /// Detail-States does (P3-3 board/note decision, see `DetailHeader.packageLine`).
+    /// Detail-States does (board/note decision, see `DetailHeader.packageLine`).
     public let showsPath: Bool
 
     public init(

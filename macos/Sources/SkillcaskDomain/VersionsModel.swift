@@ -11,8 +11,9 @@ import SkillcaskCore
 /// version gets that date only when it is the same version; otherwise the date is nil and the view says "unknown"
 /// (Q6).
 public struct VersionsModel: Hashable, Sendable {
-    /// `tag v4.1.0 moved from a81f2c0d4e9b to 3fd09e1c7a52`: the CLI's free-text note on a GitHub tag source whose
-    /// tag now points at another commit (Q3). Matched on the `tag ` prefix and the ` moved from ` / ` to ` words.
+    /// `tag 4.0.1 moved from a81f2c0d4e9b to 3fd09e1c7a52`: the CLI's free-text note on a GitHub tag source whose
+    /// LOCKED version's tag now points at another commit than skills.lock recorded (Q3; `moved_tag`,
+    /// src/commands.rs 1775–1779). Matched on the `tag ` prefix and the ` moved from ` / ` to ` words.
     public struct TagMove: Hashable, Sendable {
         public let tag: String
         /// The commit the lock recorded for the tag.
@@ -43,7 +44,7 @@ public struct VersionsModel: Hashable, Sendable {
 
     /// A newer version that waits for the policy's minimum release age.
     public struct Cooldown: Hashable, Sendable {
-        /// The waiting version, from the note (`4.3.0 eligible …`) or else `latest`; never with a leading `v`.
+        /// The waiting version, from the note (`4.3.0 eligible …`); never with a leading `v`.
         public let version: String
         /// When it becomes eligible; nil when neither `eligible` nor the note names a date.
         public let eligible: Date?
@@ -241,22 +242,13 @@ public struct VersionsModel: Hashable, Sendable {
         return lower..<upper
     }
 
+    /// The waiting version of `update` (`Update.cooldown`: the note's version, which the CLI takes from `within`),
+    /// without a leading `v`; nil when nothing newer than the lock waits.
     private static func cooldown(_ update: Update) -> Cooldown? {
-        let noted = update.note.flatMap(Self.notedVersion)
-        guard update.eligible != nil || noted != nil else { return nil }
-        guard let version = noted ?? update.latest else { return nil }
-        let released = version == update.latest ? update.released : nil
-        return Cooldown(version: version, eligible: update.eligible, released: released)
-    }
-
-    /// `4.3.0` of `v4.3.0 eligible 2026-10-30T09:14:00Z`.
-    private static func notedVersion(_ note: String) -> String? {
-        guard let range = note.range(of: " eligible ") else { return nil }
-        var version = note[..<range.lowerBound].trimmingCharacters(in: .whitespaces)
-        if version.hasPrefix("v") {
-            version.removeFirst()
-        }
-        return version.isEmpty || version.contains(" ") ? nil : version
+        guard let waiting = update.cooldown else { return nil }
+        let version = Update.bare(waiting.version)
+        let released = update.latest.map(Update.bare) == version ? update.released : nil
+        return Cooldown(version: version, eligible: waiting.eligible, released: released)
     }
 
     private static func status(update: Update?, tagMove: TagMove?, cooldown: Cooldown?) -> Status {

@@ -1,7 +1,23 @@
+import Foundation
+
 /// The words of the Review Update sheet (S7: ReviewUpdate and ReviewUpdate-States boards).
 ///
 /// Board strings are verbatim. Invented strings (no board draws them), every one declared here:
-/// - `loading` "Fetching the changes…"
+/// - `fetching(_:)` without a version: "Fetching changes for pdf…", and "Fetching changes…" for Update All (the
+///   board's "Fetching changes for 1.4.0…" is used whenever the row offered a version)
+/// - `upToDateBody` with a waiting version: for Update All the board's `notIncluded` sentence, for one package
+///   `waitsInRange` ("4.3.0 is inside your range but waits for the minimum release age until 30 Oct 2026."),
+///   replaces "Nothing newer exists …" (false then: `outdated` names a newer version in range that waits)
+/// - `nothingToLockNow` "The command-line tool has nothing newer to lock now; 1.4.0 may still be inside the minimum
+///   release age." when a row offered a version `diff` does not reach (GitHub/git sources: no cooldown note)
+/// - `changesTitle` "Changes in jira-communication 4.3.0", the waiting read's title, with Done alone in the footer
+/// - `waitingFootnote` "Update can lock 4.3.0 from 30 Oct 2026, once it is past the minimum release age." while
+///   the sheet reads a waiting version with `diff --to` (the Versions cooldown's "Read the changes…")
+///
+/// Deviation from the boards: a failed update shows Details in the sheet's
+/// banner, and Details discloses the run's command and transcript IN the sheet (selectable, with Copy), because
+/// Activity cannot open over a modal sheet; the board's list banner sends Details to Activity. The run also stays
+/// in Activity after the sheet closes. An integrity failure never offers Retry here either.
 /// - `updatingAll` "Updating 2 packages…", `updatedAll` "Updated pdf and review-pr"
 /// - `upToDateAllTitle` "Everything is up to date", `upToDateAllBody`
 /// - `upToDateBody` without a known range ("… Nothing newer exists inside your range.") and without a known
@@ -24,6 +40,12 @@ public enum ReviewUpdateCopy {
     public static func title(package: String, from: String? = nil, to: String? = nil) -> String {
         guard let from, let to else { return "Update \(package)" }
         return "Update \(package) \(from) → \(to)"
+    }
+
+    /// `Changes in jira-communication 4.3.0`: the title while reading a version that waits (`diff --to`), which is a
+    /// review, not an update. Invented.
+    public static func changesTitle(_ name: String, version: String) -> String {
+        "Changes in \(name) \(version)"
     }
 
     /// `1.2.0 → 1.4.0`, the mono part of the title; `1.4.0` for a package new to the lock.
@@ -151,8 +173,14 @@ public enum ReviewUpdateCopy {
 
     // MARK: - States
 
-    /// The loading line while `diff` downloads. Invented.
-    public static let loading = "Fetching the changes…"
+    /// The loading line while `diff` downloads: `Fetching changes for 1.4.0…` (Flow-F3); the package's name when
+    /// no version was offered, nothing after "changes" for Update All (both invented).
+    public static func fetching(_ what: String?) -> String {
+        what.map { "Fetching changes for \($0)…" } ?? "Fetching changes…"
+    }
+
+    /// The button under the in-sheet transcript of a failed run; Activity's own word.
+    public static let copyTranscript = ActivityCopy.copy
 
     /// `pdf is up to date` (ReviewUpdate-States).
     public static func upToDateTitle(_ name: String) -> String {
@@ -160,13 +188,38 @@ public enum ReviewUpdateCopy {
     }
 
     /// `1.4.0 is installed and matches skills.lock. Nothing newer exists inside your range ^1.2.` (ReviewUpdate-
-    /// States); without a range or version the sentence shortens (invented).
-    public static func upToDateBody(name: String, version: String?, range: String?) -> String {
+    /// States); without a range or version the sentence shortens (invented). When the newest version in range
+    /// waits for the minimum release age, `waiting` (the `notIncluded` sentences) replaces the second sentence,
+    /// which would be false then.
+    public static func upToDateBody(name: String, version: String?, range: String?, waiting: [String] = []) -> String {
         let installed = version.map { "\($0) is installed and matches skills.lock." } ?? "\(name) matches skills.lock."
+        guard waiting.isEmpty else { return ([installed] + waiting).joined(separator: " ") }
         let newer =
             range.map { "Nothing newer exists inside your range `\($0)`." }
             ?? "Nothing newer exists inside your range."
         return installed + " " + newer
+    }
+
+    /// One package's up-to-date state when its newest version in range waits: `4.3.0 is inside your range but
+    /// waits for the minimum release age until 30 Oct 2026.` Invented; without a date it ends at "age".
+    public static func waitsInRange(_ version: String, eligible: Date?, timeZone: TimeZone = .current) -> String {
+        let until = eligible.map { " until \(Formatters.dayMonthYear($0, timeZone: timeZone))" } ?? ""
+        return "\(version) is inside your range but waits for the minimum release age\(until)."
+    }
+
+    /// The row offered `offered` but `diff` finds nothing to lock: on a GitHub or git source `outdated` ignores the
+    /// minimum release age and prints no cooldown note (src/github.rs 285–297). Invented.
+    public static func nothingToLockNow(offered: String) -> String {
+        "The command-line tool has nothing newer to lock now; \(offered) may still be inside the minimum release age."
+    }
+
+    /// The footer while reading a version that waits (`diff --to`): `Update can lock 4.3.0 from 30 Oct 2026, once
+    /// it is past the minimum release age.` Invented.
+    public static func waitingFootnote(_ version: String, eligible: Date?, timeZone: TimeZone = .current) -> String {
+        guard let eligible else { return "Update can lock \(version) once it is past the minimum release age." }
+        return
+            "Update can lock \(version) from \(Formatters.dayMonthYear(eligible, timeZone: timeZone)), once it is past the minimum "
+            + "release age."
     }
 
     /// Update All with nothing in range. Invented.
@@ -230,6 +283,61 @@ public enum ReviewUpdateCopy {
     public static func couldNotUpdate(_ name: String?) -> String {
         OutcomeCopy.couldNot("update \(name ?? "the packages")")
     }
+
+    /// One package the sheet reviewed: its name for the toast and the versions the diff showed.
+    public struct Reviewed: Hashable, Sendable {
+        public let package: String
+        public let name: String
+        public let from: String?
+        public let to: String
+
+        public init(package: String, name: String, from: String?, to: String) {
+            self.package = package
+            self.name = name
+            self.from = from
+            self.to = to
+        }
+    }
+
+    /// A reviewed package `update` did not lock at the reviewed version: `locked` is what it locked instead, nil
+    /// when it updated nothing for it.
+    public struct Locked: Hashable, Sendable {
+        public let reviewed: Reviewed
+        public let locked: String?
+
+        public init(_ reviewed: Reviewed, locked: String?) {
+            self.reviewed = reviewed
+            self.locked = locked
+        }
+
+        /// `pdf is at 1.4.1, not the reviewed 1.4.0`, `pdf was not updated; it stays at 1.2.0`.
+        var sentence: String {
+            let name = reviewed.name
+            guard let locked else {
+                return reviewed.from.map { "\(name) was not updated; it stays at \($0)" } ?? "\(name) was not updated"
+            }
+            return "\(name) is at \(locked), not the reviewed \(reviewed.to)"
+        }
+    }
+
+    /// The update toast when the CLI did not lock what the sheet reviewed, in the warning tone. Invented. One
+    /// package: `Updated pdf to 1.4.1, not the reviewed 1.4.0`, `pdf was not updated; it stays at 1.2.0`. Update
+    /// All names only what did move, then each exception: `Updated review-pr · pdf was not updated; it stays at
+    /// 1.2.0`; `Nothing was updated · pdf was not updated; …` when none moved.
+    public static func updatedOther(_ reviewed: [Reviewed], _ locked: [Locked], single: Bool) -> String {
+        if single, locked.count == 1 {
+            let only = locked[0]
+            guard let version = only.locked else { return only.sentence }
+            return "\(OutcomeCopy.updated(only.reviewed.name, to: version)), not the reviewed \(only.reviewed.to)"
+        }
+        let stayed = Set(locked.filter { $0.locked == nil }.map(\.reviewed.package))
+        let moved = reviewed.filter { !stayed.contains($0.package) }.map(\.name)
+        let head = moved.isEmpty ? nothingUpdated : updatedAll(moved)
+        return head + " · " + locked.map(\.sentence).joined(separator: "; ")
+    }
+
+    /// The head of Update All's toast when the CLI moved none of the reviewed packages. Invented.
+    public static let nothingUpdated = "Nothing was updated"
 
     /// `Updated pdf and review-pr`, the toast of Update All. Invented, in the voice of `OutcomeCopy.updated`.
     public static func updatedAll(_ names: [String]) -> String {

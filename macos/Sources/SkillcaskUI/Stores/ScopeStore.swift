@@ -3,20 +3,20 @@ import Observation
 import SkillcaskCore
 import SkillcaskDomain
 
-/// Everything the window knows about one scope (ADR §3, §5): the documents of the last refresh as a
+/// Everything the window knows about one scope: the documents of the last refresh as a
 /// `ScopeSnapshot`, the list's filter, query and selection, and the selected row's `SkillDetail`. One store per
 /// scope, cached by `AppStore`, never shared, writing only to itself, so no result of one scope can land in another.
 ///
 /// Refresh policy: opening runs the offline trio (`status`, `audit`, `doctor`) in parallel; `outdated` runs only
 /// on an explicit `checkUpdates()`. Every write after an `await` is guarded by the generation captured at the
-/// start and by `Task.isCancelled`, so a late answer is dropped (CC-10). Documents are replaced, never nilled
+/// start and by `Task.isCancelled`, so a late answer is dropped. Documents are replaced, never nilled
 /// first: the previous snapshot stays on screen while `isRefreshing`. Selection is an id re-resolved against the
 /// new snapshot; a vanished row deselects and the Overview shows.
 @MainActor @Observable public final class ScopeStore {
     /// Reads a skill's SKILL.md off the main actor; injected so previews and tests need no files on disk.
     public typealias TextReader = @Sendable (URL) async throws -> SkillText
 
-    /// A scope re-selected within this interval is not refreshed again (ADR §5).
+    /// A scope re-selected within this interval is not refreshed again.
     public static let freshness: TimeInterval = 60
 
     public let scope: Scope
@@ -27,7 +27,7 @@ import SkillcaskDomain
     private let textReader: TextReader
     /// Settings read on open (`checkUpdatesOnOpen`); nil in tests that need none.
     private let settings: SettingsStore?
-    /// The app's queue, asked before an automatic refresh (ADR §5 rule 4); nil in tests that need none.
+    /// The app's queue, asked before an automatic refresh; nil in tests that need none.
     private let queue: MutationQueue?
     /// Where the reads the user starts are recorded for Activity (S15), set by `AppStore`; nil records nothing.
     /// Recorded: opening the scope (`refreshIfStale` when it reads: "Opened api"), `refresh()` (⌘R, a failed
@@ -36,6 +36,9 @@ import SkillcaskDomain
     /// mutation's own row stands for it) and the `outdated` that Settings "check updates when a project opens"
     /// adds to the first open.
     @ObservationIgnored public var recordActivity: ActionRunner.ActivitySink?
+    /// Called when a refresh of a project finds no skills.toml in its folder (the CLI's or `GuardedClient`'s
+    /// `skills.toml not found`), so `AppStore` checks the sidebar's set-up state again; nil in tests that need none.
+    @ObservationIgnored public var onManifestMissing: (@MainActor () -> Void)?
 
     /// Why a read runs, which decides its Activity row.
     private enum Read {
@@ -64,6 +67,31 @@ import SkillcaskDomain
     public private(set) var checkedAt: Date?
     /// The last failure of a read-only command; kept beside the snapshot so the header can say what went wrong.
     public private(set) var lastError: CLIError?
+    /// The last refresh read `status` but `audit` or `doctor` failed: the findings or Health on screen are the
+    /// previous ones (or missing on a first load), and the Overview header says so. Cleared by a refresh in which
+    /// both answered.
+    public private(set) var partialFailure: PartialFailure?
+
+    /// Which of `audit` and `doctor` failed in the last refresh, and whether an earlier document stands in.
+    public struct PartialFailure: Hashable, Sendable {
+        public enum Read: Hashable, Sendable {
+            case audit
+            case doctor
+        }
+
+        /// The failed reads, `audit` first.
+        public let failed: [Read]
+        /// The failed reads whose earlier document is still shown.
+        public let kept: Set<Read>
+        /// The first failure, for Details.
+        public let error: CLIError
+
+        public init(failed: [Read], kept: Set<Read>, error: CLIError) {
+            self.failed = failed
+            self.kept = kept
+            self.error = error
+        }
+    }
     public private(set) var detail: SkillDetail?
     public private(set) var isLoadingDetail = false
 
@@ -122,7 +150,7 @@ import SkillcaskDomain
     // MARK: - Refresh
 
     /// The offline trio unless the snapshot is younger than `freshness`: what a scope re-selection runs. Deferred
-    /// while a mutation of this scope runs or waits (ADR §5 rule 4: the runner refreshes when it finishes). With
+    /// while a mutation of this scope runs or waits (the runner refreshes when it finishes). With
     /// Settings "check updates when a project opens", the first open also runs `outdated` in the background.
     public func refreshIfStale() async {
         if let checkedAt, snapshot != nil, Date().timeIntervalSince(checkedAt) < Self.freshness {
@@ -138,7 +166,8 @@ import SkillcaskDomain
         }
     }
 
-    /// `status`, `audit` and `doctor` in parallel, then one snapshot. `outdated` is kept from the last check.
+    /// `status`, `audit` and `doctor` in parallel, then one snapshot (on the first load a status-only snapshot
+    /// first, as soon as `status` answers). `outdated` is kept from the last check.
     /// `isRefreshing` ends with this refresh however it returns (cancelled included), unless a newer one started.
     public func refresh() async {
         await refresh(keeping: nil, recording: .refresh)
@@ -159,9 +188,15 @@ import SkillcaskDomain
         async let status = traced(StatusDocument.self, .status)
         async let audit = traced(AuditDocument.self, .audit)
         async let doctor = traced(DoctorDocument.self, .doctor(fix: false))
-        let ((statusResult, statusTrace), (auditResult, auditTrace), (doctorResult, doctorTrace)) = await (
-            status, audit, doctor
-        )
+        let (statusResult, statusTrace) = await status
+        // Flow-F1 "Rows fill in as each answers": on the first load the rows show from `status` alone while
+        // `audit` and `doctor` still run; they merge below. A later refresh keeps the previous snapshot instead, so
+        // findings and Health never blink out (and a Repair's document keeps its lifetime).
+        if snapshot == nil, mine == generation, !Task.isCancelled, case .success(let document) = statusResult {
+            documents.status = document
+            rebuild()
+        }
+        let ((auditResult, auditTrace), (doctorResult, doctorTrace)) = await (audit, doctor)
         // A read superseded or cancelled (switching scopes cancels the list's `.task(id:)`) is not the user's
         // outcome: only a read that ended is recorded, with the first failure among the three.
         guard mine == generation, !Task.isCancelled else { return }
@@ -178,20 +213,62 @@ import SkillcaskDomain
         switch statusResult {
         case .success(let document):
             documents.status = document
-            documents.audit = try? auditResult.get()
-            documents.doctor = try? doctorResult.get()
+            // A failed `audit` or `doctor` keeps the document of the last refresh in which it answered, so findings,
+            // Health and the SKILL.md paths do not vanish behind a passing failure; `partialFailure` says so.
+            var failed: [PartialFailure.Read] = []
+            var kept: Set<PartialFailure.Read> = []
+            var firstError: CLIError?
+            switch auditResult {
+            case .success(let audit):
+                documents.audit = audit
+            case .failure(let error):
+                if error != .cancelled {
+                    failed.append(.audit)
+                    firstError = firstError ?? error
+                    if documents.audit != nil { kept.insert(.audit) }
+                }
+            }
+            switch doctorResult {
+            case .success(let doctor):
+                documents.doctor = doctor
+            case .failure(let error):
+                if error != .cancelled {
+                    failed.append(.doctor)
+                    firstError = firstError ?? error
+                    if documents.doctor != nil || repair != nil { kept.insert(.doctor) }
+                }
+            }
             documents.repair = repair
             lastError = nil
+            partialFailure = firstError.map { PartialFailure(failed: failed, kept: kept, error: $0) }
             rebuild()
         case .failure(.cancelled):
             documents.repair = nil
         case .failure(let error):
             documents.repair = nil
             lastError = error
-            if snapshot == nil {
+            // The whole refresh failed: `lastError` says why, and no strip about `audit` or `doctor` from an older
+            // refresh stays beside it.
+            partialFailure = nil
+            if !scope.isPersonal, Presentation.forFailedLoad(error) == .noManifest {
+                // The folder has no skills.toml (any more): nothing read before stays on screen, and the sidebar's
+                // set-up state is checked again, so the window shows Set Up instead of a stale or parent project.
+                forgetDocuments()
+                presentation = .noManifest
+                onManifestMissing?()
+            } else if snapshot == nil {
                 presentation = Presentation.forFailedLoad(error)
             }
         }
+    }
+
+    /// Drops every document, the snapshot and the selection: the scope has no project to show.
+    private func forgetDocuments() {
+        documents = Documents()
+        snapshot = nil
+        partialFailure = nil
+        selection = nil
+        detail = nil
     }
 
     /// `outdated --json`: the one network read, never implicit (Check Now, ⌘R, the Updates card, or Settings
@@ -234,11 +311,16 @@ import SkillcaskDomain
         }
     }
 
-    /// The refresh a finished mutation asks for (ADR §5): the offline trio, and `outdated` again only when it had
+    /// The refresh a finished mutation asks for: the offline trio, and `outdated` again only when it had
     /// been checked before, so "last checked" stays truthful.
+    /// The selected row's detail is read again after the trio, so its info and Contents show what the mutation
+    /// installed (an update's new version) instead of what was there before.
     /// - Parameter repair: The finished Repair's `doctor --fix --json`, shown until the next refresh lands.
     public func refreshAfterMutation(repair: DoctorDocument? = nil) async {
         await refresh(keeping: repair, recording: nil)
+        if selectedEntry != nil {
+            await loadDetail()
+        }
         if documents.outdated != nil {
             await checkUpdates(recording: nil)
         }
@@ -259,6 +341,11 @@ import SkillcaskDomain
         checkedAt = Date()
         self.presentation = presentation
         self.isRefreshing = isRefreshing
+    }
+
+    /// Previews: the warning of a refresh that read `status` but not `audit` or `doctor`.
+    func preload(partialFailure: PartialFailure) {
+        self.partialFailure = partialFailure
     }
 
     private func rebuild() {
@@ -386,7 +473,7 @@ import SkillcaskDomain
 
     // MARK: - Package versions
 
-    /// `info --json -- <package>` per package, kept for the session (ADR §5): the Versions tab's full list.
+    /// `info --json -- <package>` per package, kept for the session: the Versions tab's full list.
     public private(set) var packageInfo: [String: InfoDocument] = [:]
     /// Packages whose `info` is in flight.
     public private(set) var loadingPackageInfo: Set<String> = []
@@ -458,7 +545,7 @@ import SkillcaskDomain
     }
 
     /// The default reader: a nonisolated async function runs off the caller's actor (tools 6.0), so the file read
-    /// never blocks the main actor (SUI-20).
+    /// never blocks the main actor.
     public nonisolated static func readText(at url: URL) async throws -> SkillText {
         try SkillText.read(contentsOf: url)
     }

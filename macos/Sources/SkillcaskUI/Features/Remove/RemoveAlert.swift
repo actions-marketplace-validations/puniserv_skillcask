@@ -171,7 +171,8 @@ import SwiftUI
                     command, title: title, failure: failure, outcome: { _ in "" },
                     report: { scope, transcript in
                         Self.toast(removed: removed, packageOf: packages, transcript: transcript, scope: scope)
-                    }, in: store)
+                    },
+                    tone: { transcript in Self.keptCopies(in: transcript).isEmpty ? .success : .warning }, in: store)
             }
         case .reveal(let url):
             // Lexically inside the root (checked at request time); here, with the links on disk resolved too.
@@ -187,7 +188,7 @@ import SwiftUI
     // MARK: - Helpers
 
     /// The success toast from the CLI's own lines: a package it printed `kept … as a dependency` for is never
-    /// said to be removed.
+    /// said to be removed, and neither is a skill whose folder it kept (`keptCopies`).
     nonisolated static func toast(
         removed: [String], packageOf: [String: String], transcript: [OutputLine], scope: String
     ) -> String {
@@ -195,8 +196,28 @@ import SwiftUI
             if case .stdout(let text) = line { text } else { nil }
         }
         let kept = MutationReport(verbLines: stdout.joined(separator: "\n")).kept
-        let gone = removed.filter { name in packageOf[name].map { !kept.contains($0) } ?? true }
-        return RemoveCopy.removedToast(gone, kept: kept, scope: scope)
+        let copies = keptCopies(in: transcript)
+        let gone = removed.filter { name in
+            !copies.contains(name) && (packageOf[name].map { !kept.contains($0) } ?? true)
+        }
+        return RemoveCopy.removedToast(
+            gone, kept: kept, copies: removed.filter(copies.contains) + copies.subtracting(removed).sorted(),
+            scope: scope)
+    }
+
+    /// The skills whose folder `remove` left in place: `warning: kept <path>: modified or not installed by
+    /// skillcask` on stderr (`src/commands.rs` `materialize`, the store entry `.agents/skills/<skill>`, `~/`-led
+    /// for My Skills). Their entry leaves skills.toml and skills.lock and their links go, but the files stay.
+    nonisolated static func keptCopies(in transcript: [OutputLine]) -> Set<String> {
+        Set(
+            transcript.compactMap { line -> String? in
+                guard case .stderr(let text) = line,
+                    let match = text.wholeMatch(
+                        of: #/warning: kept (?<path>.+): modified or not installed by skillcask/#),
+                    let skill = match.path.split(separator: "/").last
+                else { return nil }
+                return String(skill)
+            })
     }
 
     /// The folder of a not managed `entry` inside `root`: its audit `path`, else `<first target>/<name>`. Every

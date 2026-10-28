@@ -33,8 +33,8 @@ enum ContentsState: Equatable {
         MarkdownBlocks.span(containing: line - text.bodyStartLine, in: spans)
     }
 
-    /// The blocks to outline (Contents board, P2-9's colours): every risky-pattern or invisible-character finding
-    /// of this skill's SKILL.md with a line in the body, by block index; risky wins when both hit one block.
+    /// The blocks to outline (Contents board, the diff pane's colours): every risky-pattern or invisible-character
+    /// finding of this skill's SKILL.md with a line in the body, by block index; risky wins when both hit one block.
     static func flags(
         for entry: SkillEntry, text: SkillText, spans: [MarkdownBlocks.Span]
     ) -> [Int: DiffFlag.Kind] {

@@ -43,7 +43,7 @@ extension Font {
 
         /// Line heights the boards fix outside the scale.
         public enum LineHeight {
-            /// The diff grid draws `type.mono.small` on an 18 pt line (Components `.sc .dl`, gap G13; P2-9).
+            /// The diff grid draws `type.mono.small` on an 18 pt line (Components `.sc .dl`, gap G13).
             public static let diff: CGFloat = 18
             /// The Activity transcript draws `type.mono.small` on a 15 pt line (Activity board `.mono` with
             /// `line-height: 15px`), as G13 records for the diff grid's 18 pt.

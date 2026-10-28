@@ -1,4 +1,4 @@
-/// The block structure of a SKILL.md body, for the Contents tab's read-only rendering (ADR §9 risk 5): headings,
+/// The block structure of a SKILL.md body, for the Contents tab's read-only rendering: headings,
 /// paragraphs, bullet and numbered lists, fenced code blocks, block quotes and horizontal rules. Everything inside a
 /// block (emphasis, inline code, links) stays as Markdown source for the view's inline renderer; a fenced code
 /// block keeps its lines verbatim. Not CommonMark: no setext headings, no indented code blocks, no lazy

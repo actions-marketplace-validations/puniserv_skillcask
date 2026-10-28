@@ -113,6 +113,8 @@ import Testing
                 + "Health.")
         #expect(AgentsCard.unlinked(DesignFixtures.api) == ["jira-syntax", "sql-review"])
         #expect(AgentsCard.unlinked(DesignFixtures.website).isEmpty, "a healthy project links every skill")
+        #expect(OverviewCopy.linked(skills: 0, agents: 2) == "No skills linked yet.", "an empty project")
+        #expect(OverviewCopy.linked(skills: 1, agents: 2) == "1 skill is linked into both.")
     }
 
     // MARK: - Policy and sources

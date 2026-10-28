@@ -63,6 +63,9 @@ public struct FixtureCLIClient: CLIClient {
             // Update All (no package) reviews pdf and review-pr, as ReviewUpdate-States draws it.
             let review = package == nil ? DesignFixtures.text("diff.review-pr", "txt") : ""
             return answer(invocation, text: DesignFixtures.text("diff.pdf", "txt") + review)
+        case .diffTo:
+            // Read the changes… of the cooldown: jira-communication's waiting 4.3.0, cooldown not applied.
+            return answer(invocation, text: DesignFixtures.text("diff.jira-communication", "txt"))
         case .install, .doctor(fix: true), .update, .add, .remove, .initialize:
             for line in DesignFixtures.Transcripts.sync {
                 onLine(.stdout(line))
@@ -72,8 +75,11 @@ public struct FixtureCLIClient: CLIClient {
                 throw .cancelled
             }
             return RunResult(invocation: invocation, status: .exited(0), stdout: Data(), stderr: "")
-        case .authSet, .authRemove:
+        case .authSet, .authRemove, .configSet:
             return RunResult(invocation: invocation, status: .exited(0), stdout: Data(), stderr: "")
+        case .config:
+            // Nothing set: what `config --json` prints for a key no layer sets, with its exit 1.
+            return answer(invocation, text: #"{"from":null,"value":null}"#, exit: 1)
         }
     }
 

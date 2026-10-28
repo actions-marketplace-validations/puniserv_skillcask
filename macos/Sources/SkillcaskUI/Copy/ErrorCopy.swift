@@ -2,7 +2,7 @@ import Foundation
 import SkillcaskCore
 import SkillcaskDomain
 
-/// What a failure says on screen (ADR §6, brief §13): one sentence of what went wrong, one of what to do, then
+/// What a failure says on screen: one sentence of what went wrong, one of what to do, then
 /// "Details" with the raw transcript. Exit codes and command names never appear in the sentences; the raw text
 /// lives in `details` only. Built by `ErrorCopy`; the `FailureBanner` draws it.
 public struct UserMessage: Hashable, Sendable {
@@ -33,6 +33,8 @@ public struct UserMessage: Hashable, Sendable {
     /// A part of `reason` or `action` the user will meet verbatim in a file, drawn in SF Mono (`packagist, acme`
     /// in the policy refusal of AddSkill-States); the first occurrence only.
     public var monoFragment: String?
+    /// A read the app stopped at its time limit (`CLIError.timedOut`): Retry, but a clock, not the network mark.
+    public var isTimeout = false
 
     public init(
         title: String, reason: String? = nil, action: String? = nil, details: String? = nil,
@@ -96,6 +98,10 @@ public enum ErrorCopy {
     /// `--version` printed something that is not a skillcask version line: the path points at another program.
     public static let unreadableVersionTitle = "The command-line tool at the configured path isn’t Skillcask."
     public static let unreadableVersionAction = "Check its path in Settings."
+    /// Invented (no board shows it): the configured path is the Skillcask app itself (`CLIError.binaryIsApp`).
+    public static let binaryIsAppTitle = "That file is the Skillcask app, not the command-line tool."
+    /// Invented, with `binaryIsAppTitle`.
+    public static let binaryIsAppAction = "Choose the skillcask command-line tool instead."
     public static let unsupportedTitle = "The installed command-line tool can’t do this yet."
     public static let unsupportedAction = "Upgrade it to a newer version."
     public static let invalidInvocationTitle = "Skillcask couldn’t build this command."
@@ -107,11 +113,23 @@ public enum ErrorCopy {
     public static let decodeTitle = "The command-line tool answered with something this app can’t read."
     public static let decodeAction = "Update the app or the tool so they match."
     public static let outputTooLargeTitle = "The command-line tool’s answer was too large to read."
+    /// Invented (no board shows it): a read-only command passed `GuardedClient.readTimeout` and the app stopped it.
+    public static let timedOutTitle = "The command-line tool didn’t answer in time."
+    /// Invented, with `timedOutTitle`: `Skillcask stopped it after 2 minutes. Try again.` (15 minutes for a read
+    /// that talks to registries; seconds below a minute).
+    public static func timedOutAction(after limit: Duration) -> String {
+        let seconds = limit.components.seconds
+        let span =
+            seconds >= 60 && seconds % 60 == 0
+            ? (seconds == 60 ? "1 minute" : "\(seconds / 60) minutes")
+            : (seconds == 1 ? "1 second" : "\(seconds) seconds")
+        return "Skillcask stopped it after \(span). Try again."
+    }
     /// What `title` becomes when the CLI's message is blank.
     static let blankMessage = "Something went wrong."
 
-    /// The CLI hints the app rewords (ADR §6: "reworded only when a table entry exists, else verbatim"), keyed by
-    /// the exact hint `src/*.rs` prints; the UI words follow brief §6 (install → Sync, doctor --fix → Repair, …).
+    /// The CLI hints the app rewords ("reworded only when a table entry exists, else verbatim"), keyed by
+    /// the exact hint `src/*.rs` prints; the UI words are the app's (install → Sync, doctor --fix → Repair, …).
     static let rewordedHints: [String: String] = [
         "run skillcask install": "Sync this project.",
         "run skillcask install locally and commit skills.lock": "Sync locally and commit skills.lock.",
@@ -186,6 +204,8 @@ public enum ErrorCopy {
             return UserMessage(
                 title: binaryMissingTitle, reason: binaryMissingReason, action: binaryMissingAction,
                 details: details(searched.joined(separator: "\n")))
+        case .binaryIsApp(let path):
+            return UserMessage(title: binaryIsAppTitle, action: binaryIsAppAction, details: details(path))
         case .tooOld(let found, let needs):
             return UserMessage(
                 title: tooOldTitle, reason: tooOldReason, action: tooOldAction,
@@ -207,6 +227,10 @@ public enum ErrorCopy {
                 details: details([description, text].filter { !$0.isEmpty }.joined(separator: "\n\n")))
         case .outputTooLarge(let limit):
             return UserMessage(title: outputTooLargeTitle, details: "Limit: \(limit) bytes")
+        case .timedOut(let limit):
+            var message = UserMessage(title: timedOutTitle, action: timedOutAction(after: limit), remedy: .retry)
+            message.isTimeout = true
+            return message
         }
     }
 

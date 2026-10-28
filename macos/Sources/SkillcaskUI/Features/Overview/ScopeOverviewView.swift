@@ -11,6 +11,8 @@ struct ScopeOverviewView: View {
     let store: ScopeStore
     /// The sidebar's manifest check; false shows the Set Up block.
     var isSetUp = true
+    /// Previews: the partial-refresh strip starts with its Details open.
+    var showsPartialDetails = false
 
     @Environment(ActionRunner.self) private var runner
     @Environment(AppStore.self) private var app
@@ -117,6 +119,9 @@ struct ScopeOverviewView: View {
                 }
             }
             strip(state.strip())
+            if let partial = store.partialFailure, isSetUp {
+                PartialRefreshStrip(partial, showsDetails: showsPartialDetails)
+            }
         }
         .padding(.top, Self.headerTopPadding)
         .padding(.horizontal, Size.columnPadding)
@@ -202,7 +207,7 @@ struct ScopeOverviewView: View {
                 icon: "folder.badge.questionmark", title: EmptyCopy.notSetUpTitle,
                 body: EmptyCopy.notSetUpBody(agents: []),
                 actions: [
-                    .primary(EmptyCopy.setUp) { runner.start(.setUp, in: store) },
+                    .primary(EmptyCopy.setUp) { Task { await app.setUp(store, runner: runner) } },
                     .secondary(EmptyCopy.removeFromSidebar) { app.removeFromSidebar(store.scope) },
                 ],
                 style: .dashed, textWidth: EmptyState.notSetUpTextWidth)
@@ -221,7 +226,7 @@ struct ScopeOverviewView: View {
                 MessageStrip(
                     .warning, title: StripCopy.notManagedTitle(count: notManaged),
                     text: StripCopy.notManagedBody(count: notManaged),
-                    trailing: .button(StripCopy.review) { show(.notManaged) })
+                    trailing: .button(StripCopy.review) { Self.reviewNotManaged(in: store) })
             }
             EmptyState(
                 icon: "folder.badge.plus", title: EmptyCopy.noProjectsTitle, body: EmptyCopy.noProjectsBody,
@@ -276,7 +281,7 @@ struct ScopeOverviewView: View {
 
     private func health(_ snapshot: ScopeSnapshot) -> some View {
         HealthCard(
-            snapshot: snapshot, isBusy: runner.isBusy(store.scope), onRepair: { runner.start(.repair, in: store) },
+            snapshot: snapshot, isBusy: runner.isRunning, onRepair: { runner.start(.repair, in: store) },
             onSync: { runner.start(.sync, in: store) }, onCheckAgain: { runner.start(.check, in: store) },
             onTitleTap: { show(Self.filter(for: .health)) })
     }
@@ -318,6 +323,17 @@ struct ScopeOverviewView: View {
         store.filter = filter
     }
 
+    /// The not-managed banner's Review (Flow-F1 step 3): the Not managed chip, and its first row selected (the
+    /// detail loads it through its `.task(id: selection)`). A search query that hides every not-managed row is
+    /// cleared first, so Review never lands on an empty list.
+    static func reviewNotManaged(in store: ScopeStore) {
+        store.filter = .notManaged
+        if store.visibleEntries.isEmpty {
+            store.query = ""
+        }
+        store.selection = store.visibleEntries.first?.id
+    }
+
     private func openFolder() {
         if let folder = Workspace.chooseFolder(prompt: EmptyCopy.openFolder) {
             app.open(folder: folder)
@@ -326,7 +342,7 @@ struct ScopeOverviewView: View {
 
     private func findProjects() {
         if let folder = Workspace.chooseFolder(prompt: EmptyCopy.findProjects) {
-            Task { await app.findProjects(under: folder) }
+            app.request(.findProjects(root: folder))
         }
     }
 }

@@ -2,7 +2,7 @@ import SkillcaskDomain
 import SwiftUI
 
 extension PreviewRegistry {
-    /// P2-2: the Components board's "Attention badges" region (every severity, two- and three-digit counts, the
+    /// The Components board's "Attention badges" region (every severity, two- and three-digit counts, the
     /// two-badge pair and the small chip variant), and `ScopeBadge` on the three fixture scopes as sidebar rows.
     static let badges: [Entry] = [
         Entry(id: "P2-2", state: "badges", size: CGSize(width: 640, height: 150)) { AnyView(BadgesSample()) },

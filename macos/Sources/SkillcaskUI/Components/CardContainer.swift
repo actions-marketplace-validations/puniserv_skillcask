@@ -16,7 +16,7 @@ import SwiftUI
 ///
 /// Drawn with tokens rather than a system `GroupBox`: `GroupBox` on macOS paints its own material, border and
 /// corner radius that none of the token values can reach, and the board's card is a surface, not a control. The
-/// card bodies (doctor lines, the sources table, policy rows) are the screen's (P3-4); this is the frame.
+/// card bodies (doctor lines, the sources table, policy rows) are the screen's; this is the frame.
 public struct CardContainer<Accessory: View, Content: View>: View {
     public let title: String
     /// What follows the title after the middle dot: `2 problems`, `none`, `all good`.
@@ -46,7 +46,7 @@ public struct CardContainer<Accessory: View, Content: View>: View {
         self.content = content()
     }
 
-    /// The P2-4 rule: the error dot colour on an error card, the separator on every other card.
+    /// The rule: the error dot colour on an error card, the separator on every other card.
     nonisolated public static func borderColor(for severity: Severity?) -> Color {
         severity == .error ? Color.statusDot(.error) : .separator
     }

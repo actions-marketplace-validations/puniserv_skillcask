@@ -37,6 +37,8 @@ public enum ShellCopy {
     /// What VoiceOver reads for the Update All badge is `CountBadge`'s; the button's own help text.
     public static let updateAllHelp = "Update every package with a newer version inside its range"
     public static let syncHelp = "Install exactly what skills.lock pins"
+    /// Sync's help when a row needs sync: plain `install` resolves skills.toml and rewrites the lock. Invented.
+    public static let resolveHelp = "Resolve skills.toml, update skills.lock and install"
     public static let checkHelp = "Run the checks without changing anything"
 
     // MARK: - List header (Main board)
@@ -67,7 +69,6 @@ public enum ShellCopy {
 
     // MARK: - Menu bar (designer's note)
 
-    public static let fileMenu = "File"
     public static let findProjects = EmptyCopy.findProjects
     public static let openRecent = "Open Recent"
     public static let skillMenu = "Skill"
@@ -81,12 +82,11 @@ public enum ShellCopy {
     public static let viewMenu = "View"
     public static let activity = "Activity"
     public static let find = "Find"
-    public static let helpMenu = "Help"
     public static let help = "Skillcask Help"
     public static let readme = "README"
     public static let removeFromSidebar = EmptyCopy.removeFromSidebar
 
-    // MARK: - Detail placeholders (until P3-3, P3-5 and P3-6 fill the tabs)
+    // MARK: - Detail placeholders
 
     /// The body of a tab that is not built yet; never shipped, the three tabs replace it.
     public static func placeholder(_ tab: DetailTab) -> String {

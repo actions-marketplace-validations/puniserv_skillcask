@@ -73,8 +73,12 @@ public enum Boot {
     /// infra-playbooks and My Skills in the sidebar with their badges, every document from `DesignFixtures`
     /// through a `FixtureCLIClient`; `sheet` opens over it. Settings
     /// live in their own defaults suite, reset on every boot, so demo runs never touch the user's settings.
+    /// `manifestExists` replaces the board's check (every folder but infra-playbooks has a skills.toml). `api` is
+    /// the api scope's snapshot: the boards' `DesignFixtures.api` (planned `status` keys), or `.apiCLI` for the
+    /// scope exactly as the 0.9.1 CLI prints it.
     @MainActor public static func fixtures(
-        selecting scope: Scope? = apiScope, selection: SkillEntry.ID? = "pdf", sheet: AppStore.Sheet? = nil
+        selecting scope: Scope? = apiScope, selection: SkillEntry.ID? = "pdf", sheet: AppStore.Sheet? = nil,
+        manifestExists: (@Sendable (URL) -> Bool)? = nil, api: ScopeSnapshot = DesignFixtures.api
     ) -> Stores {
         let suite = "skillcask.ui.fixtures"
         let defaults = UserDefaults(suiteName: suite) ?? .standard
@@ -86,12 +90,12 @@ public enum Boot {
         let infra = infraScope.root
         let app = AppStore(
             settings: settings, queue: queue, client: client, capabilities: Capabilities(version: Capabilities.minimum),
-            textReader: fixtureText, manifestExists: { $0 != infra })
+            textReader: fixtureText, manifestExists: manifestExists ?? { $0 != infra })
         let runner = ActionRunner(queue: queue)
         app.recordActivity = { [weak runner] in runner?.record($0) }
         app.store(for: apiScope)?
             .preload(
-                snapshot: DesignFixtures.api, selection: selection,
+                snapshot: api, selection: selection,
                 detail: selection.map { SkillDetail(info: fixtureInfo(for: $0), text: fixtureText(for: $0)) })
         app.store(for: websiteScope)?.preload(snapshot: DesignFixtures.website)
         app.store(for: .personal)?.preload(snapshot: DesignFixtures.personal)

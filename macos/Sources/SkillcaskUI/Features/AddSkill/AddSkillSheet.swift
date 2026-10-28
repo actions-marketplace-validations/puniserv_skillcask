@@ -1,4 +1,5 @@
 import SkillcaskCore
+import SkillcaskDomain
 import SwiftUI
 
 /// The Add Skill sheet (S8, F2; AddSkill and AddSkill-States boards). The header holds the title and the field
@@ -213,13 +214,16 @@ struct AddSkillSheet: View {
     /// list is single-selection (`ScopeStore.selection` is one id), so the other new rows are not selected.
     private func add() {
         guard canAdd, let command = search.command, let spec = search.selectedSpec else { return }
-        let toast = Self.toast(package: spec.base, skills: addedNames, version: search.info?.version)
-        let first = addedNames.first
+        let skills = addedNames
+        let package = spec.base
+        let first = skills.first
         let store = store
         failedSpec = spec.base
         run.start(
             command, title: AddSkillCopy.adding(spec.base), failure: AddSkillCopy.couldNotAdd(spec.base),
-            outcome: { _ in toast }, in: store, runner: runner,
+            outcome: { _ in AddSkillCopy.added(package: package) },
+            report: { _, transcript in Self.toast(package: package, skills: skills, transcript: transcript) },
+            emphasis: skills, in: store, runner: runner,
             onSuccess: {
                 onClose()
                 if let first {
@@ -237,9 +241,17 @@ struct AddSkillSheet: View {
     }
 
     /// `Added jira-syntax and jira-communication (4.2.0)`; `Added <package>` when the skills are not known.
-    static func toast(package: String, skills: [String], version: String?) -> String {
+    nonisolated static func toast(package: String, skills: [String], version: String?) -> String {
         guard let version, !skills.isEmpty else { return AddSkillCopy.added(package: package) }
         return OutcomeCopy.added(skills, version: version)
+    }
+
+    /// The toast from the CLI's own `added <package> = "<constraint>" (<version>)` line (`src/commands.rs`
+    /// `finish_add`): the version it locked, which `info` cannot promise before the run (a GitHub or git ref
+    /// locks a commit and prints its first 12 hex digits, `src/github.rs` 278, `src/git.rs` 635).
+    nonisolated static func toast(package: String, skills: [String], transcript: [OutputLine]) -> String {
+        let version = MutationReport(verbLines: ActionRunner.stdout(of: transcript)).addedVersions.values.first
+        return toast(package: package, skills: skills, version: version)
     }
 }
 

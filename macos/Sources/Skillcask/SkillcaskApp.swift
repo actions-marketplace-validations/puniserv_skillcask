@@ -1,9 +1,23 @@
+import Foundation
+import SkillcaskCore
 import SkillcaskUI
 import SwiftUI
 
-/// `@main` only (ADR §2): builds the stores once (`Boot.current()`: the live binary, or the design fixtures when
-/// `SKILLCASK_UI_FIXTURES=1`), injects them, and declares the window, the Settings window and the menu bar.
+/// The entry point: refuses a CLI-style start (`LaunchArguments`), e.g. a `skillcask --version` probe that resolved
+/// to this binary, before any SwiftUI or store code runs; otherwise starts `SkillcaskApp`.
 @main
+enum Entry {
+    static func main() {
+        if LaunchArguments.isCLIInvocation(CommandLine.arguments.dropFirst()) {
+            FileHandle.standardError.write(Data("Skillcask is the macOS app, not the skillcask CLI.\n".utf8))
+            exit(LaunchArguments.refusalStatus)
+        }
+        SkillcaskApp.main()
+    }
+}
+
+/// Builds the stores once (`Boot.current()`: the live binary, or the design fixtures when
+/// `SKILLCASK_UI_FIXTURES=1`), injects them, and declares the window, the Settings window and the menu bar.
 struct SkillcaskApp: App {
     @State private var stores = Boot.current()
 

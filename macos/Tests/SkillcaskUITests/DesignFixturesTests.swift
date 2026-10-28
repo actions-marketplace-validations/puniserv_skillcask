@@ -21,7 +21,7 @@ import Testing
 
     @Test func everyJSONFileDecodesThroughItsDocumentType() throws {
         let names = try Self.files(withExtension: "json")
-        #expect(names.count == 30)
+        #expect(names.count == 32)
         for name in names {
             let data = try Data(contentsOf: Self.designDirectory.appending(path: name))
             let decoder = JSONDecoder()
@@ -36,11 +36,21 @@ import Testing
             default: Issue.record("unexpected design fixture \(name)")
             }
         }
-        #expect(try Self.files(withExtension: "txt").count == 4)
+        #expect(try Self.files(withExtension: "txt").count == 5)
         #expect(try Self.files(withExtension: "md").count == 4)
     }
 
     // MARK: - Main and Overview (api)
+
+    /// `apiCLI` is api as the 0.9.1 CLI prints `status`: no planned `source`/`description` keys, and no not managed
+    /// row in a project scope (`not_managed` answers only for the personal scope). Every other row is api's.
+    @Test func apiCLIHasOnlyWhatTheShippedCLIPrints() {
+        let cli = DesignFixtures.apiCLI
+        #expect(cli.entries.map(\.name) == DesignFixtures.api.entries.map(\.name).filter { $0 != "caveman" })
+        #expect(cli.entries.allSatisfy { $0.source == nil && $0.description == nil })
+        #expect(!cli.entries.contains { if case .notManaged = $0.kind { true } else { false } })
+        #expect(cli.entry(id: "pdf")?.health == DesignFixtures.pdf.health)
+    }
 
     @Test func apiReproducesTheMainBoard() {
         let api = DesignFixtures.api
@@ -63,7 +73,8 @@ import Testing
         #expect(DesignFixtures.testWriter.version == "1.0.3" && DesignFixtures.testWriter.hasUpdate)
         #expect(DesignFixtures.myNotes.health == .findings(2) && DesignFixtures.myNotes.kind == .project)
         #expect(DesignFixtures.myNotes.path == ".skills/my-notes")
-        #expect(DesignFixtures.caveman.health == .notManaged && DesignFixtures.caveman.version == "4.0.1")
+        // `status` prints a not managed row without a version (src/commands.rs 1843–1844).
+        #expect(DesignFixtures.caveman.health == .notManaged && DesignFixtures.caveman.version == nil)
         #expect(DesignFixtures.caveman.kind == .notManaged(adopt: "github:juliusbrussee/caveman"))
         #expect(
             DesignFixtures.safeRefactor.kind
@@ -121,7 +132,7 @@ import Testing
         #expect(personal.availableUpdates.isEmpty && personal.doctor?.passed.count == 5)
         #expect(personal.targets?.entries == ["claude", "codex"])
         #expect(DesignFixtures.personalCaveman.kind == .notManaged(adopt: "github:juliusbrussee/caveman"))
-        #expect(DesignFixtures.personalPdf.version == "1.4.0" && DesignFixtures.personalPdf.isNotManaged)
+        #expect(DesignFixtures.personalPdf.version == nil && DesignFixtures.personalPdf.isNotManaged)
         #expect(DesignFixtures.frontendDesign.kind == .notManaged(adopt: "github:anthropics/skills/frontend-design"))
         #expect(DesignFixtures.standupSummary.kind == .notManaged(adopt: nil))
         #expect(DesignFixtures.standupSummary.health == .findings(1))
@@ -250,14 +261,17 @@ import Testing
         #expect(within.available?.from == "1.2.0" && within.available?.to == "1.4.0")
         #expect(within.released == DesignFixtures.date("2026-10-24T00:00:00Z"))
         let cooldown = DesignFixtures.jiraCommunicationUpdate
-        #expect(cooldown.available == nil && cooldown.latest == "4.3.0")
+        // As the CLI prints it: `within` is the waiting 4.3.0 (outdated ignores the cooldown), named in the note.
+        #expect(cooldown.available == nil && cooldown.latest == "4.3.0" && cooldown.within == "4.3.0")
+        #expect(cooldown.cooldown?.version == "4.3.0")
         #expect(cooldown.eligible == DesignFixtures.date("2026-10-30T09:14:00Z"))
         #expect(cooldown.released == DesignFixtures.date("2026-10-28T09:14:00Z"))
         #expect(DesignFixtures.jiraPackageInfo.versions.count == 9)
         let major = DesignFixtures.legacyLintUpdate
         #expect(major.available == nil && major.outsideRange == "3.0.0")
         let moved = DesignFixtures.cavemanTagMoved
-        #expect(moved.note == "tag v4.1.0 moved from a81f2c0d4e9b to 3fd09e1c7a52" && moved.available?.to == "4.1.0")
+        // `moved_tag` names the LOCKED version's tag (src/commands.rs 1775–1779), not the one in range.
+        #expect(moved.note == "tag 4.0.1 moved from a81f2c0d4e9b to 3fd09e1c7a52" && moved.available?.to == "4.1.0")
         #expect(DesignFixtures.managedCaveman.health == .updateAvailable(from: "4.0.1", to: "4.1.0"))
         #expect(DesignFixtures.managedCaveman.kind == .package("juliusbrussee/caveman"))
         #expect(DesignFixtures.reviewPrUpdate.released == nil)

@@ -76,8 +76,7 @@ public actor ProcessRunner: CLIClient {
         running[id] = process
         defer { running.removeValue(forKey: id) }
         if case .text(let text) = invocation.stdin, let stdin {
-            try? stdin.fileHandleForWriting.write(contentsOf: Data(text.utf8))
-            try? stdin.fileHandleForWriting.close()
+            Self.write(text, to: stdin.fileHandleForWriting)
         }
 
         let limits = limits
@@ -121,6 +120,20 @@ public actor ProcessRunner: CLIClient {
                 kill(process.processIdentifier, SIGKILL)
             }
         }
+    }
+
+    /// Writes `text` to the child's stdin and closes it. A child that exited (or closed stdin) before reading all of
+    /// it leaves a pipe without a reader: the write fails with EPIPE instead of raising SIGPIPE, whose default
+    /// action would kill the app (`F_SETNOSIGPIPE` on this descriptor only). EPIPE, like any other write error,
+    /// means the child is gone or not listening: its exit status is the verdict, so the error is not reported.
+    static func write(_ text: String, to handle: FileHandle) {
+        _ = fcntl(handle.fileDescriptor, F_SETNOSIGPIPE, 1)
+        do {
+            try handle.write(contentsOf: Data(text.utf8))
+        } catch {
+            // EPIPE: the child exited early. Nothing to do; `run` reads its exit next.
+        }
+        try? handle.close()
     }
 
     public var runningCount: Int {

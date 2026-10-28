@@ -21,6 +21,8 @@ struct SheetHost: View {
             AddSkillSheet(query: query, store: store, onClose: onClose)
         case .adopt(let skills):
             AdoptSheet(skills: skills, store: store, onClose: onClose)
+        case .findProjects(let root):
+            FindProjectsSheet(root: root, onClose: onClose)
         case .remove:
             EmptyView()
         }

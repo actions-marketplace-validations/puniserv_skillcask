@@ -7,8 +7,15 @@ import SkillcaskDomain
 ///
 /// Invented (no board draws them): `searching`, `loadingPreview`, `idleTitle`, `idleBody`, `noSelection`,
 /// `allSkillsAdded`, `addOne`, `showOutput`, `couldNotAdd`, `added(package:)`, `footerPersonal`, `willInstall`,
-/// `noResultsBody` for skills.sh on or undecided, the rule labels `upToNextMinor` and `exactly`, and the
-/// accessibility labels `ruleHint` and `installedHint`.
+/// `noResultsBody` for skills.sh on or undecided, the rule label `upToNextMinor`, `branchLabel`, `branchProblem`,
+/// the Branch form of `ruleNote`, and the accessibility labels `ruleHint` and `installedHint`. "Exact", "Latest" and
+/// "Branch" are Flow-F2's ("Up to next major (default) / Exact / Latest / Branch").
+///
+/// Declared deviations from Flow-F2: the success toast is `OutcomeCopy.added` ("Added **jira-syntax** and
+/// **jira-communication** (4.2.0)", names semibold, up to two lines) and the sheet then selects the first new row
+/// only ("new rows selected"), since the skill list is single-selection (`ScopeStore.selection` is one id); Branch
+/// is offered beside the version rules, so a GitHub repository without tags (no rule shown) keeps the CLI's
+/// default branch.
 public enum AddSkillCopy {
     // MARK: - Header
 
@@ -141,20 +148,36 @@ public enum AddSkillCopy {
     /// Invented: under the provided skills where the CLI has no `add --skill` (0.9.1): they cannot be unticked.
     public static let allSkillsAdded = "This version of skillcask adds every skill in the package."
     public static let versionRule = "Version rule"
-    /// The rule button's label: `Up to next major`.
-    static func ruleLabel(_ rule: VersionRule, base: VersionRule.Base) -> String {
+    /// The rule button's label: `Up to next major`; `^0.y` reads `Up to next minor`; without a version (Adopt) the
+    /// CLI's default names no span.
+    static func ruleLabel(_ rule: VersionRule, base: VersionRule.Base?) -> String {
         switch rule {
-        case .compatible: base.major == 0 ? upToNextMinor : upToNextMajor
-        case .patches: upToNextMinor
-        case .exact: exactly
+        case .compatible:
+            guard let base else { return cliChooses }
+            return base.major == 0 ? upToNextMinor : upToNextMajor
+        case .patches: return upToNextMinor
+        case .exact: return exact
+        case .latest: return latest
+        case .branch: return branch
         }
     }
 
     public static let upToNextMajor = "Up to next major"
     /// Invented: `~4.2.0`, and `^0.3` (which stops at the next minor).
     public static let upToNextMinor = "Up to next minor"
-    /// Invented: one exact version.
-    public static let exactly = "Exactly"
+    /// One exact version (Flow-F2).
+    public static let exact = "Exact"
+    /// `*`: the newest version (Flow-F2).
+    public static let latest = "Latest"
+    /// A git ref of a GitHub or git source (Flow-F2).
+    public static let branch = "Branch"
+    /// Invented: the Branch rule's field label and placeholder; the field starts empty and Add waits for a name.
+    public static let branchLabel = "Branch name"
+    /// Invented: the CLI's default rule when the version it will install is unknown (Adopt): names no span, since
+    /// the CLI writes `^major.minor` of what it installs (`^0.y` stops at the next minor).
+    public static let cliChooses = "As the command-line tool chooses"
+    /// Invented: under the branch field when the CLI would refuse or misread the name (`VersionRule.isValidBranch`).
+    public static let branchProblem = "Use letters, digits and . _ / -, in a name that is not a version number."
     /// Invented: the rule button while the package's skills.toml entry keeps its own constraint.
     public static let keptRule = "As in skills.toml"
     /// Invented: VoiceOver's hint on the rule button.
@@ -163,6 +186,17 @@ public enum AddSkillCopy {
     /// `Written to skills.toml; skills.lock pins 4.2.0 exactly.`
     public static func ruleNote(version: String) -> String {
         "Written to skills.toml; skills.lock pins \(version) exactly."
+    }
+
+    /// `ruleNote(version:)`; for Branch (invented) `Written to skills.toml; skills.lock pins the branch’s current
+    /// commit.`, and for Latest (invented) `Written to skills.toml; skills.lock pins the version it installs.`:
+    /// `*` is resolved by `add` itself, so the preview's `version` is not promised.
+    public static func ruleNote(rule: VersionRule, version: String) -> String {
+        switch rule {
+        case .branch: "Written to skills.toml; skills.lock pins the branch’s current commit."
+        case .latest: "Written to skills.toml; skills.lock pins the version it installs."
+        case .compatible, .patches, .exact: ruleNote(version: version)
+        }
     }
 
     /// `Will be linked into Claude Code and Cursor.`

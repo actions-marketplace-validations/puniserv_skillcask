@@ -150,6 +150,18 @@ import os
         #expect(nothing.stdoutText.isEmpty && nothing.status == .exited(0))
     }
 
+    /// A child that exits without reading its stdin leaves the write without a reader: EPIPE, not a SIGPIPE that
+    /// would kill the test process (and the app). The run ends with the child's own exit.
+    @Test(.timeLimit(.minutes(1))) func stdinToAChildThatExitedEarlyIsNotFatal() async throws {
+        let text = String(repeating: "x", count: 1 << 20)
+        let invocation = try Invocation(
+            .authSet(host: "h", username: nil), in: scope, capabilities: Fixture.capabilities, stdin: .text(text))
+        for _ in 0..<5 {
+            let result = try await runner(mode: "quit").run(invocation)
+            #expect(result.status == .exited(0) && result.stdout.isEmpty)
+        }
+    }
+
     @Test func missingExecutableFailsToLaunch() async throws {
         let runner = ProcessRunner(executable: URL(fileURLWithPath: "/nonexistent/skillcask"))
         await #expect {

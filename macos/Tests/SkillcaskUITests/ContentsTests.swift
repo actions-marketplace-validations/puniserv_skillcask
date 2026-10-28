@@ -304,7 +304,7 @@ import Testing
     @Test func fileLineDropsWhatIsUnknown() {
         let file = DesignFixtures.myNotesFile
         #expect(
-            ContentsCopy.fileLine(name: file.name, bytes: file.bytes, modified: file.modified)
+            ContentsCopy.fileLine(name: file.name, bytes: file.bytes, modified: file.modified, timeZone: .gmt)
                 == "SKILL.md · 1.8 KB · changed 3 Oct 2026")
         #expect(ContentsCopy.fileLine(name: "SKILL.md", bytes: 6348, modified: nil) == "SKILL.md · 6.2 KB")
         #expect(ContentsCopy.fileLine(name: "SKILL.md", bytes: nil, modified: nil) == "SKILL.md")
@@ -419,5 +419,49 @@ import Testing
         #expect(MarkdownBody.markStyle(flag: .risky, highlighted: true) == highlight)
         #expect(MarkdownBody.markStyle(flag: nil, highlighted: true) == highlight)
         #expect(MarkdownBody.markStyle(flag: nil, highlighted: false) == nil)
+    }
+
+    // MARK: - Body pass cost
+
+    /// The tab parses a text once: the same text and findings re-use the spans and flags, another text or row
+    /// parses again, and what it returns is what the parser and `flags(for:)` give.
+    @Test func theBodyIsParsedOncePerText() {
+        let memo = ContentsMemo()
+        let text = DesignFixtures.myNotesText
+        let first = memo.parsed(entry: DesignFixtures.myNotes, text: text)
+        let spans = MarkdownBlocks.spans(text.body)
+        #expect(first.spans == spans)
+        #expect(first.flags == ContentsState.flags(for: DesignFixtures.myNotes, text: text, spans: spans))
+        #expect(memo.parsed(entry: DesignFixtures.myNotes, text: text) == first)
+        #expect(memo.parses == 1)
+        _ = memo.parsed(entry: DesignFixtures.myNotesLong, text: DesignFixtures.myNotesLongText)
+        #expect(memo.parses == 2)
+        _ = memo.parsed(entry: DesignFixtures.pdf, text: text)
+        #expect(memo.parses == 3, "another row's findings flag other blocks")
+    }
+
+    /// The attribute read re-runs when the url or the loaded text changes, without hashing the whole detail on
+    /// every pass: an edit of the same length or inside the front matter changes the key too.
+    @Test func theAttributeReadIsKeyedOnTheUrlAndTheTextFingerprint() {
+        let url = URL(fileURLWithPath: "/tmp/notes/SKILL.md")
+        let memo = ContentsMemo()
+        func key(_ detail: SkillDetail?, url: URL = url) -> ContentsTab.TaskKey {
+            ContentsTab.TaskKey(url: url, detail: detail, fingerprint: detail?.text.map(memo.textHash))
+        }
+        let notes = SkillDetail(text: DesignFixtures.myNotesText)
+        #expect(key(notes) == key(SkillDetail(text: DesignFixtures.myNotesText)))
+        #expect(key(notes) != key(SkillDetail(text: DesignFixtures.pdfText)))
+        #expect(key(notes) != key(nil))
+        #expect(key(notes) != key(SkillDetail(textError: "gone")))
+        #expect(key(notes) != key(notes, url: URL(fileURLWithPath: "/tmp/other/SKILL.md")))
+        let sameLength = SkillDetail(text: SkillText.parse("---\nname: a\n---\nbody one\n"))
+        let edited = SkillDetail(text: SkillText.parse("---\nname: a\n---\nbody two\n"))
+        let frontMatter = SkillDetail(text: SkillText.parse("---\nname: b\n---\nbody one\n"))
+        #expect(key(sameLength) != key(edited), "same length, other text")
+        #expect(key(sameLength) != key(frontMatter), "a front-matter edit")
+        let before = memo.fingerprints
+        _ = key(frontMatter)
+        _ = key(frontMatter)
+        #expect(memo.fingerprints == before, "the same loaded text is hashed once")
     }
 }

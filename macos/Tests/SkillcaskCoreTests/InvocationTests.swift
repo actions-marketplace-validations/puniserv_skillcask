@@ -31,6 +31,8 @@ import Testing
         (.search(query: "q", skillsSh: .exclude, remember: false), ["search", "--json", "--no-skills-sh", "--", "q"]),
         (.diff(package: nil), ["diff"]),
         (.diff(package: "acme/one"), ["diff", "--", "acme/one"]),
+        // `diff --to` (no cooldown, src/main.rs `Diff.to`): reads a version that still waits.
+        (.diffTo(package: "acme/one", version: "4.3.0"), ["diff", "--to", "4.3.0", "--", "acme/one"]),
         (.initialize, ["init"]),
         (.install(frozen: false), ["install"]),
         (.install(frozen: true), ["install", "--frozen"]),
@@ -118,6 +120,9 @@ import Testing
         .search(query: "q", skillsSh: nil, remember: true),
         .projects(roots: []),
         .diff(package: ""),
+        .diffTo(package: "", version: "1.0.0"),
+        .diffTo(package: "a/b", version: ""),
+        .diffTo(package: "a/b", version: "-g"),
         .add(spec: "", repository: nil, adopt: false, rename: [:], skills: []),
         .add(spec: "a/b", repository: "", adopt: false, rename: [:], skills: []),
         .remove(packages: []),
@@ -149,6 +154,64 @@ import Testing
         #expect(try !Invocation(.info(.skill("b")), in: project, capabilities: caps).needsNetwork)
         #expect(try !Invocation(.status, in: project, capabilities: caps).needsNetwork)
         #expect(try Invocation(.outdated, in: project, capabilities: caps).needsNetwork)
+    }
+
+    /// The reads that run under `GuardedClient.readTimeout`: no mutation, and not `search --remember`, which
+    /// writes config.toml.
+    @Test func readOnlyCommandsAreTheOnesWithATimeout() throws {
+        let reads: [Invocation.Command] = [
+            .status, .audit, .outdated, .doctor(fix: false), .info(.skill("a")), .info(.package("a/b")),
+            .search(query: "q", skillsSh: nil, remember: false), .diff(package: nil),
+            .diffTo(package: "a/b", version: "1.0"), .projects(roots: [URL(fileURLWithPath: "/tmp")]),
+            .config(key: "search.skills-sh"),
+        ]
+        for command in reads {
+            #expect(try Invocation(command, in: project, capabilities: all).isReadOnly, "\(command)")
+        }
+        let others: [Invocation.Command] = [
+            .version, .initialize, .install(frozen: false), .update(packages: []), .remove(packages: ["a"]),
+            .doctor(fix: true), .search(query: "q", skillsSh: .include, remember: true),
+            .authSet(host: "h", username: nil), .configSet(key: "search.skills-sh", value: "true"),
+        ]
+        for command in others {
+            #expect(try !Invocation(command, in: project, capabilities: all).isReadOnly, "\(command)")
+        }
+    }
+
+    /// In a project folder only `init`, `projects`, `--version` and `auth` may run without skills.toml: everything
+    /// else would make the CLI walk up to a parent project (`src/project.rs` `find_root`). The personal scope has
+    /// no such walk.
+    @Test func whatNeedsAManifest() throws {
+        for command in [Invocation.Command.version, .initialize, .projects(roots: [URL(fileURLWithPath: "/tmp")])] {
+            #expect(try !Invocation(command, in: project, capabilities: caps).needsManifest, "\(command)")
+        }
+        #expect(try !Invocation(.authSet(host: "h", username: nil), in: project, capabilities: caps).needsManifest)
+        for command in [
+            Invocation.Command.status, .audit, .doctor(fix: false), .doctor(fix: true), .install(frozen: true),
+            .remove(packages: ["a"]), .search(query: "q", skillsSh: nil, remember: false),
+        ] {
+            #expect(try Invocation(command, in: project, capabilities: caps).needsManifest, "\(command)")
+            #expect(try !Invocation(command, in: .personal, capabilities: caps).needsManifest, "\(command)")
+        }
+    }
+
+    /// `config` (D48, 0.9.4): the read prints `{"value", "from"}`; the write is a plain line. Both need the
+    /// feature, and a personal key goes through `-g` (the CLI refuses it in a project).
+    @Test func configCommands() throws {
+        #expect(
+            try argv(.config(key: "search.skills-sh"), in: .personal, capabilities: all)
+                == ["-g", "config", "--json", "--", "search.skills-sh"])
+        #expect(
+            try argv(.configSet(key: "search.skills-sh", value: "false"), in: .personal, capabilities: all)
+                == ["-g", "config", "--", "search.skills-sh", "false"])
+        #expect(throws: CLIError.unsupported(feature: "config")) {
+            try Invocation(.config(key: "search.skills-sh"), in: .personal, capabilities: caps)
+        }
+        #expect(throws: CLIError.self) {
+            try Invocation(.configSet(key: "search.skills-sh", value: ""), in: .personal, capabilities: all)
+        }
+        #expect(try Invocation(.config(key: "k"), in: .personal, capabilities: all).expectsDocument)
+        #expect(try !Invocation(.configSet(key: "k", value: "v"), in: .personal, capabilities: all).isMutation)
     }
 
     @Test func displayCommandQuotesOnlyWhatNeedsIt() throws {

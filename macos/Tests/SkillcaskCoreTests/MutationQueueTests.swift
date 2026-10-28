@@ -4,6 +4,7 @@ import os
 
 @testable import SkillcaskCore
 
+/// Ordered with `Gate`s, never with sleeps or wall-clock bounds: a slow machine changes no outcome.
 @Suite struct MutationQueueTests {
     let a = Scope.project(URL(fileURLWithPath: "/tmp/a"))
     let b = Scope.project(URL(fileURLWithPath: "/tmp/b"))
@@ -11,45 +12,63 @@ import os
     @Test(.timeLimit(.minutes(1))) func sameScopeRunsInOrder() async throws {
         let queue = MutationQueue()
         let order = OSAllocatedUnfairLock(initialState: [String]())
-        async let first: Void = queue.enqueue(in: a) {
-            order.withLock { $0.append("first start") }
-            try await Task.sleep(for: .milliseconds(200))
-            order.withLock { $0.append("first end") }
+        let gate = Gate()
+        let first = Task {
+            try await queue.enqueue(in: a) {
+                order.withLock { $0.append("first start") }
+                await gate.wait()
+                order.withLock { $0.append("first end") }
+            }
         }
-        try await Task.sleep(for: .milliseconds(20))
-        async let second: Void = queue.enqueue(in: a) {
-            order.withLock { $0.append("second") }
+        await gate.arrived()
+        let second = Task { try await queue.enqueue(in: a) { order.withLock { $0.append("second") } } }
+        // `second` has queued behind `first` (two pending) and has not run while `first` holds the scope.
+        while await queue.pending(in: a) < 2 {
+            await Task.yield()
         }
-        #expect(await queue.isBusy(a))
-        _ = try await (first, second)
+        #expect(order.withLock { $0 } == ["first start"])
+        await gate.open()
+        try await first.value
+        try await second.value
         #expect(order.withLock { $0 } == ["first start", "first end", "second"])
         #expect(await !queue.isBusy(a))
     }
 
+    /// Both operations are inside their run at once: each waits on its own gate, and both arrive before either
+    /// opens. Serialising the scopes would leave `b` waiting behind `a` and the test at its time limit.
     @Test(.timeLimit(.minutes(1))) func differentScopesOverlap() async throws {
         let queue = MutationQueue()
-        let clock = ContinuousClock()
-        let start = clock.now
-        async let one: Void = queue.enqueue(in: a) { try await Task.sleep(for: .milliseconds(300)) }
-        async let two: Void = queue.enqueue(in: b) { try await Task.sleep(for: .milliseconds(300)) }
-        _ = try await (one, two)
-        #expect(clock.now - start < .milliseconds(550))
+        let inA = Gate()
+        let inB = Gate()
+        let one = Task { try await queue.enqueue(in: a) { await inA.wait() } }
+        let two = Task { try await queue.enqueue(in: b) { await inB.wait() } }
+        await inA.arrived()
+        await inB.arrived()
+        #expect(await queue.isBusy(a))
+        #expect(await queue.isBusy(b))
+        await inA.open()
+        await inB.open()
+        try await one.value
+        try await two.value
     }
 
     @Test(.timeLimit(.minutes(1))) func cancellingAWaitingMutationLeavesTheOthersAlone() async throws {
         let queue = MutationQueue()
         let ran = OSAllocatedUnfairLock(initialState: [String]())
+        let gate = Gate()
         let first = Task {
             try await queue.enqueue(in: a) {
-                try await Task.sleep(for: .milliseconds(200))
+                await gate.wait()
                 ran.withLock { $0.append("first") }
             }
         }
-        try await Task.sleep(for: .milliseconds(20))
+        await gate.arrived()
         let second = Task { try await queue.enqueue(in: a) { ran.withLock { $0.append("second") } } }
         let third = Task { try await queue.enqueue(in: a) { ran.withLock { $0.append("third") } } }
-        try await Task.sleep(for: .milliseconds(20))
+        // `first` holds the scope until the gate opens, so `second` is cancelled while it waits (or before it
+        // queued: either way it must never run).
         second.cancel()
+        await gate.open()
         await #expect(throws: CancellationError.self) { try await second.value }
         try await first.value
         try await third.value

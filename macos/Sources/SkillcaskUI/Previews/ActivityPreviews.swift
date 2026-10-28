@@ -4,7 +4,7 @@ import SkillcaskDomain
 import SwiftUI
 
 extension PreviewRegistry {
-    /// P3-14: the Activity board's list column (360 × 748: the board's window less its 52 pt toolbar) over the api
+    /// The Activity board's list column (360 × 748: the board's window less its 52 pt toolbar) over the api
     /// scope. `closed`: the list alone, as at launch; `open`: the board's six rows as production records them,
     /// collapsed; `expanded`: the board's state, the newest run's transcript open; `failed`: the Sync that needed a
     /// sign-in expanded, with the environment names the run got; `readExpanded`: opening api expanded through

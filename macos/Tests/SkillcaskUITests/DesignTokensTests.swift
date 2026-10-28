@@ -5,11 +5,11 @@ import Testing
 
 @testable import SkillcaskUI
 
-/// Every token resolves to the hex `docs/handoff/tokens.md` states, in both appearances; the type scale and the
+/// Every token resolves to the hex `macos/DESIGN.md` states, in both appearances; the type scale and the
 /// metrics carry the board's numbers. The expected values are copied here on purpose: a drift between the
 /// document and the code fails loudly.
 @Suite struct DesignTokensTests {
-    /// `tokens.md` §1 plus the G4 decision, light then dark.
+    /// `macos/DESIGN.md` Tokens, the G4 decision included, light then dark.
     static let expectedHex: [Color.Token: (light: String, dark: String)] = [
         .surfaceWindow: ("#FFFFFF", "#1E1E1E"),
         .surfaceSidebar: ("#F2F2F4", "#272729"),
@@ -51,7 +51,7 @@ import Testing
         .badgeWarningText: ("#3B2600", "#3B2600"),
     ]
 
-    /// The CSS custom property of every token, `tokens.md` §1 column one.
+    /// The CSS custom property every board used for each token.
     static let expectedCSS: [Color.Token: String] = [
         .surfaceWindow: "--win", .surfaceSidebar: "--side", .surfaceGrouped: "--grouped", .surfaceCard: "--card",
         .surfaceHover: "--hover", .separator: "--sep", .separatorStrong: "--sep2", .textPrimary: "--text",

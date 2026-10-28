@@ -1,13 +1,13 @@
 import Foundation
 import SkillcaskDomain
 
-/// The English of the status vocabulary (design brief §8, the Tokens board's status table): what a `Health`, a
+/// The English of the status vocabulary (the Tokens board's status table): what a `Health`, a
 /// `Severity` and a `SkillEntry.Kind` are called on screen. Views never spell these words themselves.
 public enum Labels {
     // MARK: - Health
 
     /// The label beside the status dot for one row or detail header, worst thing first as `Health` orders it.
-    public static func health(_ health: Health) -> String {
+    public static func health(_ health: Health, timeZone: TimeZone = .current) -> String {
         switch health {
         case .installed: return "Installed"
         case .projectSkill: return "Project skill"
@@ -16,7 +16,7 @@ public enum Labels {
         case .notManaged: return "Not managed"
         case .notLinked: return "Not linked to agents"
         case .findings(let count): return findings(count)
-        case .cooldown(let note): return cooldown(note: note)
+        case .cooldown(let note): return cooldown(note: note, timeZone: timeZone)
         case .notInstalled: return "Not installed"
         case .changedOnDisk: return "Changed on disk"
         case .needsSync: return "Needs sync"
@@ -38,9 +38,9 @@ public enum Labels {
         count == 1 ? "1 finding" : "\(count) findings"
     }
 
-    /// `4.3.0 on 30 Oct` from the CLI note `4.3.0 eligible 2026-10-30T09:14:00Z` (the board's wording, day in
-    /// GMT); `Cooldown` when the note is missing or says something else. Versions never carry a `v`.
-    public static func cooldown(note: String?) -> String {
+    /// `4.3.0 on 30 Oct` from the CLI note `4.3.0 eligible 2026-10-30T09:14:00Z` (the board's wording, the day
+    /// in `timeZone`); `Cooldown` when the note is missing or says something else. Versions never carry a `v`.
+    public static func cooldown(note: String?, timeZone: TimeZone = .current) -> String {
         guard let note, let range = note.range(of: " eligible "),
             let date = try? Date(note[range.upperBound...].trimmingCharacters(in: .whitespaces), strategy: .iso8601)
         else { return cooldownPlaceholder }
@@ -48,7 +48,7 @@ public enum Labels {
         if version.hasPrefix("v") {
             version.removeFirst()
         }
-        return "\(version) on \(Formatters.dayMonth(date))"
+        return "\(version) on \(Formatters.dayMonth(date, timeZone: timeZone))"
     }
 
     /// Placeholder words for the two cases no board labels: a cooldown whose note names no eligible date, and a

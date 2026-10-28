@@ -3,10 +3,19 @@ import SkillcaskDomain
 import SwiftUI
 
 extension PreviewRegistry {
-    /// P3-3: the detail column (header and Overview tab) at 720 × 800 for the Main board's pdf and every
+    /// The detail column (header and Overview tab) at 720 × 800 for the Main board's pdf and every
     /// Detail-States state. Composed from `DetailHeader` and `OverviewTab` over fixture data, as `SkillDetailView`
     /// composes them, so no store task reloads the detail during the render (the offline state keeps no `info`).
+    ///
+    /// `cli` comes first: pdf as the 0.9.1 CLI's `status` reports it (`DesignFixtures.apiCLI`: no `source` or
+    /// `description` key). `notManaged` (caveman in the api project) is a planned shape: 0.9.1 reports not managed
+    /// skills in the personal scope only; `notManagedUnknown` is the reachable one.
     static let detail: [Entry] = [
+        entry("cli") {
+            DetailSample(
+                entry: DesignFixtures.entry("pdf", in: DesignFixtures.apiCLI), info: DesignFixtures.pdfInfo,
+                snapshot: DesignFixtures.apiCLI)
+        },
         entry("update") { DetailSample(entry: DesignFixtures.pdf, info: DesignFixtures.pdfInfo) },
         entry("project") { DetailSample(entry: DesignFixtures.myNotes, info: DesignFixtures.myNotesInfo) },
         entry("dependency") { DetailSample(entry: DesignFixtures.safeRefactor, info: DesignFixtures.safeRefactorInfo) },

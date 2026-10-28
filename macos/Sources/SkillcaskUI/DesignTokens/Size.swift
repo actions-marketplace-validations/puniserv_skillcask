@@ -1,6 +1,6 @@
 import Foundation
 
-/// Fixed sizes from the Tokens board and the screen boards (`docs/handoff/tokens.md` §3), in points.
+/// Fixed sizes from the Tokens board and the screen boards (`macos/DESIGN.md`, Tokens), in points.
 public enum Size {
     // MARK: - Rows and chrome
 

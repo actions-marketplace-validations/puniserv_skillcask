@@ -17,7 +17,6 @@ struct AdvancedPane: View {
     @Environment(\.openWindow) private var openWindow
     /// Stands in for the measured adopted folder: previews pass the board's summary.
     var adoptedOverride: String?
-    @State private var adoptedSummary: String?
 
     var body: some View {
         SettingsPane {
@@ -43,7 +42,9 @@ struct AdvancedPane: View {
                                 .controlSize(.small)
                                 .fixedSize()
                         }
-                        SettingsCaption(adoptedOverride ?? adoptedSummary ?? SettingsCopy.noAdopted)
+                        SettingsCaption(
+                            adoptedOverride ?? app.cliSettings.adoptedSummary(of: adoptedFolder)
+                                ?? SettingsCopy.noAdopted)
                     }
                 }
                 SettingsSeparator()
@@ -67,7 +68,7 @@ struct AdvancedPane: View {
         .onDisappear { settings.commitEnvironmentValues() }
         .task(id: adoptedFolder) {
             guard adoptedOverride == nil else { return }
-            adoptedSummary = await Self.summary(of: adoptedFolder)
+            await app.cliSettings.measureAdopted(at: adoptedFolder)
         }
     }
 
@@ -131,9 +132,11 @@ struct AdvancedPane: View {
         CGFloat(max(settings.environmentVariables.count, 2) + 1) * Size.settingsTableRow
     }
 
+    /// The Name cell: no visible label or placeholder (the column header names it), but VoiceOver reads "Name".
     private func cell(_ id: Variable.ID, _ field: WritableKeyPath<Variable, String>) -> some View {
         TextField("", text: binding(id, field))
             .textFieldStyle(.plain)
+            .accessibilityLabel(SettingsCopy.name)
             .font(Font.Token.monoSmall)
             .foregroundStyle(Color.textPrimary)
     }
@@ -164,29 +167,6 @@ struct AdvancedPane: View {
 
     private var adoptedFolder: URL {
         configFile.deletingLastPathComponent().appending(path: "adopted", directoryHint: .isDirectory)
-    }
-
-    /// `4 folders · 1.2 MB` for the folders under `folder`, off the main actor; nil when it does not exist.
-    static func summary(of folder: URL) async -> String? {
-        await Task.detached { measure(folder) }.value
-    }
-
-    private nonisolated static func measure(_ folder: URL) -> String? {
-        let manager = FileManager.default
-        guard let entries = try? manager.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isDirectoryKey])
-        else { return nil }
-        let folders = entries.filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
-        var bytes: Int64 = 0
-        let keys: Set<URLResourceKey> = [.totalFileAllocatedSizeKey, .isRegularFileKey]
-        if let walk = manager.enumerator(at: folder, includingPropertiesForKeys: Array(keys)) {
-            for case let url as URL in walk {
-                let values = try? url.resourceValues(forKeys: keys)
-                if values?.isRegularFile == true {
-                    bytes += Int64(values?.totalFileAllocatedSize ?? 0)
-                }
-            }
-        }
-        return SettingsCopy.adoptedSummary(folders: folders.count, bytes: bytes)
     }
 
     // MARK: - Actions
@@ -228,6 +208,7 @@ private struct MaskedCell: View {
         ZStack(alignment: .leading) {
             TextField("", text: $text)
                 .textFieldStyle(.plain)
+                .accessibilityLabel(SettingsCopy.value)
                 .focused($focused)
                 .onSubmit(onCommit)
                 .opacity(showsMask ? 0 : 1)

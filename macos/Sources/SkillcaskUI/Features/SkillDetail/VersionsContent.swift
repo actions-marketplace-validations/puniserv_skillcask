@@ -65,10 +65,14 @@ struct VersionsContent: Hashable {
     ///   - versions: `info.versions` when known (the session cache), for "skipped 1.3.0".
     ///   - agents: The scope's agent names for the Installed row's "Linked into …".
     ///   - checkedAt: When `outdated` answered, for the up-to-date callout.
-    init(model: VersionsModel, versions: [String]?, agents: [String], checkedAt: Date?, now: Date) {
+    ///   - timeZone: The zone dates read in: the Mac's; tests pass `.gmt`.
+    init(
+        model: VersionsModel, versions: [String]?, agents: [String], checkedAt: Date?, now: Date,
+        timeZone: TimeZone = .current
+    ) {
         self.model = model
-        callout = Self.callout(model, checkedAt: checkedAt, now: now)
-        rows = Self.rows(model, versions: versions ?? [], agents: agents)
+        callout = Self.callout(model, checkedAt: checkedAt, now: now, timeZone: timeZone)
+        rows = Self.rows(model, versions: versions ?? [], agents: agents, timeZone: timeZone)
         switch model.status {
         case .available: footnote = VersionsCopy.reviewFootnote
         case .tagMoved: footnote = VersionsCopy.tagMovedFootnote
@@ -78,7 +82,7 @@ struct VersionsContent: Hashable {
 
     // MARK: - Callout
 
-    private static func callout(_ model: VersionsModel, checkedAt: Date?, now: Date) -> Callout? {
+    private static func callout(_ model: VersionsModel, checkedAt: Date?, now: Date, timeZone: TimeZone) -> Callout? {
         switch model.status {
         case .unchecked:
             return Callout(
@@ -87,14 +91,16 @@ struct VersionsContent: Hashable {
             guard let version = model.installed else { return nil }
             return Callout(
                 kind: .ok, title: VersionsCopy.newestVersion(version),
-                text: checkedAt.map { VersionsCopy.checked($0, now: now) } ?? "", mono: nil)
+                text: checkedAt.map { VersionsCopy.checked($0, now: now, timeZone: timeZone) } ?? "", mono: nil)
         case .available:
             // The header's update strip already says "1.4.0 is available … Review changes…" on every tab.
             return nil
         case .cooldown(let cooldown):
             return Callout(
-                kind: .warning, title: VersionsCopy.cooldownTitle(cooldown.version, eligible: cooldown.eligible),
-                text: VersionsCopy.cooldownBody(minimumAge: model.minimumAge, released: cooldown.released), mono: nil,
+                kind: .warning,
+                title: VersionsCopy.cooldownTitle(cooldown.version, eligible: cooldown.eligible, timeZone: timeZone),
+                text: VersionsCopy.cooldownBody(
+                    minimumAge: model.minimumAge, released: cooldown.released, timeZone: timeZone), mono: nil,
                 symbol: MessageStrip.cooldownSymbol, link: VersionsCopy.readChanges)
         case .outsideRange(let version):
             return Callout(
@@ -110,15 +116,28 @@ struct VersionsContent: Hashable {
     // MARK: - Rows
 
     private static func rows(
-        _ model: VersionsModel, versions: [String], agents: [String]
+        _ model: VersionsModel, versions: [String], agents: [String], timeZone: TimeZone
     ) -> [Row] {
         var rows: [Row] = []
         if let installed = model.installed {
-            rows.append(
-                Row(
-                    label: VersionsCopy.installed, version: installed, tone: .primary,
-                    detail: VersionsCopy.installedDetail(released: model.installedReleased), monos: [],
-                    trailing: agents.isEmpty ? nil : .quiet(VersionsCopy.linkedInto(agents))))
+            let trailing: Trailing? = agents.isEmpty ? nil : .quiet(VersionsCopy.linkedInto(agents))
+            if case .tagMoved(let move) = model.status {
+                // `outdated` reports the tag of the LOCKED version (`moved_tag` in src/commands.rs), so the strip
+                // sits on the Installed row; the board draws it on "Available in range" (declared in VersionsCopy).
+                rows.append(
+                    Row(
+                        label: VersionsCopy.installed, version: installed, tone: .warning,
+                        detail: VersionsCopy.tagMovedDetail(move),
+                        monos: [VersionsCopy.shortCommit(move.from), VersionsCopy.shortCommit(move.to)],
+                        trailing: trailing))
+            } else {
+                rows.append(
+                    Row(
+                        label: VersionsCopy.installed, version: installed, tone: .primary,
+                        detail: VersionsCopy.installedDetail(released: model.installedReleased, timeZone: timeZone),
+                        monos: [],
+                        trailing: trailing))
+            }
         }
         if let range = model.allowedRange {
             rows.append(
@@ -127,16 +146,16 @@ struct VersionsContent: Hashable {
                     detail: VersionsCopy.rangeDetail(range), monos: [],
                     trailing: .reveal(ShellCopy.revealManifest)))
         }
-        if model.showsInRangeRow, let row = inRangeRow(model, versions: versions) {
+        if model.showsInRangeRow, let row = inRangeRow(model, versions: versions, timeZone: timeZone) {
             rows.append(row)
         }
-        if let row = newestRow(model) {
+        if let row = newestRow(model, timeZone: timeZone) {
             rows.append(row)
         }
         return rows
     }
 
-    private static func inRangeRow(_ model: VersionsModel, versions: [String]) -> Row? {
+    private static func inRangeRow(_ model: VersionsModel, versions: [String], timeZone: TimeZone) -> Row? {
         guard let version = model.inRangeVersion else { return nil }
         switch model.status {
         case .cooldown(let cooldown):
@@ -144,20 +163,25 @@ struct VersionsContent: Hashable {
             return Row(
                 label: VersionsCopy.availableInRange, version: version, tone: .warning,
                 detail: VersionsCopy.cooldownDetail(
-                    released: cooldown.released, eligible: cooldown.eligible, minimumAge: age),
+                    released: cooldown.released, eligible: cooldown.eligible, minimumAge: age, timeZone: timeZone),
                 monos: [], trailing: .quiet(VersionsCopy.waiting))
         case .available:
             return Row(
                 label: VersionsCopy.availableInRange, version: version, tone: .update,
                 detail: VersionsCopy.availableDetail(
-                    released: model.inRangeReleased, skipped: model.skipped(in: versions)),
+                    released: model.inRangeReleased, skipped: model.skipped(in: versions), timeZone: timeZone),
                 monos: [], trailing: nil)
-        case .tagMoved(let move):
+        case .tagMoved:
+            // The moved tag is the installed one (its strip is on the Installed row); a newer version in range
+            // shows as an ordinary available row.
+            guard let within = model.within, Update.bare(within) != model.installed.map(Update.bare) else {
+                return nil
+            }
             return Row(
-                label: VersionsCopy.availableInRange, version: version, tone: .warning,
-                detail: VersionsCopy.tagMovedDetail(move),
-                monos: [VersionsCopy.shortCommit(move.from), VersionsCopy.shortCommit(move.to)],
-                trailing: nil)
+                label: VersionsCopy.availableInRange, version: version, tone: .update,
+                detail: VersionsCopy.availableDetail(
+                    released: model.inRangeReleased, skipped: model.skipped(in: versions), timeZone: timeZone),
+                monos: [], trailing: nil)
         case .outsideRange:
             return Row(
                 label: VersionsCopy.availableInRange, version: version, tone: .primary,
@@ -167,7 +191,7 @@ struct VersionsContent: Hashable {
         }
     }
 
-    private static func newestRow(_ model: VersionsModel) -> Row? {
+    private static func newestRow(_ model: VersionsModel, timeZone: TimeZone) -> Row? {
         guard let latest = model.latest else { return nil }
         if case .unchecked = model.status {
             return nil
@@ -181,7 +205,8 @@ struct VersionsContent: Hashable {
         }
         return Row(
             label: VersionsCopy.newestOverall, version: latest, tone: .neutral,
-            detail: VersionsCopy.outsideDetail(released: model.latestReleased, range: model.allowedRange),
+            detail: VersionsCopy.outsideDetail(
+                released: model.latestReleased, range: model.allowedRange, timeZone: timeZone),
             monos: model.allowedRange.map { [$0] } ?? [], trailing: nil)
     }
 }

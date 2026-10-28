@@ -7,7 +7,7 @@ import SkillcaskCore
 ///
 /// The Homebrew commands are the release's: `dist-workspace.toml` publishes the formula `skillcask` to the tap
 /// `puniserv/homebrew-tap` (README "Install": `brew install puniserv/tap/skillcask`). The upgrade command names the
-/// tap too (`brew upgrade puniserv/tap/skillcask`, orchestrator decision), where the board writes the bare
+/// tap too (`brew upgrade puniserv/tap/skillcask`, a decision), where the board writes the bare
 /// `brew upgrade skillcask`, which would be ambiguous if a core formula of that name ever existed. Needed is
 /// `Capabilities.minimum` (0.9.1), where the board writes 0.9.0.
 ///
@@ -81,9 +81,10 @@ public enum OnboardingCopy {
 
     /// Why Locate… refused `error`.
     public static func locateFailure(_ error: CLIError) -> String {
-        if case .tooOld(let found, let needs) = error {
-            return locatedTooOld(found: found, needs: needs)
+        switch error {
+        case .tooOld(let found, let needs): locatedTooOld(found: found, needs: needs)
+        case .binaryIsApp: ErrorCopy.binaryIsAppTitle
+        default: notATool
         }
-        return notATool
     }
 }

@@ -1,7 +1,7 @@
 import SwiftUI
 
 extension PreviewRegistry {
-    /// P2-8: the Loading skeleton (strip and cards as `Overview-States` lays them out), the list-header
+    /// The Loading skeleton (strip and cards as `Overview-States` lays them out), the list-header
     /// progress of a short run over a list-wide column plus the bare bar, and the system spinner.
     static let progress: [Entry] = [
         Entry(id: "P2-8", state: "skeleton", size: CGSize(width: 600, height: 300)) { AnyView(SkeletonPreview()) },

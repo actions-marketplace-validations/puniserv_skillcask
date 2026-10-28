@@ -3,8 +3,8 @@ import Testing
 
 @testable import SkillcaskUI
 
-/// The pure parts of P2-8: the skeleton width pattern, the mini progress bar's segment position over time, and
-/// the sizes the boards fix.
+/// The pure parts of the progress components: the skeleton width pattern, the mini progress bar's segment position
+/// over time, and the sizes the boards fix.
 @Suite struct ProgressTests {
     // MARK: - Skeleton
 

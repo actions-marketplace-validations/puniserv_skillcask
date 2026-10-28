@@ -3,13 +3,13 @@ import Observation
 import SkillcaskCore
 import SkillcaskDomain
 
-/// The Add Skill sheet's state (S8, ADR §3 `SearchStore`): the field, the debounced `search`, the skills.sh consent,
+/// The Add Skill sheet's state (S8): the field, the debounced `search`, the skills.sh consent,
 /// the selected result and its `info` preview, the version rule, the provided skills and the rename, and the `add`
 /// command they make. One per sheet presentation; reads the scope's snapshot (what is installed, the policy, the
 /// repositories) and runs read-only commands through the scope's client. The mutation itself runs through
 /// `SheetRun`, never here.
 ///
-/// - Typing debounces `search --json -- <term>` by `debounce` (300 ms, ADR §5); a newer keystroke cancels the
+/// - Typing debounces `search --json -- <term>` by `debounce` (300 ms); a newer keystroke cancels the
 ///   previous task, and a generation guard drops an answer that lands after a newer query started.
 /// - A source typed into the field (`PackageSpec`: `vendor/name`, `github:…`, `git:https://…`) skips search and
 ///   becomes the selection after the same debounce, so its preview comes straight from `info`.
@@ -75,8 +75,11 @@ import SkillcaskDomain
     }
     private(set) var infos: [String: InfoDocument] = [:]
     private(set) var infoErrors: [String: UserMessage] = [:]
-    /// The version rule the popover chose; nil leaves the constraint to the CLI (`cliDefaultRule`).
+    /// The version rule the popover chose; nil leaves the constraint to the CLI (`cliDefaultRule`). A `.branch`
+    /// stands for `.branch(branch)`.
     var rule: VersionRule?
+    /// The Branch rule's branch name.
+    var branch = ""
     /// Provided skills unticked in the preview; only honoured where the CLI has `add --skill`.
     var excludedSkills: Set<String> = []
     /// The name typed into the rename field; prefilled with the clash's suggestion.
@@ -215,7 +218,12 @@ import SkillcaskDomain
 
     /// `policy.allow-ranges` of the scope; true unless the policy says `false`.
     var allowsRanges: Bool {
-        store.snapshot?.policy.first { $0.key == "allow-ranges" }?.value != "false"
+        Self.allowsRanges(store.snapshot)
+    }
+
+    /// `policy.allow-ranges` of `snapshot`; true unless the policy says `false`.
+    static func allowsRanges(_ snapshot: ScopeSnapshot?) -> Bool {
+        snapshot?.policy.first { $0.key == "allow-ranges" }?.value != "false"
     }
 
     /// The version `info` says `add` would install, when it is a number the rule can be built from. Nil hides the
@@ -231,17 +239,29 @@ import SkillcaskDomain
 
     /// The rule the button shows: the chosen one, else what the CLI writes by default.
     var effectiveRule: VersionRule {
-        rule ?? cliDefaultRule
+        if case .branch = rule {
+            return .branch(branch)
+        }
+        return rule ?? cliDefaultRule
     }
 
+    /// Flow-F2's rules for the selection: the version rules, Latest, and Branch for a GitHub or git source.
     var ruleOptions: [VersionRule] {
-        ruleBase.map { VersionRule.options(for: $0, allowRanges: allowsRanges) } ?? []
+        guard let ruleBase else { return [] }
+        return VersionRule.options(
+            for: ruleBase, allowRanges: allowsRanges, source: selectedSpec?.kind, branch: branch)
     }
 
     /// The constraint appended to the spec: only for a rule the user chose; without one the CLI picks its default.
     var constraint: String? {
-        guard let rule, let ruleBase else { return nil }
-        return rule.constraint(for: ruleBase)
+        guard rule != nil, let ruleBase else { return nil }
+        return effectiveRule.constraint(for: ruleBase)
+    }
+
+    /// The Branch rule is chosen with a name the CLI would refuse or read as a version: Add stays disabled.
+    var hasBranchProblem: Bool {
+        guard ruleBase != nil, case .branch(let name) = effectiveRule else { return false }
+        return !VersionRule.isValidBranch(name)
     }
 
     // MARK: - Provided skills and rename
@@ -342,7 +362,7 @@ import SkillcaskDomain
     /// The `add` command of the current choices; nil while nothing addable is selected (no spec, every provided
     /// skill unticked, an empty rename).
     var command: Invocation.Command? {
-        guard let spec = selectedSpec else { return nil }
+        guard let spec = selectedSpec, !hasBranchProblem else { return nil }
         let all = providedSkills.map(\.name)
         let chosen = chosenSkills
         if canChooseSkills, spec.skill == nil, !all.isEmpty, chosen.isEmpty {

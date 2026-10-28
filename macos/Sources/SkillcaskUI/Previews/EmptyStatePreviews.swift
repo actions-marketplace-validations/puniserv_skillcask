@@ -2,7 +2,7 @@ import SkillcaskDomain
 import SwiftUI
 
 extension PreviewRegistry {
-    /// P2-11: the Overview's dashed hint blocks (no projects yet, folder without skills.toml) in the detail column,
+    /// The Overview's dashed hint blocks (no projects yet, folder without skills.toml) in the detail column,
     /// the list's empty and no-matches messages in the 360 pt list column, and the Contents tab's too-large and
     /// unreadable messages in the detail column.
     static let emptyStates: [Entry] = [

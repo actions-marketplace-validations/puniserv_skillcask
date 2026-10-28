@@ -132,9 +132,9 @@ public struct PackageSpec: Hashable, Sendable {
         guard !path.isEmpty else { return (nil, .github) }
         let parts = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
         let package = parts.prefix(2).joined(separator: "/").lowercased()
-        let skill = parts.count > 2 && !parts[2].isEmpty ? parts[2...].joined(separator: "/") : nil
-        let spec = PackageSpec(kind: .github, base: githubPrefix + path, pinned: pinned, package: package, skill: skill)
         let skillPath = parts.count > 2 ? parts[2...].joined(separator: "/") : nil
+        let skill = parts.count > 2 && !parts[2].isEmpty ? skillPath : nil
+        let spec = PackageSpec(kind: .github, base: githubPrefix + path, pinned: pinned, package: package, skill: skill)
         let valid =
             pinned?.isEmpty != true && parts.count >= 2 && isPackageName(package)
             && skillPath.map(isSkillName) ?? true
@@ -144,8 +144,9 @@ public struct PackageSpec: Hashable, Sendable {
     /// `git_spec`: the `@` is split off from the end only past the scheme, so an `@` inside `https://` is not a
     /// ref, and trailing `/` are dropped. Then `git::check_url` (https, a host, no credentials, query or fragment,
     /// at least two path segments) and `git::name_of` (the last two segments without `_git` and `.git`,
-    /// lowercased, a valid package name). `package` is that name, or the URL lowercased when it has fewer
-    /// segments.
+    /// lowercased, a valid package name), both over the URL as `url::Url::parse` reads it (`HTTPSURL`). `package`
+    /// is that name, or the URL lowercased when it has fewer segments. `base` keeps the URL as typed, as the CLI
+    /// writes it to the manifest.
     private static func git(_ rest: String) -> Reading {
         let at = rest.lastIndex(of: "@")
             .flatMap { rest.distance(from: rest.startIndex, to: $0) > https.count ? $0 : nil }
@@ -154,8 +155,8 @@ public struct PackageSpec: Hashable, Sendable {
             url.removeLast()
         }
         guard !url.isEmpty else { return (nil, .gitURL) }
-        let afterScheme = url.range(of: "://").map { url[$0.upperBound...] } ?? Substring(url)
-        let path = afterScheme.split(separator: "/").dropFirst().filter { $0 != "_git" }.map(String.init)
+        let parsed = HTTPSURL(url)
+        let path = parsed?.segments.filter { !$0.isEmpty && $0 != "_git" } ?? []
         let package: String
         if path.count >= 2, let last = path.last {
             let repo = last.hasSuffix(".git") ? String(last.dropLast(4)) : last
@@ -164,17 +165,155 @@ public struct PackageSpec: Hashable, Sendable {
             package = url.lowercased()
         }
         let spec = PackageSpec(kind: .git, base: gitPrefix + url, pinned: pinned, package: package, skill: nil)
-        let valid = pinned?.isEmpty != true && isCheckedURL(url) && isPackageName(package)
+        let valid = pinned?.isEmpty != true && parsed?.isChecked == true && isPackageName(package)
         return (spec, valid ? nil : .gitURL)
     }
 
-    /// `git::check_url`.
-    private static func isCheckedURL(_ url: String) -> Bool {
-        guard let components = URLComponents(string: url), components.scheme == "https",
-            let host = components.host, !host.isEmpty, components.user == nil, components.password == nil,
-            components.query == nil, components.fragment == nil
-        else { return false }
-        return components.path.split(separator: "/").count >= 2
+    /// An `https:` URL as `url::Url::parse` (WHATWG, a special scheme) reads it, enough for `check_url` and
+    /// `name_of`: the scheme in any case, any run of `/` or `\` after `https:`, `\` read as `/`, `.` and `..`
+    /// segments (also `%2e`, any case) resolved, an empty userinfo (`https://@host`) dropped. The host: a port is
+    /// digits up to 65535 (empty is none), a bracketed host must be IPv6, a host whose last label is a number
+    /// must be an IPv4 address (`0x`, octal and short forms included), and a percent-encoded host is refused.
+    /// Credentials and the remaining host characters are left to `URLComponents` on the rebuilt URL.
+    ///
+    /// Not mirrored, where the app and the CLI can differ:
+    /// - IDNA: `url` maps `bücher.example` to punycode and refuses bad punycode (`xn--abc`); here
+    ///   `URLComponents` decides.
+    /// - Percent-encoded hosts: `url` decodes them (`ho%41st` is `hoast`, accepted; `ho%00st` refused); here any
+    ///   `%` in the host is refused.
+    /// - Tab, newline and surrounding spaces, which `url` strips: the app refuses whitespace in a spec first.
+    /// - The percent-encoding `url` adds to path characters such as `{`: refused both here and by `name_of`,
+    ///   whose name would hold a `%`.
+    private struct HTTPSURL {
+        let authority: String
+        /// The path segments after dot-segment resolution; empty ones kept (both CLI checks skip them).
+        let segments: [String]
+        /// `?…` or `#…` as typed, or empty.
+        let tail: String
+
+        init?(_ url: String) {
+            let scheme = "https:"
+            guard url.lowercased().hasPrefix(scheme) else { return nil }
+            var rest = Substring(url.dropFirst(scheme.count))
+            let end = rest.firstIndex { $0 == "?" || $0 == "#" } ?? rest.endIndex
+            tail = String(rest[end...])
+            rest = Substring(rest[..<end].replacingOccurrences(of: "\\", with: "/"))
+            rest = rest.drop { $0 == "/" }
+            let slash = rest.firstIndex(of: "/") ?? rest.endIndex
+            var authority = String(rest[..<slash])
+            if authority.hasPrefix("@"), authority.dropFirst().contains("@") == false {
+                authority.removeFirst()
+            }
+            self.authority = authority
+            var segments: [String] = []
+            for segment in rest[slash...].split(separator: "/", omittingEmptySubsequences: false).dropFirst() {
+                switch segment.lowercased().replacingOccurrences(of: "%2e", with: ".") {
+                case ".": continue
+                case "..": _ = segments.popLast()
+                default: segments.append(String(segment))
+                }
+            }
+            self.segments = segments
+        }
+
+        /// `git::check_url` on the URL as read.
+        var isChecked: Bool {
+            guard let authority = Self.checkedAuthority(authority) else { return false }
+            let rebuilt = "https://\(authority)/\(segments.joined(separator: "/"))\(tail)"
+            guard let components = URLComponents(string: rebuilt), let host = components.host, !host.isEmpty,
+                components.user == nil, components.password == nil, components.query == nil,
+                components.fragment == nil
+            else { return false }
+            return segments.filter { !$0.isEmpty }.count >= 2
+        }
+
+        /// `authority` with its port normalised (an empty port dropped), or nil when `url`'s host or port parser
+        /// refuses it.
+        private static func checkedAuthority(_ authority: String) -> String? {
+            let at = authority.lastIndex(of: "@")
+            let userinfo = at.map { String(authority[...$0]) } ?? ""
+            let hostPort = at.map { authority[authority.index(after: $0)...] } ?? Substring(authority)
+            let host: Substring
+            let port: Substring?
+            if hostPort.hasPrefix("[") {
+                guard let close = hostPort.firstIndex(of: "]") else { return nil }
+                host = hostPort[...close]
+                let after = hostPort[hostPort.index(after: close)...]
+                guard after.isEmpty || after.hasPrefix(":") else { return nil }
+                port = after.isEmpty ? nil : after.dropFirst()
+                guard isIPv6(String(host.dropFirst().dropLast())) else { return nil }
+            } else {
+                let colon = hostPort.firstIndex(of: ":")
+                host = colon.map { hostPort[..<$0] } ?? hostPort
+                port = colon.map { hostPort[hostPort.index(after: $0)...] }
+                guard !host.isEmpty, !host.contains("%") else { return nil }
+                if endsInANumber(host), ipv4(host) == nil { return nil }
+            }
+            guard let port, !port.isEmpty else { return userinfo + host }
+            let significant = port.drop { $0 == "0" }
+            guard port.allSatisfy(isDigit), significant.count <= 5,
+                let number = Int(significant.isEmpty ? "0" : significant),
+                number <= 65535
+            else { return nil }
+            return "\(userinfo)\(host):\(number)"
+        }
+
+        /// WHATWG "ends in a number": the last label (a trailing empty one skipped) is digits or an IPv4 number.
+        private static func endsInANumber(_ host: Substring) -> Bool {
+            var labels = host.split(separator: ".", omittingEmptySubsequences: false)
+            if labels.last?.isEmpty == true {
+                guard labels.count > 1 else { return false }
+                labels.removeLast()
+            }
+            guard let last = labels.last else { return false }
+            return (!last.isEmpty && last.allSatisfy(isDigit)) || ipv4Number(last) != nil
+        }
+
+        /// The WHATWG IPv4 parser: up to four numbers (a trailing empty label skipped), each part but the last
+        /// at most 255, the last filling the bytes left.
+        private static func ipv4(_ host: Substring) -> UInt64? {
+            var labels = host.split(separator: ".", omittingEmptySubsequences: false)
+            if labels.last?.isEmpty == true, labels.count > 1 {
+                labels.removeLast()
+            }
+            guard labels.count <= 4 else { return nil }
+            let numbers = labels.map(ipv4Number)
+            guard let last = numbers.last, let last else { return nil }
+            let head = numbers.dropLast()
+            guard head.allSatisfy({ ($0 ?? 256) <= 255 }) else { return nil }
+            let limit = UInt64(1) << (8 * UInt64(5 - numbers.count))
+            guard last < limit else { return nil }
+            return head.enumerated().reduce(last) { $0 + ($1.element ?? 0) << (8 * UInt64(3 - $1.offset)) }
+        }
+
+        /// The WHATWG IPv4 number parser: `0x`/`0X` hex, a leading `0` octal, else decimal; an empty part
+        /// fails, a bare prefix is 0. Values past `UInt64` fail (they are past every limit anyway).
+        private static func ipv4Number(_ part: Substring) -> UInt64? {
+            guard !part.isEmpty else { return nil }
+            var digits = part
+            var radix = 10
+            if digits.hasPrefix("0x") || digits.hasPrefix("0X") {
+                digits = digits.dropFirst(2)
+                radix = 16
+            } else if digits.count >= 2, digits.hasPrefix("0") {
+                digits = digits.dropFirst()
+                radix = 8
+            }
+            guard !digits.isEmpty else { return 0 }
+            guard digits.allSatisfy(\.isASCII) else { return nil }
+            return UInt64(digits, radix: radix)
+        }
+
+        private static func isDigit(_ character: Character) -> Bool {
+            character.isASCII && character.isNumber
+        }
+
+        /// The address inside `[…]`, as the WHATWG IPv6 parser accepts it (`inet_pton` agrees on every form a
+        /// git host uses).
+        private static func isIPv6(_ address: String) -> Bool {
+            var storage = in6_addr()
+            return inet_pton(AF_INET6, address, &storage) == 1
+        }
     }
 
     private static func split(_ text: String, at index: String.Index?) -> (String, String?) {

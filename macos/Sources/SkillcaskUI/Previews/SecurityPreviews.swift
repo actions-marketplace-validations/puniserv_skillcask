@@ -3,11 +3,12 @@ import SkillcaskDomain
 import SwiftUI
 
 extension PreviewRegistry {
-    /// P3-6: the detail column (header and Security tab) at 720 × 900, one state per Security and Security-States
+    /// The detail column (header and Security tab) at 720 × 900, one state per Security and Security-States
     /// panel: `findings` (my-notes, the Security board), `clean` (commit-message), `changedOnDisk` (jira-syntax
     /// with a `modified` finding: a package skill, so Reinstall from lock shows), `notInstalled` (sql-review with
     /// the CLI's `modified` / `not installed` finding; no board draws it), `reachOnly` (pdf), and `notAudited`
-    /// (caveman as a 0.9.1 `audit` leaves it: no row, Q7). The CLI reports `modified` for locked skills only, so
+    /// (caveman as a 0.9.1 `audit` leaves it: no row, Q7; the row itself is a planned shape, a not managed skill in
+    /// a project scope). The CLI reports `modified` for locked skills only, so
     /// no hand-written changed-on-disk state is rendered.
     /// Composed from `DetailHeader` and `SecurityTab` as `SkillDetailView` composes them, so no store is needed.
     static let security: [Entry] = [

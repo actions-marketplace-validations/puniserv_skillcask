@@ -22,10 +22,11 @@ public struct EnvironmentPolicy: Hashable, Sendable {
         FileManager.default.homeDirectoryForCurrentUser.appending(path: ".cargo/bin").path,
     ]
 
-    /// Keys that would change what the CLI prints or assumes; always removed.
-    static let stripped = ["CLICOLOR_FORCE", "CLAUDECODE", "AI_AGENT"]
-    static let protected = ["PATH", "HOME"]
-    /// What the Settings table (P3-13) may set. Every variable the CLI reads (`rg 'env::var|var_os' src/`, 0.9.x)
+    /// Keys that would change what the CLI prints or assumes; always removed. `CI` set in the app's own
+    /// environment (an app started from a CI shell or a terminal that exports it) would make every `install`
+    /// frozen and non-interactive (`src/main.rs` `ci()`, `Cmd::Install { frozen } => install(&ctx, frozen || ci())`).
+    static let stripped = ["CLICOLOR_FORCE", "CLAUDECODE", "AI_AGENT", "CI"]
+    /// What the Settings table may set. Every variable the CLI reads (`rg 'env::var|var_os' src/`, 0.9.x)
     /// is classified here, so the table can never weaken policy, reroute credentials or hosts, or inject code:
     ///
     /// | Variable | CLI source | Class |

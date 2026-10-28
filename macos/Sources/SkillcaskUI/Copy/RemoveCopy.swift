@@ -130,14 +130,28 @@ public enum RemoveCopy {
 
     /// The toast: `Removed pdf from api`, `Removed 3 skills from My Skills`, and when the CLI kept packages as
     /// dependencies `Removed pdf from api; kept acme/lint as a dependency` or `Kept acme/lint as a dependency in
-    /// api`. Invented.
-    public static func removedToast(_ skills: [String], kept: [String], scope: String) -> String {
-        let keptText = "\(OutcomeCopy.list(kept)) as \(kept.count == 1 ? "a dependency" : "dependencies")"
+    /// api`. A skill whose folder the CLI kept (modified, or not installed by it: `src/commands.rs` `materialize`)
+    /// is not called removed: `Removed sql from api; kept pdf’s folder (not Skillcask’s copy)`, `Kept pdf’s folder
+    /// in api (not Skillcask’s copy)`. Invented.
+    public static func removedToast(
+        _ skills: [String], kept: [String], copies: [String] = [], scope: String
+    ) -> String {
+        var parts: [String] = []
+        if !kept.isEmpty {
+            parts.append("\(OutcomeCopy.list(kept)) as \(kept.count == 1 ? "a dependency" : "dependencies")")
+        }
+        if !copies.isEmpty {
+            parts.append(copies.count == 1 ? "\(copies[0])’s folder" : "the folders of \(OutcomeCopy.list(copies))")
+        }
+        let why =
+            copies.isEmpty
+            ? "" : copies.count == 1 ? " (not Skillcask’s copy)" : " (not Skillcask’s copies)"
+        let keptText = parts.joined(separator: " and ")
         if skills.isEmpty {
-            return "Kept \(keptText) in \(scope)"
+            return "Kept \(keptText) in \(scope)\(why)"
         }
         let removed = "Removed \(what(skills)) from \(scope)"
-        return kept.isEmpty ? removed : "\(removed); kept \(keptText)"
+        return parts.isEmpty ? removed : "\(removed); kept \(keptText)\(why)"
     }
 
     private static func what(_ skills: [String]) -> String {

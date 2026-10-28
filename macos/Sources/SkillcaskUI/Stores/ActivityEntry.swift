@@ -50,6 +50,8 @@ extension ActionRunner {
             case cancelled
             /// The child died from a signal the app did not send.
             case killed
+            /// A read-only command passed `GuardedClient.readTimeout` and the app stopped it.
+            case timedOut
             /// The output was missing, not the expected document, or too large.
             case unreadable
             /// The command never ran: it could not be built, or the binary could not be launched.
@@ -118,9 +120,12 @@ extension ActionRunner {
                 return .cancelled
             case .killed:
                 return .killed
+            case .timedOut:
+                return .timedOut
             case .noDocument, .decode, .outputTooLarge:
                 return .unreadable
-            case .binaryMissing, .unreadableVersion, .tooOld, .unsupported, .invalidInvocation, .launchFailed:
+            case .binaryMissing, .binaryIsApp, .unreadableVersion, .tooOld, .unsupported, .invalidInvocation,
+                .launchFailed:
                 return .notRun
             }
         }

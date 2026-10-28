@@ -5,6 +5,12 @@ import SkillcaskDomain
 /// sentences, the callouts of each state, the full list's header and standings, and the footnote. Dates come from
 /// `Formatters`; a date no document carries reads "unknown" (Q2, Q6). Versions never carry a `v` (as `Labels`);
 /// a tag name keeps its own spelling (`v4.1.0`).
+///
+/// Tag moved deviates from Versions-States on purpose: the board says "The tag v4.1.0 now points at different
+/// content than when it was published." on the "Available in range" row, but `outdated` reports only the tag of
+/// the LOCKED version, comparing the commit skills.lock recorded with the commit the tag names now (`moved_tag`,
+/// `src/commands.rs` 1775–1779). So `tagMovedTitle` names the installed version's tag and "when it was locked",
+/// and the `Tag moved · was …, now …` strip sits on the Installed row.
 public enum VersionsCopy {
     // MARK: - Row labels
 
@@ -19,14 +25,14 @@ public enum VersionsCopy {
     public static let unknown = "unknown"
 
     /// `Released 12 Sep 2026`, or `Release date unknown` (invented: the board only says the column reads unknown).
-    public static func released(_ date: Date?) -> String {
+    public static func released(_ date: Date?, timeZone: TimeZone = .current) -> String {
         guard let date else { return "Release date \(unknown)" }
-        return "Released \(Formatters.dayMonthYear(date))"
+        return "Released \(Formatters.dayMonthYear(date, timeZone: timeZone))"
     }
 
     /// `Released 12 Sep 2026 · in skills.lock` (Versions board).
-    public static func installedDetail(released date: Date?) -> String {
-        released(date) + RowCopy.separator + "in \(DetailOverviewCopy.lockFile)"
+    public static func installedDetail(released date: Date?, timeZone: TimeZone = .current) -> String {
+        released(date, timeZone: timeZone) + RowCopy.separator + "in \(DetailOverviewCopy.lockFile)"
     }
 
     /// `Linked into Claude Code, Cursor` (Versions board), from the scope's targets.
@@ -43,21 +49,25 @@ public enum VersionsCopy {
 
     /// `Released 28 Oct 2026 · eligible 30 Oct 2026 (72 h)` (Versions board). Without a date: `eligible date
     /// unknown` (invented); without a policy row the parenthesis is left out.
-    public static func cooldownDetail(released date: Date?, eligible: Date?, minimumAge: String?) -> String {
-        var eligibleText = eligible.map { "eligible \(Formatters.dayMonthYear($0))" } ?? "eligible date \(unknown)"
+    public static func cooldownDetail(
+        released date: Date?, eligible: Date?, minimumAge: String?, timeZone: TimeZone = .current
+    ) -> String {
+        var eligibleText =
+            eligible.map { "eligible \(Formatters.dayMonthYear($0, timeZone: timeZone))" } ?? "eligible date \(unknown)"
         if let minimumAge {
             eligibleText += " (\(minimumAge))"
         }
-        return released(date) + RowCopy.separator + eligibleText
+        return released(date, timeZone: timeZone) + RowCopy.separator + eligibleText
     }
 
     /// The trailing word of the waiting row (Versions board).
     public static let waiting = "Waiting"
 
     /// `Released 24 Oct 2026 · skipped 1.3.0` (Versions-States); `skipped` only when the full list is loaded.
-    public static func availableDetail(released date: Date?, skipped: [String]) -> String {
-        guard !skipped.isEmpty else { return released(date) }
-        return released(date) + RowCopy.separator + "skipped \(skipped.joined(separator: ", "))"
+    public static func availableDetail(released date: Date?, skipped: [String], timeZone: TimeZone = .current) -> String
+    {
+        guard !skipped.isEmpty else { return released(date, timeZone: timeZone) }
+        return released(date, timeZone: timeZone) + RowCopy.separator + "skipped \(skipped.joined(separator: ", "))"
     }
 
     /// `Tag moved · was a81f2c0, now 3fd09e1` (Versions-States; the board's "on 25 Oct 2026" has no source, Q6).
@@ -84,8 +94,8 @@ public enum VersionsCopy {
 
     /// `Released 15 Oct 2026 · outside ^2.0` (Versions-States); `outside your range` without a known range
     /// (invented).
-    public static func outsideDetail(released date: Date?, range: String?) -> String {
-        released(date) + RowCopy.separator + (range.map { "outside \($0)" } ?? "outside your range")
+    public static func outsideDetail(released date: Date?, range: String?, timeZone: TimeZone = .current) -> String {
+        released(date, timeZone: timeZone) + RowCopy.separator + (range.map { "outside \($0)" } ?? "outside your range")
     }
 
     // MARK: - Callouts
@@ -96,20 +106,23 @@ public enum VersionsCopy {
     }
 
     /// `Checked 4 min ago.` (Versions-States up to date).
-    public static func checked(_ date: Date, now: Date) -> String {
-        "Checked \(DetailOverviewCopy.checkedAgo(date, now: now))."
+    public static func checked(_ date: Date, now: Date, timeZone: TimeZone = .current) -> String {
+        "Checked \(DetailOverviewCopy.checkedAgo(date, now: now, timeZone: timeZone))."
     }
 
     /// `4.3.0 becomes available on 30 Oct 2026.` (Versions board, which breaks the line where the strip's one
     /// paragraph needs the full stop); `4.3.0 waits for the minimum release age.` without a date (invented).
-    public static func cooldownTitle(_ version: String, eligible: Date?) -> String {
+    public static func cooldownTitle(_ version: String, eligible: Date?, timeZone: TimeZone = .current) -> String {
         guard let eligible else { return "\(version) waits for the minimum release age." }
-        return "\(version) becomes available on \(Formatters.dayMonthYear(eligible))."
+        return "\(version) becomes available on \(Formatters.dayMonthYear(eligible, timeZone: timeZone))."
     }
 
-    /// The cooldown callout's sentences (Versions board): the policy, the release time, and that nothing is to
-    /// do. The not-enforced policy sentence and the unknown release sentence are invented.
-    public static func cooldownBody(minimumAge: ScopeSnapshot.PolicyRow?, released date: Date?) -> String {
+    /// The cooldown callout's sentences (Versions board): the policy and the release time. The not-enforced policy
+    /// sentence, the unknown release sentence and the last sentence (instead of the board's "nothing to do now")
+    /// are invented.
+    public static func cooldownBody(
+        minimumAge: ScopeSnapshot.PolicyRow?, released date: Date?, timeZone: TimeZone = .current
+    ) -> String {
         var sentences: [String] = []
         if let minimumAge {
             let value = OverviewCopy.policyValue(minimumAge.value)
@@ -119,11 +132,17 @@ public enum VersionsCopy {
                     : "Your minimum release age is \(value), set in \(minimumAge.origin).")
         }
         if let date {
-            sentences.append("It was released \(Formatters.dayMonthYear(date)) at \(Formatters.time(date)).")
+            sentences.append(
+                "It was released \(Formatters.dayMonthYear(date, timeZone: timeZone)) at \(Formatters.time(date, timeZone: timeZone))."
+            )
         } else {
             sentences.append("Its release date is \(unknown).")
         }
-        sentences.append("Skillcask will offer it automatically once it is old enough; nothing to do now.")
+        // The board's "…once it is old enough; nothing to do now." overclaims: while `within` waits, `outdated`
+        // prints no older eligible version, which `update` may lock now (invented).
+        sentences.append(
+            "Skillcask offers it once it is old enough. An older version in your range may be eligible now; "
+                + "Review changes… on the Overview shows what Update would lock.")
         return sentences.joined(separator: " ")
     }
 
@@ -147,9 +166,11 @@ public enum VersionsCopy {
         return reach + " Edit the range in the repository to allow it; the app does not change skills.toml ranges."
     }
 
-    /// `The tag v4.1.0 now points at different content than when it was published.` (Versions-States).
+    /// `The tag 4.0.1 of your installed version now points at different content than when it was locked.` Board
+    /// wording (Versions-States, Flow-F3) adjusted to what the CLI reports: the installed version's tag (see the
+    /// type's note).
     public static func tagMovedTitle(_ tag: String) -> String {
-        "The tag \(tag) now points at different content than when it was published."
+        "The tag \(tag) of your installed version now points at different content than when it was locked."
     }
 
     /// The cooldown callout's trailing link (Versions board), which opens the Review sheet.
@@ -206,17 +227,18 @@ public enum VersionsCopy {
     public static let loadFailed = "Couldn’t load the versions."
 
     /// A version's date cell: `28 Oct 2026` or `unknown`.
-    public static func date(_ date: Date?) -> String {
-        date.map(Formatters.dayMonthYear) ?? unknown
+    public static func date(_ date: Date?, timeZone: TimeZone = .current) -> String {
+        date.map { Formatters.dayMonthYear($0, timeZone: timeZone) } ?? unknown
     }
 
     /// A version's standing (Versions board). `Outside your range` and `Older` are invented; `.unknown` says
     /// nothing.
-    public static func standing(_ standing: VersionsModel.Standing) -> String {
+    public static func standing(_ standing: VersionsModel.Standing, timeZone: TimeZone = .current) -> String {
         switch standing {
         case .outsideRange: "Outside your range"
         case .waiting(let eligible):
-            eligible.map { "Too new for your policy until \(Formatters.dayMonth($0))" } ?? "Too new for your policy"
+            eligible.map { "Too new for your policy until \(Formatters.dayMonth($0, timeZone: timeZone))" }
+                ?? "Too new for your policy"
         case .available: availableInRange
         case .installed: installed
         case .inRange: "In range"

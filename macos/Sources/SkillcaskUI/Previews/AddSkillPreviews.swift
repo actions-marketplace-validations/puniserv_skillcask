@@ -4,11 +4,12 @@ import SkillcaskDomain
 import SwiftUI
 
 extension PreviewRegistry {
-    /// P3-9: the Add Skill sheet (S8) at its board size over the api scope, in the states of the AddSkill and
+    /// The Add Skill sheet (S8) at its board size over the api scope, in the states of the AddSkill and
     /// AddSkill-States boards. `preview` is the AddSkill board ("jira", consent card, the selected package's
     /// preview); `name-clash` is the 0.9.1 path (the CLI's error after Add); `capable-name-clash` and
     /// `capable-skills` run against a CLI with the planned `add --rename` and `add --skill` (not shipped at 0.9.1).
     /// `success` is the window after the sheet closed: the toast in the list column, the first new skill selected.
+    /// `rule-branch` and `rule-latest` show Flow-F2's Branch and Latest rules on the rule button.
     static let addSkill: [Entry] = [
         sheet("preview", boardScope: true) {
             $0.preload(
@@ -63,6 +64,20 @@ extension PreviewRegistry {
         sheet("source") {
             $0.preload(query: DesignFixtures.sourceQuery, selection: DesignFixtures.sourceQuery)
         },
+        // Flow-F2's Branch rule on a GitHub source (the popover is a window of its own; the button shows it).
+        sheet("rule-branch") {
+            $0.preload(
+                query: AddSkillSamples.githubJira, selection: AddSkillSamples.githubJira, info: AddSkillSamples.jiraInfo
+            )
+            $0.rule = .branch("")
+            $0.branch = "release-2024"
+        },
+        sheet("rule-latest", boardScope: true) {
+            $0.preload(
+                query: DesignFixtures.jiraQuery, results: .loaded(DesignFixtures.jiraSearch), skillsSh: .disabled,
+                selection: AddSkillSamples.jiraPackage, info: AddSkillSamples.jiraInfo)
+            $0.rule = .latest
+        },
         Entry(id: "P3-9", state: "success", size: CGSize(width: 1280, height: 800)) {
             AnyView(AddSkillSuccessSample())
         },
@@ -99,6 +114,8 @@ enum AddSkillSamples {
 
     static let jiraPackage = "netresearch/agent-jira-skill"
     static let kolyaPackage = "kolya/pdf-tools"
+    /// A GitHub source for the Branch rule.
+    static let githubJira = "github:netresearch/agent-jira-skill"
 
     /// `info` of netresearch/agent-jira-skill as Add sees it before it is locked: 4.3.0 is the newest, but `info`
     /// picks 4.2.0 because 4.3.0 is inside the 72h minimum release age (AddSkill board). The fixture file is the
@@ -256,7 +273,8 @@ private struct AddSkillSuccessSample: View {
                     info: Boot.fixtureInfo(for: "jira-syntax"), text: Boot.fixtureText(for: "jira-syntax")))
         stores.runner.announce(
             AddSkillSheet.toast(
-                package: AddSkillSamples.jiraPackage, skills: ["jira-syntax", "jira-communication"], version: "4.2.0"))
+                package: AddSkillSamples.jiraPackage, skills: ["jira-syntax", "jira-communication"], version: "4.2.0"),
+            emphasis: ["jira-syntax", "jira-communication"])
         _stores = State(initialValue: stores)
     }
 

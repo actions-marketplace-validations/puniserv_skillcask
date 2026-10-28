@@ -10,7 +10,7 @@ import SwiftUI
 ///
 /// Declared deviation: the board's strip shows the file name and the hunk header currently scrolled into view
 /// (`SKILL.md  @@ -8,9 +8,15 @@ Reading`). Tracking the visible hunk needs the sheet's scroll state, so this strip
-/// shows dot, name and counts instead; the hunk-in-view readout is left to the sheet (P3-8).
+/// shows dot, name and counts instead; the hunk-in-view readout is left to the sheet.
 public struct DiffFileHeader: View {
     /// The boards' file-list dot: `width: 6px; height: 6px`, smaller than the row's `Size.statusDot`.
     nonisolated static let dotSize: CGFloat = 6

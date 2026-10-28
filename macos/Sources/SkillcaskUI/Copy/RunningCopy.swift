@@ -10,7 +10,7 @@ import SkillcaskDomain
 /// the footnotes (`The remaining item needs a download.` the singular), `Check Again`,
 /// `Health check results` (the popover's `aria-label`).
 ///
-/// Invented (declared in the P3-11 report): `Show output` (already `AddSkillCopy`'s), `Problems · Repair fixes
+/// Invented: `Show output` (already `AddSkillCopy`'s), `Problems · Repair fixes
 /// this`, `Problems · Repair fixes these`, `Problems · Sync fixes these`, `Problems · Repair or Sync fixes this`,
 /// `Problems` (no remedy), `Repaired 4 min ago` (the minutes form), `The remaining items need a download.`,
 /// `Sync puts the locked copy back. Repair does not download.`, `Repair fixes it.`, `Repair rewrites the block.`

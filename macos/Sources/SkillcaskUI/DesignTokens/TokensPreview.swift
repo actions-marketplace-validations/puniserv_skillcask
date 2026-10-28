@@ -2,8 +2,8 @@ import SkillcaskDomain
 import SwiftUI
 
 /// The token sheet: every colour as a flat swatch with its name and both hex values, the type scale, the spacing
-/// and radius scales and the fixed sizes, laid out like `design/boards/Tokens.dc.html`. Rendered in both schemes
-/// by the `P1-1` registry entry so a reviewer can pick pixels against `docs/handoff/tokens.md`.
+/// and radius scales and the fixed sizes, laid out like the Tokens board. Rendered in both schemes
+/// by the `P1-1` registry entry so a reviewer can pick pixels against the tables in `macos/DESIGN.md`.
 public struct TokensPreview: View {
     @Environment(\.colorScheme) private var colorScheme
 

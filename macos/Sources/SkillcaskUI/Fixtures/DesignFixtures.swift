@@ -2,8 +2,8 @@ import Foundation
 import SkillcaskCore
 import SkillcaskDomain
 
-/// The sample data on the design boards (`design/boards/*.dc.html`), decoded through the real Core and Domain
-/// types so previews and the render tool show exactly what a CLI answer produces. `design/` holds one CLI document
+/// The sample data on the design boards (`macos/DESIGN.md`), decoded through the real Core and Domain types so
+/// previews and the render tool show exactly what a CLI answer produces. `Fixtures/design/` holds one CLI document
 /// per JSON file in the shape `skillcask … --json` prints, `diff.*.txt` in the `diff` text format and `skill.*.md`
 /// as SKILL.md files. What no CLI document carries (toasts, activity rows, settings) lives in the plain structs
 /// at the end.
@@ -25,8 +25,21 @@ public enum DesignFixtures {
     /// pdf, so `outdated` (one row per package) gives it the same 1.2.0 → 1.4.0 and `attention.updates` is 3.
     /// The "Needs attention" chip is errors + warnings per the designer's note (8 here); the Main board's "5" is a
     /// board inconsistency.
+    ///
+    /// Planned shape, beyond what the 0.9.1 CLI prints: `status.api.json` gives every row the `source` and
+    /// `description` keys (`Capabilities.Feature.statusSource` / `.statusDescription`, not emitted yet) and has a
+    /// `not managed` row (caveman) in a project scope, where 0.9.1 reports `not managed` only for the personal
+    /// scope (`not_managed` in src/commands.rs returns nothing unless the scope is global). The boards draw both,
+    /// so the board states keep this fixture; `apiCLI` is the same scope as 0.9.1 prints it, and the first
+    /// preview of each screen built on api uses that.
     public static let api = snapshot(
         status: "status.api", audit: "audit.api", doctor: "doctor.api", outdated: "outdated.api",
+        checkedSecondsAgo: 4 * 60)
+    /// `api` exactly as the 0.9.1 CLI prints its `status`: no `source` or `description` keys and no project-scope
+    /// not managed row (caveman is gone, so safe-refactor's requirer is its package name). The first preview of
+    /// the window, the detail and the Overview, so a default render never shows a state that CLI cannot reach.
+    public static let apiCLI = snapshot(
+        status: "status.api-cli", audit: "audit.api", doctor: "doctor.api", outdated: "outdated.api",
         checkedSecondsAgo: 4 * 60)
     /// `website` (~/work/site), the healthy scope of `Overview-States`: 3 skills, all match the lock.
     public static let website = snapshot(
@@ -50,6 +63,11 @@ public enum DesignFixtures {
         status: "status.api-synced", audit: "audit.api", doctor: "doctor.api", outdated: "outdated.api",
         checkedSecondsAgo: 0)
     /// `Activity` and the `Running` integrity state: pdf updated to 1.4.0, everything synced.
+    /// `api` with `outdated` exactly as 0.9.1 prints it: no planned `eligible`/`released` keys, the cooldown only in
+    /// the note (`4.3.0 eligible 2026-10-30T09:14:00Z`), so the parse is proven end to end.
+    public static let apiNoteOnly = snapshot(
+        status: "status.api", audit: "audit.api", doctor: "doctor.api", outdated: "outdated.api-note-only",
+        checkedSecondsAgo: 4 * 60)
     public static let apiUpdated = snapshot(
         status: "status.api-updated", audit: "audit.api", doctor: "doctor.api-repaired",
         outdated: "outdated.api-updated", checkedSecondsAgo: 60)
@@ -80,6 +98,8 @@ public enum DesignFixtures {
     public static let deployChecklist = entry("deploy-checklist", in: api)
     public static let sqlReview = entry("sql-review", in: api)
     public static let myNotes = entry("my-notes", in: api)
+    /// Planned shape: a not managed row in a project scope, which the 0.9.1 CLI never reports (`api`); the
+    /// personal scope's `personalCaveman` is the reachable one.
     public static let caveman = entry("caveman", in: api)
     public static let safeRefactor = entry("safe-refactor", in: api)
     public static let legacyLint = entry("legacy-lint", in: api)
@@ -108,15 +128,17 @@ public enum DesignFixtures {
     public static let reviewPrUpdate = update("acme/review-pr", in: api)
     /// Waiting for the minimum release age: 4.3.0 released 28 Oct 2026, eligible 30 Oct 2026. The board's own
     /// arithmetic is off: released 28 Oct 09:14 plus the 72 h policy is 31 Oct, but every board says "30 Oct"
-    /// (48 h); both dates are kept verbatim, the app derives nothing from them.
+    /// (48 h); both dates are kept verbatim, the app derives nothing from them. `within` is 4.3.0, as the CLI
+    /// prints it: `outdated` computes `within` without the cooldown and names that version in the note
+    /// (`src/commands.rs` 1741–1747), so the row is a cooldown, not an update (`Update.cooldown`).
     public static let jiraCommunicationUpdate = update("netresearch/agent-jira-skill", in: api)
     /// Major release outside the range: 3.0.0 exists, ^2.0 stops at 2.3.1.
     public static let legacyLintUpdate = update("acme/lint", in: api)
     /// Up to date: 3.1.0 is the newest version.
     public static let commitMessageUpdate = update("acme/commit", in: api)
-    /// Tag moved: `tag v4.1.0 moved from a81f2c0d4e9b to 3fd09e1c7a52`. The CLI prints 12-character commit
-    /// prefixes (`moved_tag` in `src/commands.rs`); the board shortens them to 7 (`a81f2c0`, `3fd09e1`). `v4.1.0`
-    /// is the git tag's own name, not a version spelling.
+    /// Tag moved: `tag 4.0.1 moved from a81f2c0d4e9b to 3fd09e1c7a52`, beside the update 4.0.1 → 4.1.0. The CLI
+    /// names the LOCKED version's tag (`moved_tag` in `src/commands.rs` 1775–1779; the board says v4.1.0) and
+    /// prints 12-character commit prefixes; the board shortens them to 7 (`a81f2c0`, `3fd09e1`).
     public static let cavemanTagMoved = update("juliusbrussee/caveman", in: apiTagMoved)
 
     // MARK: - Info (`Main` detail, `Detail-States`, `AddSkill` preview)
@@ -151,8 +173,6 @@ public enum DesignFixtures {
     /// lines of the removed `LEGACY.md`: counts are per text file with a hunk. The first hunk's header reads
     /// `@@ -8,11 +8,16 @@` because the board's `-8,9 +8,15` does not match the 11 old / 16 new lines it shows.
     public static let pdfDiff = UnifiedDiff(text: text("diff.pdf", "txt"))
-    /// review-pr 2.1.0 → 2.2.0: 3 files, +12 −2, no flagged lines.
-    public static let reviewPrDiff = UnifiedDiff(text: text("diff.review-pr", "txt"))
     /// Update All: both packages in one `diff` run.
     public static let updateAllDiff = UnifiedDiff(text: text("diff.pdf", "txt") + text("diff.review-pr", "txt"))
     /// Nothing to update.
@@ -205,8 +225,8 @@ public enum DesignFixtures {
     /// sql-review, as `status.api.json` says), prints the `not installed` lines after the gitignore check, and
     /// prints `links: N ok` only when no link is open; and `--fix` relinks only skills whose folder exists. So
     /// `doctor.api.json` has 8 problems and no warning where the board shows "2 problems, 1 warning", and the
-    /// repaired document fixes the pdf link and the block and leaves the four links and the two downloads, 6 open
-    /// (P3-11 review). A check `--fix` repaired goes to `fixed`, not to
+    /// repaired document fixes the pdf link and the block and leaves the four links and the two downloads, 6 open.
+    /// A check `--fix` repaired goes to `fixed`, not to
     /// `passed` (the block, the git index and stray links are `passed` only when they already matched), so the
     /// board's "6 / 7 / 8 checks passed" become 2 / 2 / 5 lines; only `personal` ("5 checks passed") matches.
     public static let healthProblems = decode(DoctorDocument.self, "doctor.api")
@@ -310,6 +330,14 @@ public enum DesignFixtures {
     }
 
     /// The failure banner: one sentence what (`title`), the CLI's message and hint for what to do.
+    /// A refresh in which `audit` and `doctor` could not read skills.lock while `status` answered: the earlier
+    /// findings and Health stay, the Overview header says so. Invented (no board draws it).
+    @MainActor static let partialFailure = ScopeStore.PartialFailure(
+        failed: [.audit, .doctor], kept: [.audit, .doctor],
+        error: .failed(
+            code: .file, message: "cannot read skills.lock: Permission denied (os error 13)", hint: nil,
+            stderr: "error: cannot read skills.lock: Permission denied (os error 13)\n"))
+
     public struct Banner: Hashable, Sendable {
         public let title: String
         public let error: CLIError

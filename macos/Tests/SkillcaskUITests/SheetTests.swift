@@ -285,13 +285,53 @@ import Testing
         #expect(app.removal != nil, "a presentation whose store exists stays")
     }
 
+    @Test func droppingOrphansBuildsNoStore() {
+        let app = app()
+        #expect(app.removeFromSidebar(scope))
+        #expect(app.visitedStore(for: scope) == nil)
+        #expect(
+            !app.hasStore(for: scope), "a scope out of the sidebar has no store on screen, though one could be built")
+        #expect(app.hasStore(for: .personal))
+        app.dropOrphanedPresentation()
+        #expect(app.visitedStore(for: scope) == nil, "the orphan check does not bring the forgotten store back")
+    }
+
+    /// Settings is a window of its own: Clear Recent, Choose… and "Use the detected one" stay clickable while the
+    /// main window shows a sheet. The project the sheet is pinned to stays in the sidebar, and the tool is not
+    /// changed under it (both would drop the store the sheet works on).
+    @Test func aPinnedScopeKeepsItsStoreWhileTheSheetIsUp() async throws {
+        let app = app()
+        #expect(app.request(.adopt(skills: ["caveman"])))
+        let pinned = try #require(app.visitedStore(for: scope))
+        #expect(!app.canRemoveFromSidebar(scope) && !app.removeFromSidebar(scope))
+        #expect(app.isListed(scope) && app.visitedStore(for: scope) === pinned)
+        #expect(!app.canChangeBinary)
+        #expect(await app.locate(executable: URL(fileURLWithPath: "/tmp/other/skillcask")) == .cancelled)
+        await app.useDetectedBinary()
+        #expect(app.isReady && app.visitedStore(for: scope) === pinned && app.presentedSheet != nil)
+        app.dropOrphanedPresentation()
+        #expect(app.presentedSheet != nil, "the pinned scope is listed and the CLI ready: not an orphan")
+        app.dismiss(try #require(app.presentedSheet))
+        #expect(app.canChangeBinary && app.removeFromSidebar(scope))
+    }
+
+    /// A presentation pinned to a scope the sidebar no longer lists is an orphan, even with the CLI ready.
+    @Test func aPresentationOfAnUnlistedScopeIsAnOrphan() throws {
+        let app = app()
+        app.selectedScope = .project(URL(fileURLWithPath: "/tmp/sheet-tests-unlisted"))
+        #expect(app.request(.adopt(skills: ["caveman"])))
+        app.dropOrphanedPresentation()
+        #expect(app.presentation == nil)
+    }
+
     // MARK: - Routing
 
     func app() -> AppStore {
         let defaults = UserDefaults(suiteName: "SheetTests-\(UUID().uuidString)") ?? .standard
+        let settings = SettingsStore(defaults: defaults)
+        settings.remember(project: scope.root)
         let app = AppStore(
-            settings: SettingsStore(defaults: defaults), client: client,
-            capabilities: Capabilities(version: Capabilities.minimum))
+            settings: settings, client: client, capabilities: Capabilities(version: Capabilities.minimum))
         app.selectedScope = scope
         return app
     }

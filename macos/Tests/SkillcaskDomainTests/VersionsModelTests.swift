@@ -70,7 +70,7 @@ import Testing
         let model = try Self.model(
             version: "4.2.0",
             row: Self.row(
-                locked: "4.2.0", within: "4.2.0", latest: "4.3.0", note: "v4.3.0 eligible 2026-10-30T09:14:00Z",
+                locked: "4.2.0", within: "4.3.0", latest: "4.3.0", note: "v4.3.0 eligible 2026-10-30T09:14:00Z",
                 extra: #","released":"2026-10-28T09:14:00Z""#),
             range: "^4.2")
         let cooldown = VersionsModel.Cooldown(
@@ -101,9 +101,9 @@ import Testing
             version: "4.0.1",
             row: Self.row(
                 locked: "4.0.1", within: "4.1.0", latest: "4.1.0",
-                note: "tag v4.1.0 moved from a81f2c0d4e9b to 3fd09e1c7a52"
+                note: "tag 4.0.1 moved from a81f2c0d4e9b to 3fd09e1c7a52"
             ))
-        #expect(model.status == .tagMoved(.init(tag: "v4.1.0", from: "a81f2c0d4e9b", to: "3fd09e1c7a52")))
+        #expect(model.status == .tagMoved(.init(tag: "4.0.1", from: "a81f2c0d4e9b", to: "3fd09e1c7a52")))
         #expect(model.cooldown == nil)
     }
 
@@ -130,7 +130,7 @@ import Testing
         let model = try Self.model(
             version: "4.2.0",
             row: Self.row(
-                locked: "4.2.0", within: "4.2.0", latest: "4.3.0", note: "4.3.0 eligible 2026-10-30T09:14:00Z",
+                locked: "4.2.0", within: "4.3.0", latest: "4.3.0", note: "4.3.0 eligible 2026-10-30T09:14:00Z",
                 extra: #","released":"2026-10-28T09:14:00Z""#),
             range: "^4.2")
         let listed = model.listed(["4.3.0", "4.2.0", "4.1.2", "3.34.0", "dev-main"])

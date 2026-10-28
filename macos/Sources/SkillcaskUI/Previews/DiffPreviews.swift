@@ -2,7 +2,7 @@ import SkillcaskDomain
 import SwiftUI
 
 extension PreviewRegistry {
-    /// P2-9: the diff pane over the pdf fixture (`ReviewUpdate` board): SKILL.md with its two flagged lines, the
+    /// The diff pane over the pdf fixture (`ReviewUpdate` board): SKILL.md with its two flagged lines, the
     /// added `scripts/ocr.py`, the removed `LEGACY.md`, the binary `assets/sample.pdf`, SKILL.md wrapping at a
     /// narrow width, and the Components board's "Diff viewer" region with the file list beside the pane.
     static let diff: [Entry] = [

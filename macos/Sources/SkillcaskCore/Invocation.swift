@@ -31,6 +31,10 @@ public struct Invocation: Hashable, Sendable {
         case projects(roots: [URL])
         /// `diff [package]`: unified diff of what `update` would change; text, not JSON (until `diffJSON`).
         case diff(package: String?)
+        /// `diff --to <version> -- <package>`: the diff to the newest version matching `version`, with NO cooldown
+        /// (`src/main.rs` `Diff.to`, `src/commands.rs` `diff` → `candidate_at`); shipped in 0.9.1. For reading a
+        /// version that still waits for the minimum release age; `update` would not lock it.
+        case diffTo(package: String, version: String)
         case initialize
         case install(frozen: Bool)
         case update(packages: [String])
@@ -41,6 +45,12 @@ public struct Invocation: Hashable, Sendable {
         case authSet(host: String, username: String?)
         /// `auth remove <host>`: `username` must be the one the token was set with (the CLI's default otherwise).
         case authRemove(host: String, username: String?)
+        /// `config --json -- <key>` (D48, `Capabilities.Feature.config`): `{"value", "from"}`, `null` and exit 1
+        /// when nothing sets the key. Personal keys (`search.skills-sh`) need the personal scope (`-g`).
+        case config(key: String)
+        /// `config -- <key> <value>`: writes one setting of config.toml (personal) or skills.toml; prints
+        /// `set <key> in <file>`.
+        case configSet(key: String, value: String)
     }
 
     /// What the child reads. Its descriptions and mirror never show the text (a token for `auth set`), so neither
@@ -89,10 +99,32 @@ public struct Invocation: Hashable, Sendable {
         }
     }
 
+    /// Reads only: no file of the scope changes and the user does not wait on it as on a mutation, so it runs
+    /// under `GuardedClient.readTimeout`. `search --remember` writes config.toml and stays out.
+    public var isReadOnly: Bool {
+        switch command {
+        case .status, .audit, .outdated, .doctor(fix: false), .info, .diff, .diffTo, .projects, .config: true
+        case .search(_, _, let remember): !remember
+        default: false
+        }
+    }
+
+    /// Run in a project scope, the CLI resolves the project by walking up to the nearest folder with a
+    /// skills.toml (`src/project.rs` `find_root`), so in a folder without one it acts on a parent project. Only
+    /// `init` (which uses the folder itself), `projects` (directories as arguments), `--version` and `auth` (no
+    /// project) are safe there; `GuardedClient` refuses the rest.
+    public var needsManifest: Bool {
+        guard !scope.isPersonal else { return false }
+        switch command {
+        case .version, .initialize, .projects, .authSet, .authRemove: return false
+        default: return true
+        }
+    }
+
     /// May talk to a registry or GitHub; shown with a network affordance and a Retry on exit 3.
     public var needsNetwork: Bool {
         switch command {
-        case .outdated, .search, .diff, .info(.package), .install, .update, .add: true
+        case .outdated, .search, .diff, .diffTo, .info(.package), .install, .update, .add: true
         default: false
         }
     }
@@ -100,9 +132,9 @@ public struct Invocation: Hashable, Sendable {
     /// `--json` is on the command line, so stdout is a document (even on exit 1 for the read-only verbs).
     public var expectsDocument: Bool {
         switch command {
-        case .status, .audit, .outdated, .doctor, .info, .search, .projects: true
+        case .status, .audit, .outdated, .doctor, .info, .search, .projects, .config: true
         case .initialize, .install, .update, .add, .remove: capabilities.supports(.jsonMutations)
-        case .version, .diff, .authSet, .authRemove: false
+        case .version, .diff, .diffTo, .authSet, .authRemove, .configSet: false
         }
     }
 
@@ -162,6 +194,8 @@ public struct Invocation: Hashable, Sendable {
             return ["projects"] + json + ["--"] + roots.map(\.path)
         case .diff(let package):
             return ["diff"] + (package.map { ["--", $0] } ?? [])
+        case .diffTo(let package, let version):
+            return ["diff", "--to", version, "--", package]
         case .initialize:
             return ["init"] + json
         case .install(let frozen):
@@ -189,6 +223,10 @@ public struct Invocation: Hashable, Sendable {
             return ["auth", "set"] + (username.map { ["--username", $0] } ?? []) + ["--", host]
         case .authRemove(let host, let username):
             return ["auth", "remove"] + (username.map { ["--username", $0] } ?? []) + ["--", host]
+        case .config(let key):
+            return ["config"] + json + ["--", key]
+        case .configSet(let key, let value):
+            return ["config", "--", key, value]
         }
     }
 
@@ -203,6 +241,9 @@ public struct Invocation: Hashable, Sendable {
             try require(!roots.isEmpty, "projects needs at least one directory")
         case .diff(let package):
             try require(package?.isEmpty != true, "diff needs a package name or none")
+        case .diffTo(let package, let version):
+            try require(!package.isEmpty, "diff --to needs a package")
+            try require(!version.isEmpty && !version.hasPrefix("-"), "diff --to needs a version")
         case .add(let spec, let repository, _, let rename, let skills):
             try require(!spec.isEmpty, "add needs a package spec")
             try require(repository?.isEmpty != true, "add --repository needs a name")
@@ -224,6 +265,12 @@ public struct Invocation: Hashable, Sendable {
         case .authRemove(let host, let username):
             try require(!host.isEmpty, "auth remove needs a host")
             try require(username?.isEmpty != true, "auth remove --username needs a name")
+        case .config(let key):
+            try feature(.config, capabilities, "config")
+            try require(!key.isEmpty, "config needs a key")
+        case .configSet(let key, let value):
+            try feature(.config, capabilities, "config")
+            try require(!key.isEmpty && !value.isEmpty, "config needs a key and a value")
         case .version, .status, .audit, .outdated, .doctor, .initialize, .install:
             break
         }

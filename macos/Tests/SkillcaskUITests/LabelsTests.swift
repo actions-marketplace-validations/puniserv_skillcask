@@ -33,7 +33,7 @@ import Testing
 
     @Test(arguments: healthLabels)
     func healthHasTheBoardWords(health: Health, expected: String) {
-        #expect(Labels.health(health) == expected)
+        #expect(Labels.health(health, timeZone: .gmt) == expected)
     }
 
     @Test func fixturesReadAsTheBoardRows() {
@@ -60,14 +60,22 @@ import Testing
         #expect(Labels.health(.updateAvailable(from: "2.1.0", to: "2.2.0")) == "Update 2.1.0 → 2.2.0")
     }
 
-    /// The board's literal words, whatever the machine's locale or zone: day, abbreviated month, no year, GMT.
+    /// The board's literal words, whatever the machine's locale: day, abbreviated month, no year, in the zone given
+    /// (GMT here, so the test holds in any zone; the app passes the Mac's).
     @Test func cooldownNamesTheVersionAndTheDay() throws {
-        #expect(Labels.cooldown(note: "4.3.0 eligible 2026-10-30T09:14:00Z") == "4.3.0 on 30 Oct")
-        #expect(Labels.cooldown(note: "v4.3.0 eligible 2026-10-30T09:14:00Z") == "4.3.0 on 30 Oct")
-        #expect(Labels.health(DesignFixtures.jiraCommunication.health) == "4.3.0 on 30 Oct")
-        #expect(Labels.cooldown(note: "1.0.0 eligible 2026-12-31T23:30:00Z") == "1.0.0 on 31 Dec")
-        #expect(Labels.cooldown(note: "1.0.0 eligible 2026-12-31T23:30:00-05:00") == "1.0.0 on 1 Jan")
-        #expect(Formatters.dayMonth(try Date("2026-03-05T00:00:00Z", strategy: .iso8601)) == "5 Mar")
+        #expect(Labels.cooldown(note: "4.3.0 eligible 2026-10-30T09:14:00Z", timeZone: .gmt) == "4.3.0 on 30 Oct")
+        #expect(Labels.cooldown(note: "v4.3.0 eligible 2026-10-30T09:14:00Z", timeZone: .gmt) == "4.3.0 on 30 Oct")
+        #expect(Labels.health(DesignFixtures.jiraCommunication.health, timeZone: .gmt) == "4.3.0 on 30 Oct")
+        #expect(Labels.cooldown(note: "1.0.0 eligible 2026-12-31T23:30:00Z", timeZone: .gmt) == "1.0.0 on 31 Dec")
+        #expect(Labels.cooldown(note: "1.0.0 eligible 2026-12-31T23:30:00-05:00", timeZone: .gmt) == "1.0.0 on 1 Jan")
+        #expect(Formatters.dayMonth(try Date("2026-03-05T00:00:00Z", strategy: .iso8601), timeZone: .gmt) == "5 Mar")
+        // The viewer's zone decides the day: 23:30 GMT on New Year's Eve is already 1 January in Warsaw.
+        let warsaw = try #require(TimeZone(identifier: "Europe/Warsaw"))
+        let newYear = try Date("2026-12-31T23:30:00Z", strategy: .iso8601)
+        #expect(Formatters.dayMonthYear(newYear, timeZone: warsaw) == "1 Jan 2027")
+        #expect(Formatters.time(newYear, timeZone: warsaw) == "00:30")
+        #expect(Formatters.daysAgo(newYear, now: newYear.addingTimeInterval(3_600), timeZone: .gmt) == "1 day ago")
+        #expect(Formatters.daysAgo(newYear, now: newYear.addingTimeInterval(3_600), timeZone: warsaw) == "today")
         #expect(Labels.cooldown(note: nil) == "Cooldown")
         #expect(Labels.cooldown(note: "waiting") == "Cooldown")
         #expect(Labels.cooldown(note: "4.3.0 eligible soon") == "Cooldown")

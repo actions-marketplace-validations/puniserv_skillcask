@@ -3,7 +3,7 @@ import SkillcaskDomain
 import SwiftUI
 
 extension PreviewRegistry {
-    /// P3-11: the Running board's list column (380 wide, as its panels) and the Health-States popover (380 wide,
+    /// The Running board's list column (380 wide, as its panels) and the Health-States popover (380 wide,
     /// its content; the system popover's chrome is not drawn by a render). `runningDimmed`: a Sync just started,
     /// the bar in the header and the rows at 50 %; `longRun`: the same Sync at 0:03, grown into the block with
     /// Cancel and two output lines; `toast`: the success toast; `failureBanner`: the sign-in banner;

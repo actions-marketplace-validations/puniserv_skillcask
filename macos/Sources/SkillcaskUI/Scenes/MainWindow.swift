@@ -6,7 +6,7 @@ import SwiftUI
 /// detail, the unified toolbar, the scope's name and path as the window title. Column widths are the Tokens
 /// board's (sidebar 220 / min 180, list 360 / min 300, detail min 400). Those ideals sum to 980 and the detail's
 /// 400 is fixed, so at the 960 pt minimum the list gives first (360 → 340) and the sidebar stays at 220; the
-/// user can narrow either to its minimum (tokens.md G9 left the choice open; this is what `NavigationSplitView`
+/// user can narrow either to its minimum (`macos/DESIGN.md` G9; this is what `NavigationSplitView`
 /// does with these values). A project without skills.toml shows the Set Up block in the detail and an empty
 /// list. The stores come from the environment (`skillcaskEnvironment`); the scene boots the app on appear.
 public struct MainWindow: View {
@@ -59,6 +59,7 @@ public struct MainWindow: View {
             pinnedRemoval = removeAlert.flatMap { alert in app.removal.map { ($0.id, alert) } }
         }
         .onChange(of: app.cli) { app.dropOrphanedPresentation() }
+        .onChange(of: app.scopes) { app.dropOrphanedPresentation() }
         .background { onboarding }
         .task { await app.boot() }
     }
@@ -149,21 +150,16 @@ public struct MainWindow: View {
         ScopeOverviewView(store: store, isSetUp: false)
     }
 
-    /// The detail before the CLI is ready: a spinner while the first detection runs, the empty window under the
-    /// onboarding sheet (S13) when it failed.
-    @ViewBuilder private var unavailable: some View {
-        if app.cli == .locating && !app.isOnboarding {
-            Spinner()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.surfaceGrouped)
-        } else {
-            Color.surfaceWindow
-        }
+    /// The detail before the CLI is ready: empty, while the first detection runs (Flow-F1 step 0 "Window opens,
+    /// columns empty"; nothing is shown before the CLI answers) and under the onboarding sheet (S13) when it failed.
+    private var unavailable: some View {
+        Color.surfaceWindow
     }
 }
 
+// The default preview is the api scope as the 0.9.1 CLI prints it; the dark one keeps the boards' planned shape.
 #Preview("MainWindow, light") {
-    let stores = Boot.fixtures()
+    let stores = Boot.fixtures(api: DesignFixtures.apiCLI)
     MainWindow()
         .skillcaskEnvironment(app: stores.app, runner: stores.runner, settings: stores.settings, client: stores.client)
         .frame(width: 1280, height: 800)

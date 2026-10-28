@@ -5,7 +5,7 @@ import SwiftUI
 /// The detail column: the `DetailHeader` with its tabs for the selected row, or the `ScopeOverviewView` when
 /// nothing is selected (S1). The Overview tab is `OverviewTab` over `OverviewContent`, Security is `SecurityTab` over
 /// `SecurityContent`, and every other tab is its own view or a placeholder until its task lands. Selection loads
-/// through `.task(id:)` on the store's selection (SUI-7). Esc (`onExitCommand`) and a click on empty detail space
+/// through `.task(id:)` on the store's selection. Esc (`onExitCommand`) and a click on empty detail space
 /// clear the selection, so the Scope Overview shows again. A tab the row hides (Versions of a project skill) falls
 /// back to Overview.
 struct SkillDetailView: View {
@@ -65,6 +65,7 @@ struct SkillDetailView: View {
                 checkedAt: store.snapshot?.checkedAt,
                 onShowSkill: { store.selection = $0 },
                 onAddReplacement: { request(.addSkill(query: nil)) },
+                canAddReplacement: ToolbarRules.canAddSkill(store.snapshot, isBusy: runner.isRunning),
                 onRetry: { Task { await store.loadDetail() } },
                 onSeeSecurity: { tab = .security },
                 onEmptyClick: { store.clearSelection() })
@@ -88,7 +89,7 @@ struct SkillDetailView: View {
         case .versions:
             VersionsTab(
                 entry: entry, store: store, manifest: app.manifest(of: store.scope),
-                onReview: { request(.update(for: entry)) },
+                onReview: { request(.readChanges(of: entry)) },
                 onEmptyClick: { store.clearSelection() })
         }
     }

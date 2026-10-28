@@ -20,11 +20,11 @@ struct UpdatesCard: View {
     private var outside: [Update] { Self.outside(snapshot) }
 
     static func cooldowns(_ snapshot: ScopeSnapshot) -> [Update] {
-        (snapshot.updates ?? []).filter { $0.available == nil && $0.eligible != nil }
+        (snapshot.updates ?? []).filter { $0.available == nil && $0.cooldown != nil }
     }
 
     static func outside(_ snapshot: ScopeSnapshot) -> [Update] {
-        (snapshot.updates ?? []).filter { $0.available == nil && $0.eligible == nil && $0.outsideRange != nil }
+        (snapshot.updates ?? []).filter { $0.available == nil && $0.cooldown == nil && $0.outsideRange != nil }
     }
 
     /// Nothing to list: no update, no cooldown, nothing outside the range (or not checked yet).
@@ -87,11 +87,23 @@ struct UpdatesCard: View {
                     self.row(row)
                 }
                 ForEach(cooldowns, id: \.package) { update in
-                    OverviewLine(
-                        OverviewCopy.cooldown(
-                            names(of: update.package), update: update,
-                            minimumAge: OverviewCopy.minimumAge(snapshot.policy)),
-                        glyph: .dot(.warning), isQuiet: true)
+                    // `outdated` prints no older eligible version while `within` waits, so the card never implies
+                    // there is nothing to do: Review changes… runs plain `diff`, what Update would lock now.
+                    // The link sits under the sentence, so the sentence keeps the card's full width.
+                    VStack(alignment: .leading, spacing: Spacing.xs) {
+                        OverviewLine(
+                            OverviewCopy.cooldown(
+                                names(of: update.package), update: update,
+                                minimumAge: OverviewCopy.minimumAge(snapshot.policy)),
+                            glyph: .dot(.warning), isQuiet: true)
+                        Button(OverviewCopy.reviewChanges) { onReview(update.package) }
+                            .buttonStyle(.plain)
+                            .font(Font.Token.calloutMedium)
+                            .foregroundStyle(Color.accent)
+                            .fixedSize()
+                            // Aligned with the sentence, after the dot and its gap.
+                            .padding(.leading, Size.statusDot + Spacing.s)
+                    }
                 }
                 ForEach(outside, id: \.package) { update in
                     if let latest = update.outsideRange {

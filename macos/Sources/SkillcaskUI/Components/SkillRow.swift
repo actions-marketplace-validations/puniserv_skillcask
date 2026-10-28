@@ -55,7 +55,7 @@ public struct SkillRow: View {
     public static let trailingPadding = Spacing.m
 
     /// The boards' selected-row text, `#fff`, `rgba(255,255,255,0.82)` and the version's `opacity: 0.85`: not
-    /// tokens (tokens.md G5), the white that every system accent is designed to carry.
+    /// tokens (`macos/DESIGN.md` G5), the white that every system accent is designed to carry.
     static let selectedPrimary = Color.white
     static let selectedSecondary = Color.white.opacity(0.82)
     static let selectedVersion = Color.white.opacity(0.85)

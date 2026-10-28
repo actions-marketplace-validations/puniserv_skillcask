@@ -29,13 +29,18 @@ public struct Capabilities: Hashable, Sendable {
         case addSkill
         /// `diff --json`.
         case diffJSON
+        /// `skillcask config [-g] [--json] <key> [<value>…]` (D48): reads a setting with its layer as
+        /// `{"value", "from"}` and writes it without running anything else. 0.9.4.
+        case config
     }
 
     /// The oldest CLI the app drives: 0.9.1 has every `--json` document the app reads (D32, D40–D42).
     public static let minimum = Version(0, 9, 1)
 
     /// The release that shipped each feature. A feature that is only planned has no entry, so it stays off.
-    static let shipped: [Feature: Version] = [:]
+    /// 0.9.4 (upstream `184fb5e`, `a9358da`): `status --json` keeps `package` a bare name with the requirers in
+    /// `via`, and `config` exists (D48).
+    static let shipped: [Feature: Version] = [.statusVia: Version(0, 9, 4), .config: Version(0, 9, 4)]
 
     public let version: Version
     public let features: Set<Feature>

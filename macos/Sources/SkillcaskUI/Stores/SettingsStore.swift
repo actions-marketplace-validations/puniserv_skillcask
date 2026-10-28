@@ -83,7 +83,7 @@ import SkillcaskCore
         didSet { defaults.set(Self.stored(lastScope), forKey: Key.lastScope) }
     }
 
-    /// Run `outdated` when a scope opens (off by default: it hits GitHub unauthenticated, ADR §9).
+    /// Run `outdated` when a scope opens (off by default: it hits GitHub unauthenticated).
     public var checkUpdatesOnOpen: Bool {
         didSet { defaults.set(checkUpdatesOnOpen, forKey: Key.checkUpdatesOnOpen) }
     }

@@ -4,7 +4,7 @@ import SkillcaskDomain
 import SwiftUI
 
 extension PreviewRegistry {
-    /// P3-8: the Review Update sheet at `Size.reviewSheet` over the api scope's fixtures: the ReviewUpdate board's
+    /// The Review Update sheet at `Size.reviewSheet` over the api scope's fixtures: the ReviewUpdate board's
     /// pdf 1.2.0 → 1.4.0 and every ReviewUpdate-States state, plus loading and review-only (tag moved).
     ///
     /// A pending update shows no flags (Q11 interim: `audit` describes only the installed version). `flags-planned`
@@ -41,6 +41,22 @@ extension PreviewRegistry {
             }
         },
         reviewEntry("progress") { ReviewUpdateSample.progress() },
+        // An integrity failure (exit 4) with Details disclosing the run's transcript in the sheet; no Retry.
+        reviewEntry("integrity-details") { ReviewUpdateSample.integrityFailure() },
+        // jira's 4.3.0 is inside the range but waits for the minimum release age: nothing to update.
+        // The Versions cooldown's "Read the changes…": `diff --to 4.3.0`, review-only, Done instead of Update.
+        reviewEntry("read-waiting") {
+            ReviewUpdateSample.prepared(
+                .package("netresearch/agent-jira-skill", version: "4.3.0", reviewOnly: true)
+            ) {
+                $0.preload(UnifiedDiff(text: DesignFixtures.text("diff.jira-communication", "txt")))
+            }
+        },
+        reviewEntry("cooldown") {
+            ReviewUpdateSample.prepared(.package("jira-communication", version: nil, reviewOnly: false)) {
+                $0.preload(DesignFixtures.upToDateDiff)
+            }
+        },
         reviewEntry("loading") { ReviewUpdateSample.loading() },
         reviewEntry("review-only") {
             ReviewUpdateSample.prepared(
@@ -97,6 +113,43 @@ extension PreviewRegistry {
         return AnyView(
             ReviewUpdateSheet(target: target, store: store, onClose: {}, review: review, run: run)
                 .environment(runner))
+    }
+
+    /// Update pressed and failed with exit 4: the banner, Details open on the recorded run's transcript.
+    static func integrityFailure() -> AnyView {
+        let target = ReviewUpdateSheet.Target.package("anthropics/skills", version: "1.4.0", reviewOnly: false)
+        let store = store(DesignFixtures.api)
+        let runner = ActionRunner(queue: MutationQueue())
+        let review = ReviewUpdateSheet.review(for: target, store: store)
+        review.preload(DesignFixtures.pdfDiff)
+        let error = CLIError.failed(
+            code: .integrity, message: "The downloaded content did not match the lock. Nothing was changed.",
+            hint: "This can mean the source was tampered with. Tell whoever maintains anthropics/skills before "
+                + "trying again.",
+            stderr: "error: anthropics/skills 1.4.0: sha256 mismatch\n")
+        let transcript =
+            Array(DesignFixtures.Transcripts.updatePdf.prefix(3)).map(OutputLine.stdout) + [
+                .stderr("error: anthropics/skills 1.4.0: sha256 mismatch"),
+                .stderr("hint: This can mean the source was tampered with."),
+            ]
+        let command =
+            (try? Invocation(
+                .update(packages: ["anthropics/skills"]), in: Boot.apiScope,
+                capabilities: Capabilities(version: Capabilities.minimum)))?
+            .displayCommand ?? ActionCopy.unbuilt
+        let failure = ReviewUpdateCopy.couldNotUpdate("pdf")
+        let entry = ActionRunner.ActivityEntry(
+            title: review.runTitle, headline: failure, command: command, scope: Boot.apiScope,
+            startedAt: Date(timeIntervalSinceNow: -4), duration: .seconds(4), status: .exited(4), error: error,
+            transcript: transcript, isMutation: true, expectsDocument: false)
+        runner.preloadActivity([entry], shown: false)
+        let run = SheetRun()
+        run.preload(phase: .failed(ErrorCopy.message(for: error, title: failure)), runID: entry.id, runner: runner)
+        return AnyView(
+            ReviewUpdateSheet(
+                target: target, store: store, onClose: {}, review: review, run: run, showsRunDetails: true
+            )
+            .environment(runner))
     }
 
     /// The api scope with `snapshot` and pdf's detail (its `info` gives the range `^1.2`).

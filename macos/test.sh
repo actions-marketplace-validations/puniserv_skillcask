@@ -11,5 +11,17 @@ case "$(xcode-select -p 2>/dev/null)" in
     extra=(-Xswiftc -F"$dev/Frameworks" -Xlinker -rpath -Xlinker "$dev/Frameworks" -Xlinker -rpath -Xlinker "$dev/usr/lib") ;;
 esac
 swift format lint --strict --recursive --parallel Sources Tests Package.swift
-swift build -Xswiftc -warnings-as-errors ${extra[@]+"${extra[@]}"}
-swift test -Xswiftc -warnings-as-errors ${extra[@]+"${extra[@]}"} "$@"
+# -warnings-as-errors misses diagnostics the compiler downgrades (e.g. under @preconcurrency), so any compiler
+# warning line in the build or test output fails the gate too. swiftc colours diagnostics even into a pipe, so the
+# escape codes are stripped before counting. Only files that compile in this run report: an incremental build hides
+# warnings in unchanged files, so run on a clean build (`swift package clean`, or `--scratch-path`) before
+# trusting a 0. CI's `macos-app` job (.github/workflows/ci.yml) runs this script on a clean checkout.
+log=$(mktemp -t skillcask-test)
+trap 'rm -f "$log"' EXIT
+swift build -Xswiftc -warnings-as-errors ${extra[@]+"${extra[@]}"} 2>&1 | tee "$log"
+swift test -Xswiftc -warnings-as-errors ${extra[@]+"${extra[@]}"} "$@" 2>&1 | tee -a "$log"
+warnings=$(sed $'s/\e\\[[0-9;]*m//g' "$log" | grep -cE ':[0-9]+:[0-9]+: warning:' || true)
+if [ "$warnings" -gt 0 ]; then
+    echo "test.sh: $warnings compiler warning(s) above; the gate allows none." >&2
+    exit 1
+fi

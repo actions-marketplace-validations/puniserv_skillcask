@@ -7,7 +7,7 @@ import SwiftUI
 /// list and the dates footnote. Which rows and callout show is `VersionsContent`; this view only draws.
 ///
 /// The full list needs a network `info --json -- <package>`, so it is loaded only when the list is expanded
-/// (never on selection, ADR §5), through `load`, which the store answers from its session cache when it can.
+/// (never on selection), through `load`, which the store answers from its session cache when it can.
 /// Collapsing the list, or leaving the row, cancels the load: it runs in `.task(id:)` keyed on the expanded
 /// package. While it runs a spinner and Cancel show; a failure shows its sentence and Retry.
 struct VersionsTab: View {

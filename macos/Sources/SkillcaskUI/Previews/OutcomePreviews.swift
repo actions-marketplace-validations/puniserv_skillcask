@@ -1,7 +1,7 @@
 import SwiftUI
 
 extension PreviewRegistry {
-    /// P2-10: the Running board's toast at the bottom of the list column, the sign-in banner and the integrity
+    /// The Running board's toast at the bottom of the list column, the sign-in banner and the integrity
     /// banner at its top, and the Add Skill failure banners stacked at the sheet width.
     static let outcomes: [Entry] = [
         Entry(id: "P2-10", state: "toast", size: CGSize(width: Size.listWidth, height: 220)) {
@@ -15,6 +15,12 @@ extension PreviewRegistry {
         },
         Entry(id: "P2-10", state: "failures", size: CGSize(width: 520, height: 560)) {
             AnyView(FailuresSample())
+        },
+        // A read that passed `GuardedClient.readTimeout`: the banner with Retry. Invented (no board draws it).
+        Entry(id: "P2-10", state: "timedOut", size: CGSize(width: Size.listWidth, height: 260)) {
+            AnyView(
+                BannerSample(
+                    DesignFixtures.Banner(title: ActionCopy.couldNotCheck, error: .timedOut(after: .seconds(120)))))
         },
     ]
 }

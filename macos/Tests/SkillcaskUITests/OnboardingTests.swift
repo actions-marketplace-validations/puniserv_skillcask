@@ -5,7 +5,7 @@ import Testing
 
 @testable import SkillcaskUI
 
-/// S13 onboarding (P3-12): detection → sheet state, Try Again, Locate… validation, what the sheet blocks, the
+/// S13 onboarding: detection → sheet state, Try Again, Locate… validation, what the sheet blocks, the
 /// sidebar hint rule and the Homebrew commands.
 @Suite @MainActor struct OnboardingTests {
     nonisolated static let good = URL(fileURLWithPath: "/good/skillcask")
@@ -153,6 +153,20 @@ import Testing
         #expect(OnboardingState.resolve(app.cli, binary: app.binary) == .missing)
         #expect(app.isOnboarding)
         #expect(error.map(OnboardingCopy.locateFailure) == OnboardingCopy.notATool)
+    }
+
+    @Test func locateRefusesTheAppItselfWithItsOwnReason() async {
+        let settings = AppStoreTests.settings()
+        let good = Self.good
+        let probed = await Self.versionClient("skillcask 0.9.1 (abc)\n")
+        let locator = Locator(bundled: nil, isExecutable: { _ in true }, isSelf: { $0.path == good.path })
+        let app = AppStore(settings: settings, locator: locator) { _ in probed }
+        let error = await app.locate(executable: good)
+        #expect(error == .binaryIsApp(path: good.path))
+        #expect(settings.binaryPath == nil)
+        #expect(error.map(OnboardingCopy.locateFailure) == ErrorCopy.binaryIsAppTitle)
+        #expect(error.map { ErrorCopy.message(for: $0).title } == ErrorCopy.binaryIsAppTitle)
+        #expect(ErrorCopy.binaryIsAppTitle != OnboardingCopy.notATool)
     }
 
     @Test func locateRejectsATooOldCopy() async {

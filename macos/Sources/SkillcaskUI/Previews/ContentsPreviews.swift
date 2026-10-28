@@ -3,7 +3,7 @@ import SkillcaskDomain
 import SwiftUI
 
 extension PreviewRegistry {
-    /// P3-5: the detail column (header with Contents selected and the Contents tab) at 720 × 900 for the Contents
+    /// The detail column (header with Contents selected and the Contents tab) at 720 × 900 for the Contents
     /// board (my-notes, with the invisible-character strip and the risky line outlined), the long my-notes after
     /// Security's "Show in file" for its flagged line 49 (scrolled to and highlighted), and the three
     /// Contents-States panels (pdf after its update to 1.4.0, api-docs too large, deploy-checklist unreadable),

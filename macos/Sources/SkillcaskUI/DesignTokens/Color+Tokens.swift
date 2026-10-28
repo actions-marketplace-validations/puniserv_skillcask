@@ -2,7 +2,7 @@ import AppKit
 import SkillcaskDomain
 import SwiftUI
 
-/// The colour tokens of the Tokens board (`design/boards/Tokens.dc.html`, mapped in `docs/handoff/tokens.md`).
+/// The colour tokens of the Tokens board (tabulated in `macos/DESIGN.md`).
 ///
 /// Every token is one dynamic colour whose light and dark values are the board's hex, sRGB, resolved by
 /// `NSAppearance` at draw time; this file is the only place in `SkillcaskUI` that may spell a hex value.

@@ -64,8 +64,9 @@ public enum DetailCopy {
     }
 
     /// `Released 24 Oct 2026, 3 days ago.`
-    public static func released(_ date: Date, now: Date) -> String {
-        "Released \(Formatters.dayMonthYear(date)), \(Formatters.daysAgo(date, now: now))."
+    public static func released(_ date: Date, now: Date, timeZone: TimeZone = .current) -> String {
+        let day = Formatters.dayMonthYear(date, timeZone: timeZone)
+        return "Released \(day), \(Formatters.daysAgo(date, now: now, timeZone: timeZone))."
     }
 
     /// The strip's link to the Review Update sheet.

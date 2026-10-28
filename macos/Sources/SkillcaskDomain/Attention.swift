@@ -1,4 +1,4 @@
-/// The sidebar badge: how many rows need a decision or a fix, and how many have updates (brief §8).
+/// The sidebar badge: how many rows need a decision or a fix, and how many have updates.
 public struct Attention: Hashable, Sendable {
     public var errors = 0
     public var warnings = 0

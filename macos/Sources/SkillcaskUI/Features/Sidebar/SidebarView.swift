@@ -5,6 +5,10 @@ import SwiftUI
 /// Projects with the recent project folders, each a `ScopeRow` with its `ScopeBadge`. Selection is the system's
 /// (bound to `AppStore.selectedScope`). With no projects, the Onboarding-States hint (`SidebarHint`) sits under the
 /// Projects header; the bottom line repeats Open Folder… with its shortcut, which the File menu binds.
+///
+/// A badge is the scope store's attention once the scope was opened, else its background `status` summary
+/// (`AppStore.attention(for:)`). A folder dropped on the sidebar is added and selected as Open Folder… would
+/// (`AppStore.open(dropped:)`). Until the CLI answers (Flow-F1 step 0) the rows are dimmed and cannot be selected.
 struct SidebarView: View {
     @Environment(AppStore.self) private var app
 
@@ -12,16 +16,18 @@ struct SidebarView: View {
         @Bindable var app = app
         List(selection: $app.selectedScope) {
             Section(ShellCopy.personal) {
-                ScopeRow(item: personal, attention: app.visitedStore(for: .personal)?.snapshot?.attention)
+                ScopeRow(item: personal, attention: app.attention(for: .personal))
                     .tag(Scope.personal)
+                    .modifier(Locating(isLocating: !app.isReady))
             }
             Section(ShellCopy.projects) {
                 if SidebarHint.isShown(projects: app.projects) {
                     hint
                 } else {
                     ForEach(app.projects) { item in
-                        ScopeRow(item: item, attention: app.visitedStore(for: item.scope)?.snapshot?.attention)
+                        ScopeRow(item: item, attention: app.attention(for: item.scope))
                             .tag(item.scope)
+                            .modifier(Locating(isLocating: !app.isReady))
                             .contextMenu {
                                 Button(ShellCopy.removeFromSidebar) { app.removeFromSidebar(item.scope) }
                             }
@@ -32,6 +38,7 @@ struct SidebarView: View {
         .listStyle(.sidebar)
         .accessibilityLabel(ShellCopy.scopesLabel)
         .safeAreaInset(edge: .bottom, spacing: 0) { footer }
+        .dropDestination(for: URL.self) { urls, _ in app.open(dropped: urls) != nil }
     }
 
     // MARK: - Derived
@@ -45,6 +52,7 @@ struct SidebarView: View {
     /// Onboarding-States "First launch": the dashed hint with Open Folder… and Find Projects in Folder….
     private var hint: some View {
         SidebarHint(onOpenFolder: openFolder, onFindProjects: findProjects)
+            .modifier(Unready(isUnready: !app.isReady))
             .listRowInsets(EdgeInsets(top: Spacing.xs, leading: 0, bottom: Spacing.xs, trailing: 0))
     }
 
@@ -69,12 +77,13 @@ struct SidebarView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(ShellCopy.addProject)
+            .modifier(Unready(isUnready: !app.isReady))
         }
     }
 
     private func findProjects() {
         if let folder = Workspace.chooseFolder(prompt: EmptyCopy.findProjects) {
-            Task { await app.findProjects(under: folder) }
+            app.request(.findProjects(root: folder))
         }
     }
 
@@ -82,5 +91,28 @@ struct SidebarView: View {
         if let folder = Workspace.chooseFolder(prompt: EmptyCopy.openFolder) {
             app.open(folder: folder)
         }
+    }
+}
+
+/// Flow-F1 step 0: Open Folder… and Find Projects in Folder… (hint and footer) are disabled and dimmed until the
+/// CLI is ready, as the File menu items are.
+private struct Unready: ViewModifier {
+    let isUnready: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .disabled(isUnready)
+            .opacity(isUnready ? SkillRow.staleOpacity : 1)
+    }
+}
+
+/// Flow-F1 step 0: while the CLI is located the rows are dimmed (`SkillRow.staleOpacity`) and not selectable.
+private struct Locating: ViewModifier {
+    let isLocating: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(isLocating ? SkillRow.staleOpacity : 1)
+            .selectionDisabled(isLocating)
     }
 }

@@ -57,6 +57,18 @@ import Testing
         #expect(app.visitedStore(for: .personal) === first)
     }
 
+    @Test func staleStoresWithoutAReadyCLIAreNoStore() async {
+        let client = await Self.versionClient("skillcask 0.9.1 (abc)\n")
+        let ready = AppStore(settings: Self.settings(), locator: Self.found) { _ in client }
+        await ready.boot()
+        #expect(ready.store(for: .personal) != nil && ready.hasStore(for: .personal))
+        let missing = AppStore(settings: Self.settings(), locator: Self.notFound) { _ in FakeCLIClient() }
+        await missing.boot()
+        missing.stores = ready.stores
+        #expect(missing.store(for: .personal) == nil, "store(for:) checks the CLI before its cache")
+        #expect(!missing.hasStore(for: .personal), "hasStore answers as store(for:) does")
+    }
+
     @Test func notAVersionLineIsMissing() async {
         let client = await Self.versionClient("zsh: command not found\n")
         let app = AppStore(settings: Self.settings(), locator: Self.found) { _ in client }
@@ -125,7 +137,7 @@ import Testing
     }
 
     /// "Reveal skills.toml" follows the environment the children get: a `SKILLCASK_HOME` the app was started with
-    /// moves the personal manifest (Settings can no longer set it, P3-13); a project's stays in its root.
+    /// moves the personal manifest (Settings can no longer set it); a project's stays in its root.
     @Test func theManifestFollowsTheAppEnvironment() {
         let app = AppStore(
             settings: Self.settings(), client: FakeCLIClient(),

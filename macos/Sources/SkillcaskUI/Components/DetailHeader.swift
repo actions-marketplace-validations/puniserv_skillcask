@@ -134,7 +134,7 @@ public struct DetailHeader: View {
     /// (`.skills/my-notes`, Detail-States) with its kind pill, or "No package recorded" for a not managed skill
     /// without a source.
     ///
-    /// Board/note conflict (P3-3): the S3 note hides the package + source pill for project and local skills, while
+    /// Board/note conflict: the S3 note hides the package + source pill for project and local skills, while
     /// Detail-States draws a "Project" pill beside the path. The board is followed: the kind pill ("Project",
     /// "Local") stands beside the path, no source pill is drawn (`DetailActions.showsSourcePill` stays false).
     @ViewBuilder private var packageLine: some View {

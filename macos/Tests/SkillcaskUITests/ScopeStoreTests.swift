@@ -5,7 +5,7 @@ import Testing
 
 @testable import SkillcaskUI
 
-/// The refresh policy of ADR §5 through the `CLIClient` fake: the generation guard, selection across refreshes,
+/// The refresh policy through the `CLIClient` fake: the generation guard, selection across refreshes,
 /// `outdated` only on an explicit check, and the targeted refresh a mutation asks for.
 @Suite @MainActor struct ScopeStoreTests {
     let client = FakeCLIClient()
@@ -160,12 +160,12 @@ import Testing
         let runner = ActionRunner(queue: MutationQueue())
         let sync = Task { await runner.sync(in: store) }
         await gate.arrived()
-        #expect(runner.isRunning && runner.isBusy(scope) && runner.isBusy(.personal))
+        #expect(runner.isRunning)
         await runner.check(in: store)
         #expect(runner.activity.isEmpty, "a second run while one is in flight does nothing")
         await gate.open()
         await sync.value
-        #expect(!runner.isBusy(.personal) && runner.activity.count == 1)
+        #expect(!runner.isRunning && runner.activity.count == 1)
     }
 
     @Test(.timeLimit(.minutes(1))) func aFreshScopeIsNotRefreshedAgain() async {

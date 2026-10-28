@@ -1,6 +1,6 @@
 import SkillcaskCore
 
-/// The one place that turns CLI facts into a `Health` (brief §8). Pure, table-tested.
+/// The one place that turns CLI facts into a `Health`. Pure, table-tested.
 public enum HealthMapping {
     /// Worst thing first: the entry's own state, then audit findings, then a pending update, then a cooldown.
     public static func health(state: SkillState, update: Update?, findings: [AuditDocument.Finding]) -> Health {
@@ -27,7 +27,7 @@ public enum HealthMapping {
         if let (from, to) = update?.available {
             return .updateAvailable(from: from, to: to)
         }
-        if let update, update.eligible != nil || update.note?.contains("eligible") == true {
+        if let update, update.cooldown != nil {
             return .cooldown(until: update.note)
         }
         switch state {

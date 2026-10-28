@@ -11,7 +11,10 @@ import SkillcaskCore
 /// only tracks what the sheet draws. A sheet's run never touches the window's banner or its Retry.
 ///
 /// Two shapes:
-/// - `start`: one command (Update, Add, Adopt one skill). Cancel terminates it.
+/// - `start`: one command (Update, Add, Adopt one skill). Cancel terminates it. The phase ends as soon as the run is
+///   recorded (`ActionRunner.run`'s `onEnd`), before the scope's refresh: at exit 0 the sheet closes at once, so the
+///   toast shows while the list header carries the refresh (S11), and the progress never outlives the runner's
+///   `current` (no frame shows the progress block without its transcript).
 /// - `startBatch`: one command per item, in order (Adopt-States "Adopting 9 skills · 4 of 9"): each item gets its
 ///   own result and duration, a failure stops the rest, Cancel stops after the current item (finished items stay),
 ///   one summary toast at the end instead of one per item, and the sheet can close only once the batch ended.
@@ -45,15 +48,25 @@ import SkillcaskCore
         /// The skill (or package) the item acts on.
         public let id: String
         public internal(set) var state: State = .waiting
+        /// What the CLI's lines said about a finished item (Adopt-States "Adopted 4.0.1 · copy kept"); nil when the
+        /// batch has no `itemNote` or the item did not succeed.
+        public internal(set) var note: String?
     }
 
     public private(set) var phase: Phase = .idle
     /// The batch's rows in run order; empty for a single command.
     public private(set) var items: [Item] = []
+    /// The last single command's run (its `ActivityEntry` id), set when it ends: the failure's Details show its
+    /// transcript in place, since Activity cannot open over a sheet.
+    public private(set) var runID: UUID?
     @ObservationIgnored private weak var runner: ActionRunner?
+    /// Bumped by every `start`/`startBatch`; a single start ends only while it is still the newest.
+    @ObservationIgnored private var startToken = 0
     @ObservationIgnored private var task: Task<Void, Never>?
     /// Cancel during a batch: let the current item finish, run no more.
     @ObservationIgnored private var stopAfterCurrent = false
+    /// The stdout of the batch item that just exited 0, whole (`ActionRunner.run`'s `onStdout`), for `itemNote`.
+    @ObservationIgnored private var itemStdout: [OutputLine]?
 
     public init() {}
 
@@ -85,6 +98,13 @@ import SkillcaskCore
         if case .failed(let message) = phase { message } else { nil }
     }
 
+    /// The recorded run behind `failure`, for the in-sheet Details: nil without a failure, for a refusal (nothing
+    /// ran), or once Activity no longer keeps it.
+    public var failedEntry: ActionRunner.ActivityEntry? {
+        guard failure != nil, let runID else { return nil }
+        return runner?.activity.first { $0.id == runID }
+    }
+
     /// Batch items that ended at exit 0, for "4 of 9" and the summary.
     public var doneCount: Int {
         items.filter { if case .done = $0.state { true } else { false } }.count
@@ -96,30 +116,51 @@ import SkillcaskCore
     /// closes itself there; the runner has set the toast); on a failure the phase holds the message. Returns the
     /// task, or nil when this sheet or the app already runs something (for the app, the phase holds `refusal`).
     /// `failure` is the failure's title from Copy ("Couldn’t adopt caveman."); nil falls back to
-    /// `OutcomeCopy.couldNot(title)` for callers not yet migrated.
+    /// `OutcomeCopy.couldNot(title)` for callers not yet migrated. `report` builds the toast from the transcript
+    /// instead of `outcome` (Adopt: "Adopted caveman (4.0.1)" from the CLI's `added` line); `emphasis` are its
+    /// semibold parts; `tone` the toast's tone from the transcript.
     @discardableResult public func start(
         _ command: Invocation.Command, title: String, failure: String? = nil,
-        outcome: @escaping @Sendable (String) -> String, in store: ScopeStore, runner: ActionRunner,
+        outcome: @escaping @Sendable (String) -> String,
+        report: (@Sendable (_ scope: String, _ transcript: [OutputLine]) -> String)? = nil, emphasis: [String] = [],
+        tone: ActionRunner.Tone? = nil, in store: ScopeStore, runner: ActionRunner,
         onSuccess: @escaping @MainActor () -> Void
     ) -> Task<Void, Never>? {
         let failureTitle = failure ?? OutcomeCopy.couldNot(title)
         guard begin(title: title, failure: failureTitle, runner: runner) else { return nil }
         items = []
+        runID = nil
+        // Each start has its own token: a retry may start while the previous run's refresh still runs, and that
+        // older task's fallback (or a late `onEnd`) must never end the newer run.
+        let token = startToken
         let task = Task {
-            switch await runner.run(
-                command, title: title, failure: failureTitle, outcome: outcome, in: store, from: .sheet)
-            {
-            case .succeeded:
-                phase = .succeeded
-                onSuccess()
-            case .failed(let message):
-                phase = .failed(message)
-            case nil:
+            let end = await runner.run(
+                command, title: title, failure: failureTitle, outcome: outcome, report: report, emphasis: emphasis,
+                tone: tone, in: store, from: .sheet,
+                onEnd: { end, id in self.end(end, runID: id, token: token, onSuccess: onSuccess) })
+            // The end normally arrived through `onEnd`, before the refresh; this covers a run that ended without it.
+            if let end {
+                self.end(end, runID: nil, token: token, onSuccess: onSuccess)
+            } else if token == startToken, isRunning {
                 phase = .failed(Self.refusal(failure: failureTitle))
             }
         }
         self.task = task
         return task
+    }
+
+    /// Ends a single command once, and only the start `token` names: the phase, the run's id, and `onSuccess` at
+    /// exit 0.
+    private func end(_ end: ActionRunner.RunEnd, runID: UUID?, token: Int, onSuccess: @MainActor () -> Void) {
+        guard token == startToken, isRunning else { return }
+        self.runID = runID
+        switch end {
+        case .succeeded:
+            phase = .succeeded
+            onSuccess()
+        case .failed(let message):
+            phase = .failed(message)
+        }
     }
 
     // MARK: - Batch
@@ -129,10 +170,13 @@ import SkillcaskCore
     /// item. When at least one item succeeded, `summary(done, scope name)` is the one toast. `onSuccess` runs only
     /// when every item succeeded. Returns nil when this sheet or the app already runs something, or `items` is empty.
     /// `failure` titles the batch's refusal ("Couldn’t adopt 9 skills."); `itemFailure(item)` titles an item's failure ("Couldn’t adopt pdf."); nil falls back to
-    /// `OutcomeCopy.couldNot(itemTitle(item))`.
+    /// `OutcomeCopy.couldNot(itemTitle(item))`. `itemReport(item, transcript)` is an item's Activity headline
+    /// (nil: none); `itemNote(item, stdout)` becomes a finished item's `note`, read from the run's whole stdout.
     @discardableResult public func startBatch(
         _ items: [String], title: String, failure: String? = nil, command: @escaping (String) -> Invocation.Command,
         itemTitle: @escaping (String) -> String, itemFailure: ((String) -> String)? = nil,
+        itemReport: (@Sendable (_ item: String, _ transcript: [OutputLine]) -> String)? = nil,
+        itemNote: ((_ item: String, _ transcript: [OutputLine]) -> String?)? = nil,
         summary: @escaping (_ done: Int, _ scope: String) -> String, in store: ScopeStore, runner: ActionRunner,
         onSuccess: @escaping @MainActor () -> Void
     ) -> Task<Void, Never>? {
@@ -154,13 +198,18 @@ import SkillcaskCore
                 self.items[index].state = .running
                 let clock = ContinuousClock()
                 let started = clock.now
+                itemStdout = nil
                 let result = await runner.run(
-                    command(item), title: itemTitle(item), failure: failureOf(item), outcome: { _ in "" }, in: store,
-                    from: .sheet, announce: false)
+                    command(item), title: itemTitle(item), failure: failureOf(item), outcome: { _ in "" },
+                    report: Self.report(itemReport, item: item), in: store, from: .sheet, announce: false,
+                    onStdout: recordItemStdout)
                 let duration = clock.now - started
                 switch result {
                 case .succeeded:
                     self.items[index].state = .done(duration)
+                    if let itemNote, let stdout = itemStdout {
+                        self.items[index].note = itemNote(item, stdout)
+                    }
                 case .failed(let message):
                     self.items[index].state = .failed(message, duration)
                     end = .failed(message)
@@ -187,6 +236,19 @@ import SkillcaskCore
         }
         self.task = task
         return task
+    }
+
+    /// `itemReport` for one item, as the runner's `report`.
+    private static func report(
+        _ itemReport: (@Sendable (String, [OutputLine]) -> String)?, item: String
+    ) -> (@Sendable (String, [OutputLine]) -> String)? {
+        guard let itemReport else { return nil }
+        return { _, transcript in itemReport(item, transcript) }
+    }
+
+    /// The runner's `onStdout` for a batch item: keeps the run's whole stdout for `itemNote`.
+    private var recordItemStdout: @MainActor @Sendable ([OutputLine]) -> Void {
+        { [weak self] stdout in self?.itemStdout = stdout }
     }
 
     // MARK: - Cancel
@@ -221,6 +283,7 @@ import SkillcaskCore
             return false
         }
         self.runner = runner
+        startToken += 1
         stopAfterCurrent = false
         phase = .running(title: title)
         return true
@@ -229,8 +292,12 @@ import SkillcaskCore
     // MARK: - Previews
 
     /// Previews: shows the sheet at `phase` with `items` (a batch midway), with no command behind it.
-    func preload(phase: Phase, items: [Item] = []) {
+    func preload(phase: Phase, items: [Item] = [], runID: UUID? = nil, runner: ActionRunner? = nil) {
         self.phase = phase
         self.items = items
+        self.runID = runID
+        if let runner {
+            self.runner = runner
+        }
     }
 }

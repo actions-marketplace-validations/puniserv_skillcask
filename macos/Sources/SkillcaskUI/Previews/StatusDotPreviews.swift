@@ -2,7 +2,7 @@ import SkillcaskDomain
 import SwiftUI
 
 extension PreviewRegistry {
-    /// P2-1: the five-state vocabulary as the Components board's "Status dot + label" region, and every `Health`
+    /// The five-state vocabulary as the Components board's "Status dot + label" region, and every `Health`
     /// case through `Labels.health`, from the design fixtures where one carries it.
     static let statusDot: [Entry] = [
         Entry(id: "P2-1", state: "vocabulary", size: CGSize(width: 620, height: 150)) {

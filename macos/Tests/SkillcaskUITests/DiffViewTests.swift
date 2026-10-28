@@ -7,7 +7,7 @@ import Testing
 
 /// The diff pane over the design fixtures: the ReviewUpdate board's counts, the flags of the fixture findings,
 /// the escape transform and the row metrics. Numbering itself is Domain's (`DiffLinesTests`).
-@Suite struct DiffViewTests {
+@Suite @MainActor struct DiffViewTests {
     static var pdfFiles: [UnifiedDiff.File] { DesignFixtures.pdfDiff.packages.first?.files ?? [] }
 
     @Test func countsReadAsTheBoardWrites() throws {

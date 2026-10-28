@@ -17,12 +17,12 @@ enum Sample {
     static let doctor =
         #"{"fixed":[],"ok":false,"passed":["links: 5 ok"],"problems":[".claude/skills/jira-syntax: link wrong"],"warnings":[]}"#
 
-    static func decode<T: Decodable>(_ type: T.Type, _ json: String) -> T {
-        try! JSONDecoder().decode(type, from: Data(json.utf8))
+    static func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
+        try JSONDecoder().decode(type, from: Data(json.utf8))
     }
 
-    static func snapshot(outdated: Bool = true, audit: Bool = true) -> ScopeSnapshot {
-        ScopeSnapshot(
+    static func snapshot(outdated: Bool = true, audit: Bool = true) throws -> ScopeSnapshot {
+        try ScopeSnapshot(
             status: decode(StatusDocument.self, status), audit: audit ? decode(AuditDocument.self, Self.audit) : nil,
             doctor: decode(DoctorDocument.self, doctor),
             outdated: outdated ? decode(OutdatedDocument.self, Self.outdated) : nil)
@@ -30,8 +30,8 @@ enum Sample {
 }
 
 @Suite struct ScopeSnapshotTests {
-    @Test func entriesJoinStatusAuditAndOutdated() {
-        let snapshot = Sample.snapshot()
+    @Test func entriesJoinStatusAuditAndOutdated() throws {
+        let snapshot = try Sample.snapshot()
         #expect(
             snapshot.entries.map(\.id) == ["jira-communication", "jira-syntax", "notes", "z", "d", "acme/gone", "mine"])
         let byId = Dictionary(uniqueKeysWithValues: snapshot.entries.map { ($0.id, $0) })
@@ -52,27 +52,27 @@ enum Sample {
         #expect(byId["mine"]?.kind == .handWritten && byId["mine"]?.health == .localSkill)
     }
 
-    @Test func reachIsCarriedFromTheAuditRow() {
-        let byId = Dictionary(uniqueKeysWithValues: Sample.snapshot().entries.map { ($0.id, $0) })
+    @Test func reachIsCarriedFromTheAuditRow() throws {
+        let byId = try Dictionary(uniqueKeysWithValues: Sample.snapshot().entries.map { ($0.id, $0) })
         #expect(
             byId["notes"]?.reach
                 == Reach(commands: ["curl"], network: ["x.example"], paths: ["~/.ssh"], env: ["HOME"], scripts: []))
         #expect(byId["jira-syntax"]?.reach?.isEmpty == true)
         // No audit row: not audited, which is not the same as an empty reach.
         #expect(byId["z"]?.reach == nil && byId["mine"]?.reach == nil)
-        #expect(Sample.snapshot(audit: false).entries.allSatisfy { $0.reach == nil })
+        #expect(try Sample.snapshot(audit: false).entries.allSatisfy { $0.reach == nil })
     }
 
-    @Test func attentionCountsWorstPerRowPlusUpdates() {
-        let attention = Sample.snapshot().attention
+    @Test func attentionCountsWorstPerRowPlusUpdates() throws {
+        let attention = try Sample.snapshot().attention
         #expect(attention == Attention(errors: 2, warnings: 2, updates: 2))
         #expect(attention.needing == 4 && attention.worst == .error)
         #expect(Attention(errors: 0, warnings: 0, updates: 1).worst == .update)
         #expect(Attention().worst == nil)
     }
 
-    @Test func scopeLevelRows() {
-        let snapshot = Sample.snapshot()
+    @Test func scopeLevelRows() throws {
+        let snapshot = try Sample.snapshot()
         #expect(
             snapshot.policy == [
                 ScopeSnapshot.PolicyRow(key: "min-release-age", value: "72h", from: "config.toml"),
@@ -87,7 +87,7 @@ enum Sample {
     }
 
     @Test func requirerSkillsNameTheSkillsOfTheViaPackages() throws {
-        let snapshot = Sample.snapshot()
+        let snapshot = try Sample.snapshot()
         let byId = Dictionary(uniqueKeysWithValues: snapshot.entries.map { ($0.id, $0) })
         let dependency = try #require(byId["d"])
         #expect(snapshot.requirerSkills(of: dependency) == ["jira-communication", "jira-syntax"])
@@ -97,8 +97,8 @@ enum Sample {
         #expect(snapshot.requirerSkills(of: project) == [])
     }
 
-    @Test func withoutOutdatedAndAuditNothingIsGuessed() {
-        let snapshot = Sample.snapshot(outdated: false, audit: false)
+    @Test func withoutOutdatedAndAuditNothingIsGuessed() throws {
+        let snapshot = try Sample.snapshot(outdated: false, audit: false)
         #expect(!snapshot.updatesChecked && snapshot.availableUpdates.isEmpty)
         #expect(snapshot.entry(id: "jira-communication")?.health == .installed)
         #expect(snapshot.entry(id: "notes")?.health == .projectSkill && snapshot.entry(id: "notes")?.path == nil)
@@ -107,7 +107,11 @@ enum Sample {
 }
 
 @Suite struct FilterTests {
-    let entries = Sample.snapshot().entries
+    let entries: [SkillEntry]
+
+    init() throws {
+        entries = try Sample.snapshot().entries
+    }
 
     @Test func chips() {
         #expect(Filter.all.apply(entries).count == 7)
@@ -147,8 +151,8 @@ enum Sample {
 
 /// What `install --frozen` restores, from the `modified` findings `audit` reports on locked skills.
 @Suite struct LockRestoreTests {
-    static func finding(_ rule: String, _ message: String) -> AuditDocument.Finding {
-        Sample.decode(
+    static func finding(_ rule: String, _ message: String) throws -> AuditDocument.Finding {
+        try Sample.decode(
             AuditDocument.Finding.self,
             #"{"rule":"\#(rule)","path":".agents/skills/x","line":null,"message":"\#(message)"}"#)
     }
@@ -159,36 +163,42 @@ enum Sample {
             findings: findings, path: nil, description: nil, reach: nil)
     }
 
-    static let edited = finding("modified", "modified after skillcask installed it; run `skillcask install` to restore")
-    static let missing = finding("modified", "not installed")
+    let edited: AuditDocument.Finding
+    let missing: AuditDocument.Finding
 
-    @Test func modifiedMapsToChangedOrNotInstalledAndKeepsTheMessage() {
-        #expect(Self.edited.lockRestoreReason == .changed)
-        #expect(Self.missing.lockRestoreReason == .notInstalled)
-        #expect(Self.finding("risky-pattern", "not installed").lockRestoreReason == nil)
-        let restore = Self.entry("a", .package("v/a"), [Self.missing]).lockRestore
+    init() throws {
+        edited = try Self.finding(
+            "modified", "modified after skillcask installed it; run `skillcask install` to restore")
+        missing = try Self.finding("modified", "not installed")
+    }
+
+    @Test func modifiedMapsToChangedOrNotInstalledAndKeepsTheMessage() throws {
+        #expect(edited.lockRestoreReason == .changed)
+        #expect(missing.lockRestoreReason == .notInstalled)
+        #expect(try Self.finding("risky-pattern", "not installed").lockRestoreReason == nil)
+        let restore = Self.entry("a", .package("v/a"), [missing]).lockRestore
         #expect(restore == LockRestore(skill: "a", reason: .notInstalled, message: "not installed"))
-        #expect(Self.entry("b", .package("v/b"), [Self.edited]).lockRestore?.message == Self.edited.message)
+        #expect(Self.entry("b", .package("v/b"), [edited]).lockRestore?.message == edited.message)
     }
 
     @Test func onlyLockedSkillsRestoreInListOrderOncePerName() {
         let entries = [
-            Self.entry("a", .package("v/a"), [Self.edited]),
+            Self.entry("a", .package("v/a"), [edited]),
             Self.entry("ok", .package("v/ok"), []),
-            Self.entry("mine", .handWritten, [Self.edited]),
-            Self.entry("notes", .project, [Self.edited]),
-            Self.entry("z", .notManaged(adopt: nil), [Self.missing]),
-            Self.entry("d", .dependency("v/d", via: ["v/a"]), [Self.missing]),
-            Self.entry("a", .package("v/a2"), [Self.edited]),
+            Self.entry("mine", .handWritten, [edited]),
+            Self.entry("notes", .project, [edited]),
+            Self.entry("z", .notManaged(adopt: nil), [missing]),
+            Self.entry("d", .dependency("v/d", via: ["v/a"]), [missing]),
+            Self.entry("a", .package("v/a2"), [edited]),
         ]
         #expect(LockRestore.restores(in: entries).map(\.skill) == ["a", "d"])
         #expect(LockRestore.restores(in: entries).map(\.reason) == [.changed, .notInstalled])
     }
 
-    @Test func snapshotRestoresComeFromItsAudit() {
+    @Test func snapshotRestoresComeFromItsAudit() throws {
         #expect(
-            Sample.snapshot().lockRestores
+            try Sample.snapshot().lockRestores
                 == [LockRestore(skill: "jira-syntax", reason: .notInstalled, message: "not installed")])
-        #expect(Sample.snapshot(audit: false).lockRestores.isEmpty)
+        #expect(try Sample.snapshot(audit: false).lockRestores.isEmpty)
     }
 }

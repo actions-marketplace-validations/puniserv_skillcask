@@ -8,6 +8,12 @@ public enum ToolbarRules {
         snapshot != nil
     }
 
+    /// Add Skill… (toolbar, ⌘N, the empty list's button): the scope has data and no run is in flight (Flow-F2
+    /// "Disabled while another command runs in this scope"; one run at a time in the whole app, `ActionRunner.isBusy`).
+    public static func canAddSkill(_ snapshot: ScopeSnapshot?, isBusy: Bool) -> Bool {
+        isLoaded(snapshot) && !isBusy
+    }
+
     /// The lock and the files disagree: a row is not installed, changed on disk or needs sync.
     public static func canSync(_ snapshot: ScopeSnapshot?) -> Bool {
         (snapshot?.entries ?? [])

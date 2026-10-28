@@ -94,8 +94,15 @@ public struct ScopeSnapshot: Hashable, Sendable {
         status: StatusDocument, audit: AuditDocument?, doctor: DoctorDocument?, outdated: OutdatedDocument?,
         checkedAt: Date = Date()
     ) {
+        // A fresh `status` that shows the version `outdated` offered means the update was applied since the check:
+        // the row is current without waiting for the next network check (`Update.settled(installed:)`).
+        let installed = Dictionary(
+            status.entries.compactMap { entry in entry.package.map { ($0, entry.version) } },
+            uniquingKeysWith: { first, _ in first })
         let updates = outdated.map {
-            Dictionary($0.packages.map { ($0.package, Update($0)) }, uniquingKeysWith: { first, _ in first })
+            Dictionary(
+                $0.packages.map { ($0.package, Update($0).settled(installed: installed[$0.package] ?? nil)) },
+                uniquingKeysWith: { first, _ in first })
         }
         let audited = Dictionary((audit?.skills ?? []).map { ($0.skill, $0) }, uniquingKeysWith: { first, _ in first })
         entries = status.entries.map { entry in

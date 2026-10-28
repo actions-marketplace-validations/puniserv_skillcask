@@ -15,20 +15,20 @@ public enum ContentsCopy {
 
     /// `SKILL.md · 1.8 KB · changed 3 Oct 2026`; `SKILL.md · 6.2 KB` when the date is unknown, `SKILL.md` when
     /// nothing is (an unreadable file).
-    public static func fileLine(name: String, bytes: Int?, modified: Date?) -> String {
+    public static func fileLine(name: String, bytes: Int?, modified: Date?, timeZone: TimeZone = .current) -> String {
         var parts = [name]
         if let bytes {
             parts.append(size(bytes))
         }
         if let modified {
-            parts.append(changed(modified))
+            parts.append(changed(modified, timeZone: timeZone))
         }
         return parts.joined(separator: " · ")
     }
 
     /// `changed 3 Oct 2026`.
-    public static func changed(_ date: Date) -> String {
-        "changed " + Formatters.dayMonthYear(date)
+    public static func changed(_ date: Date, timeZone: TimeZone = .current) -> String {
+        "changed " + Formatters.dayMonthYear(date, timeZone: timeZone)
     }
 
     /// `1.8 KB`, `6.2 KB`, `48 KB`, `1.3 MB`: binary units with one decimal below ten (the boards' `1.8 KB`,
@@ -82,7 +82,7 @@ public enum ContentsCopy {
 
     // MARK: - Escapes
 
-    /// The body as shown: the `<U+XXXX>` escapes of D26 as `‹U+XXXX›` (P2-9's display, `DiffCopy.shown`).
+    /// The body as shown: the `<U+XXXX>` escapes of D26 as `‹U+XXXX›` (the diff pane's display, `DiffCopy.shown`).
     public static func shown(_ text: String) -> String {
         DiffCopy.shown(text)
     }

@@ -4,7 +4,7 @@ import Testing
 @testable import SkillcaskUI
 
 /// The designer's enablement rules for Sync and Update All, over the design fixtures and the Overview grid.
-@Suite struct ToolbarRulesTests {
+@Suite @MainActor struct ToolbarRulesTests {
     @Test func syncIsEnabledOnlyWhenTheLockAndFilesDisagree() {
         // api: jira-syntax and sql-review not installed, deploy-checklist changed on disk.
         #expect(ToolbarRules.canSync(DesignFixtures.api))

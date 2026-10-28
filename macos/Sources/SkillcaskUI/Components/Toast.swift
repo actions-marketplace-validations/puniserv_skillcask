@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The success toast of a run (S11; Running and Components boards): a card-coloured strip with a green check, the
-/// outcome in 12 pt and the "Show details" link in the accent, 12 pt from the edges at the bottom of the list
+/// outcome in 12 pt (the whole sentence, wrapping to two lines, the skill names semibold) and the "Show details" link in the accent, 12 pt from the edges at the bottom of the list
 /// column. It is the one surface besides popovers that carries a shadow (Tokens board `elev.2`). The caller
 /// positions it; `View.toast(_:onDetails:)` does so and keeps the 4 s.
 public struct Toast: View {
@@ -11,8 +11,8 @@ public struct Toast: View {
     public nonisolated static let inset = Spacing.m
 
     /// The board's `elev.2` shadow (`0 8px 24px`, black at 0.16 light / 0.5 dark); a CSS blur of 24 is a SwiftUI
-    /// radius of 12. Nothing in `DesignTokens` names a shadow yet; `docs/handoff/tokens.md` proposes
-    /// `Shadow.popover` there, and these values move under it when that token lands.
+    /// radius of 12. Nothing in `DesignTokens` names a shadow yet (`macos/DESIGN.md`); these values move
+    /// under a `Shadow.popover` token there when one lands.
     public enum Shadow {
         public nonisolated static let radius: CGFloat = 12
         public nonisolated static let yOffset: CGFloat = 8
@@ -21,41 +21,54 @@ public struct Toast: View {
     }
 
     nonisolated static let symbol = "checkmark.circle"
+    /// The mark of a `.warning` toast. Invented (the boards draw only the success toast).
+    nonisolated static let warningSymbol = "exclamationmark.triangle"
 
     @Environment(\.colorScheme) private var colorScheme
 
+    /// The lines the outcome may take before it is truncated (Flow-F2: the full sentence, not one clipped line).
+    nonisolated static let lineLimit = 2
+
     private let text: String
-    private let emphasis: String?
+    private let emphasis: [String]
     private let onDetails: (() -> Void)?
+    private var tone: ToastMessage.Tone = .success
 
     /// - Parameters:
     ///   - text: The outcome, from `OutcomeCopy`.
     ///   - emphasis: The part of `text` drawn semibold (the skill name).
     ///   - onDetails: What "Show details" does; nil hides the link.
     public init(_ text: String, emphasis: String? = nil, onDetails: (() -> Void)? = nil) {
+        self.init(text, emphasizing: emphasis.map { [$0] } ?? [], onDetails: onDetails)
+    }
+
+    /// A toast with several semibold parts (the skill names of an Add).
+    public init(_ text: String, emphasizing: [String], onDetails: (() -> Void)? = nil) {
         self.text = text
-        self.emphasis = emphasis
+        emphasis = emphasizing
         self.onDetails = onDetails
     }
 
     /// The toast of `message`; `onDetails` is wired only when the message shows the link.
     public init(_ message: ToastMessage, onDetails: (() -> Void)? = nil) {
-        self.init(message.text, emphasis: message.emphasis, onDetails: message.showsDetails ? onDetails : nil)
+        self.init(message.text, emphasizing: message.emphasis, onDetails: message.showsDetails ? onDetails : nil)
+        tone = message.tone
     }
 
     public var body: some View {
         HStack(spacing: Spacing.rowGap) {
             // The board draws the check at 14 px; no 14 pt icon token exists, so the toolbar size (13) stands.
-            Image(systemName: Self.symbol)
+            Image(systemName: tone == .warning ? Self.warningSymbol : Self.symbol)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .frame(width: Size.iconToolbar, height: Size.iconToolbar)
-                .foregroundStyle(Color.statusOkText)
+                .foregroundStyle(tone == .warning ? Color.statusWarningText : Color.statusOkText)
                 .accessibilityHidden(true)
-            Self.label(text, emphasis: emphasis)
+            Text(Self.label(text, emphasis: emphasis))
                 .font(Font.Token.callout)
                 .foregroundStyle(Color.textPrimary)
-                .lineLimit(1)
+                .lineLimit(Self.lineLimit)
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if let onDetails {
                 Button(action: onDetails) {
@@ -84,12 +97,36 @@ public struct Toast: View {
         colorScheme == .dark ? Shadow.darkOpacity : Shadow.lightOpacity
     }
 
-    /// `text` with its first `emphasis` in `Font.Token.calloutSemibold`, as the board bolds the skill name.
-    nonisolated static func label(_ text: String, emphasis: String?) -> Text {
-        guard let emphasis, !emphasis.isEmpty, let range = text.range(of: emphasis) else { return Text(text) }
-        return Text(text[..<range.lowerBound])
-            + Text(text[range]).font(Font.Token.calloutSemibold)
-            + Text(text[range.upperBound...])
+    /// `text` with each part of `emphasis` in `Font.Token.calloutSemibold`, as the board bolds the skill names:
+    /// each part's first occurrence after the previous part, so `a` in `Added a and ab` is the first word. A hyphen
+    /// inside a part is drawn non-breaking (U+2011), so a wrapped toast never splits `jira-communication`; VoiceOver
+    /// reads the plain `text`.
+    nonisolated static func label(_ text: String, emphasis: [String]) -> AttributedString {
+        var result = AttributedString()
+        var rest = Substring(text)
+        for part in emphasis where !part.isEmpty {
+            guard let range = rest.range(of: part) else { continue }
+            result += AttributedString(String(rest[..<range.lowerBound]))
+            var name = AttributedString(part.replacingOccurrences(of: "-", with: nonBreakingHyphen))
+            name.font = Font.Token.calloutSemibold
+            result += name
+            rest = rest[range.upperBound...]
+        }
+        result += AttributedString(String(rest))
+        return result
+    }
+
+    /// U+2011, drawn like `-` but never a line break.
+    nonisolated static let nonBreakingHyphen = "\u{2011}"
+
+    /// The semibold parts of `label(_:emphasis:)`, for tests: the runs drawn in `Font.Token.calloutSemibold`.
+    nonisolated static func emphasized(_ text: String, emphasis: [String]) -> [String] {
+        let attributed = label(text, emphasis: emphasis)
+        return attributed.runs.compactMap { run in
+            run.attributes[AttributeScopes.SwiftUIAttributes.FontAttribute.self] == nil
+                ? nil
+                : String(attributed[run.range].characters).replacingOccurrences(of: nonBreakingHyphen, with: "-")
+        }
     }
 }
 

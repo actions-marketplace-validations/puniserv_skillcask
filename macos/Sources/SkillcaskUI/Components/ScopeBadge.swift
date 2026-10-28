@@ -1,7 +1,7 @@
 import SkillcaskDomain
 import SwiftUI
 
-/// The badges at the trailing edge of a sidebar scope row (brief §8, Components board "Project row"): the count of
+/// The badges at the trailing edge of a sidebar scope row (Components board "Project row"): the count of
 /// rows that are red or amber, coloured by the worst one, then a separate blue count of updates. Either badge
 /// disappears at zero, and a healthy scope draws nothing at all.
 public struct ScopeBadge: View {

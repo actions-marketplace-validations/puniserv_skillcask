@@ -16,6 +16,13 @@ import Testing
         #expect(env["HOME"] == "/Users/me" && env["X"] == "1")
     }
 
+    /// An inherited `CI` would make every `install` frozen and non-interactive (`src/main.rs` `ci()`): stripped,
+    /// whatever its value, and the Settings table cannot set it back.
+    @Test(arguments: ["1", "true", "0"]) func ciIsStripped(value: String) {
+        let env = EnvironmentPolicy(extraPaths: [], overrides: ["CI": "1"]).environment(from: ["CI": value])
+        #expect(env["CI"] == nil)
+    }
+
     @Test func overridesApplyExceptProtectedAndMalformedKeys() {
         let policy = EnvironmentPolicy(
             extraPaths: [],
@@ -121,7 +128,7 @@ import Testing
 
 @Suite struct LocatorTests {
     let executables: Set<String> = [
-        "/opt/homebrew/bin/skillcask", "/Users/me/build/skillcask", "/app/Contents/MacOS/skillcask",
+        "/opt/homebrew/bin/skillcask", "/Users/me/build/skillcask", "/app/Contents/Helpers/skillcask",
     ]
 
     func locator(bundled: String?) -> Locator {
@@ -134,7 +141,7 @@ import Testing
 
     @Test func configuredPathWinsAndMustBeExecutable() throws {
         #expect(
-            try locator(bundled: "/app/Contents/MacOS/skillcask").locate(configured: " /Users/me/build/skillcask ")
+            try locator(bundled: "/app/Contents/Helpers/skillcask").locate(configured: " /Users/me/build/skillcask ")
                 == .configured(URL(fileURLWithPath: "/Users/me/build/skillcask")))
         #expect(throws: CLIError.binaryMissing(searched: ["/Users/me/nope"])) {
             try locator(bundled: nil).locate(configured: "/Users/me/nope")
@@ -143,8 +150,8 @@ import Testing
 
     @Test func bundledThenSearchPath() throws {
         #expect(
-            try locator(bundled: "/app/Contents/MacOS/skillcask").locate(configured: "")
-                == .bundled(URL(fileURLWithPath: "/app/Contents/MacOS/skillcask")))
+            try locator(bundled: "/app/Contents/Helpers/skillcask").locate(configured: "")
+                == .bundled(URL(fileURLWithPath: "/app/Contents/Helpers/skillcask")))
         #expect(
             try locator(bundled: "/app/missing").locate(configured: nil)
                 == .onPath(URL(fileURLWithPath: "/opt/homebrew/bin/skillcask")))
@@ -162,6 +169,84 @@ import Testing
                 false
             }
         }
+    }
+
+    // The self-launch loop: under `swift run` a `skillcask` lookup found the GUI binary `Skillcask` itself.
+    func locator(bundled: String?, selfPath: String) -> Locator {
+        let executables = executables
+        return Locator(
+            policy: EnvironmentPolicy(extraPaths: ["/opt/homebrew/bin"]),
+            path: "/Users/me/build:/usr/bin",
+            bundled: bundled.map { URL(fileURLWithPath: $0) },
+            isExecutable: { executables.contains($0.path) },
+            isSelf: { $0.path == selfPath })
+    }
+
+    @Test func bundledThatIsSelfFallsThroughToPath() throws {
+        let helper = "/app/Contents/Helpers/skillcask"
+        #expect(
+            try locator(bundled: helper, selfPath: helper).locate(configured: nil)
+                == .onPath(URL(fileURLWithPath: "/Users/me/build/skillcask")))
+    }
+
+    @Test func configuredThatIsSelfIsRefused() {
+        #expect(throws: CLIError.binaryIsApp(path: "/Users/me/build/skillcask")) {
+            try locator(bundled: "/app/Contents/Helpers/skillcask", selfPath: "/Users/me/build/skillcask")
+                .locate(configured: "/Users/me/build/skillcask")
+        }
+    }
+
+    @Test func pathCandidateThatIsSelfIsSkipped() throws {
+        #expect(
+            try locator(bundled: nil, selfPath: "/Users/me/build/skillcask").locate(configured: nil)
+                == .onPath(URL(fileURLWithPath: "/opt/homebrew/bin/skillcask")))
+    }
+
+    @Test func normalCaseIsUnchangedBySelfCheck() throws {
+        #expect(
+            try locator(bundled: "/app/Contents/Helpers/skillcask", selfPath: "/elsewhere/Skillcask")
+                .locate(configured: nil) == .bundled(URL(fileURLWithPath: "/app/Contents/Helpers/skillcask")))
+    }
+
+    @Test func onlyAnAppBundleHasABundledCLI() {
+        #expect(
+            Locator.bundledInApp(bundleURL: URL(fileURLWithPath: "/Applications/Skillcask.app"))
+                == URL(fileURLWithPath: "/Applications/Skillcask.app/Contents/Helpers/skillcask"))
+        #expect(Locator.bundledInApp(bundleURL: URL(fileURLWithPath: "/repo/macos/.build/debug")) == nil)
+    }
+
+    @Test func selfIsMatchedByFileIdentityThroughSymlinksAndCase() throws {
+        let dir = FileManager.default.temporaryDirectory.appending(path: "locator-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let app = dir.appending(path: "Skillcask")
+        let other = dir.appending(path: "other")
+        let link = dir.appending(path: "link")
+        try Data("gui".utf8).write(to: app)
+        try Data("cli".utf8).write(to: other)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: app)
+        let isSelf = Locator.isRunningExecutable([app, nil])
+        #expect(isSelf(app) && isSelf(link))
+        #expect(!isSelf(other) && !isSelf(dir.appending(path: "missing")))
+        // The bug's shape: a lowercase lookup of the GUI binary on a case-insensitive volume.
+        let lower = dir.appending(path: "skillcask")
+        #expect(isSelf(lower) == FileManager.default.fileExists(atPath: lower.path))
+    }
+
+    @Test func defaultSelfCheckRecognisesTheRunningTestBinary() throws {
+        let running = try #require(ProcessInfo.processInfo.arguments.first)
+        #expect(Locator.isRunningExecutable()(URL(fileURLWithPath: running)))
+    }
+}
+
+@Suite struct LaunchArgumentsTests {
+    @Test(arguments: [
+        (["--version"], true), (["list", "--json"], true),
+        (["-NSDocumentRevisionsDebugMode", "YES", "--version"], true),
+        ([], false), (["-NSDocumentRevisionsDebugMode", "YES"], false), (["-psn_0_12345"], false),
+    ])
+    func cliStyleStartsAreRefused(arguments: [String], refused: Bool) {
+        #expect(LaunchArguments.isCLIInvocation(arguments) == refused)
     }
 }
 

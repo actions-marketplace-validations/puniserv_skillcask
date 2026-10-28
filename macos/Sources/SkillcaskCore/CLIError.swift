@@ -5,6 +5,9 @@ import Foundation
 public enum CLIError: Error, Hashable, Sendable {
     /// No executable `skillcask` at the configured path or on the search path.
     case binaryMissing(searched: [String])
+    /// The configured path is the running Skillcask app itself (`Locator.isSelf`), never probed: running it would
+    /// start another app.
+    case binaryIsApp(path: String)
     /// The binary answered `--version` with something that is not a skillcask version line.
     case unreadableVersion(output: String)
     case tooOld(found: Version, needs: Version)
@@ -25,4 +28,6 @@ public enum CLIError: Error, Hashable, Sendable {
     /// stdout was not the expected document; `raw` is kept for the Details disclosure, never parsed again.
     case decode(String, raw: Data)
     case outputTooLarge(limit: Int)
+    /// A read-only command did not answer within `after` (`GuardedClient.readTimeout`); the app stopped it.
+    case timedOut(after: Duration)
 }

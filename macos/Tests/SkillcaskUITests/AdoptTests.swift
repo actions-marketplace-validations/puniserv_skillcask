@@ -31,7 +31,8 @@ import Testing
         #expect(plan.unknown.map(\.name) == ["standup-summary", "meeting-prep", "retro-notes"])
         #expect(
             plan.known.first
-                == .init(id: "caveman", name: "caveman", spec: "github:juliusbrussee/caveman", version: "4.0.1"))
+                == .init(id: "caveman", name: "caveman", spec: "github:juliusbrussee/caveman", version: nil),
+            "status prints a not managed row without a version (src/commands.rs 1843–1844)")
     }
 
     @Test func managedOrMissingSkillsAreLeftOut() {
@@ -244,7 +245,7 @@ import Testing
         #expect(AdoptCopy.duration(.seconds(64)) == "1 min 4 s")
         #expect(AdoptCopy.elapsed(21.7) == "0:21" && AdoptCopy.elapsed(75) == "1:15")
         #expect(AdoptCopy.problem(.empty) == nil && AdoptCopy.problem(.github) != nil)
-        #expect(AdoptCopy.adoptedItem == "Adopted", "0.9.1 does not say whether a copy was moved aside")
+        #expect(AdoptCopy.adoptedItem == "Adopted", "the row when the CLI printed no version")
     }
 
     /// The one sentence about `adopted/` names the CLI's real config directory, not a hard-coded path.
@@ -259,5 +260,105 @@ import Testing
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let standard = app.manifest(of: .personal, base: ["HOME": home])
         #expect(AdoptSheet.adoptedFolder(manifest: standard) == "~/.config/skillcask/adopted/")
+    }
+
+    // MARK: - Outcomes from the CLI's lines, header button, rule, strip
+
+    /// `finish_add` prints `added <pkg> = "<constraint>" (<version>)` (src/commands.rs 1542); `adopt` prints
+    /// `adopted <shown path> (moved to <dest>)` per folder it moved aside (1021).
+    static let adoptLines = [
+        "adopted ~/.claude/skills/caveman (moved to /Users/me/.config/skillcask/adopted/1761700000/.claude/skills/caveman)",
+        #"added juliusbrussee/caveman = "^4.0" (4.0.1)"#,
+        "installed caveman (juliusbrussee/caveman 4.0.1)",
+    ]
+
+    @Test func theToastAndTheRowReadTheVersionAndTheMovedCopyFromTheCLILines() {
+        let transcript = Self.adoptLines.map(OutputLine.stdout)
+        #expect(AdoptSheet.toast(skill: "caveman", transcript: transcript) == "Adopted caveman (4.0.1)")
+        #expect(AdoptSheet.note(skill: "caveman", transcript: transcript) == "Adopted 4.0.1 · copy kept")
+        let nothingMoved = [OutputLine.stdout(#"added acme/commit = "^3.1" (3.1.0)"#)]
+        #expect(AdoptSheet.note(skill: "commit-message", transcript: nothingMoved) == "Adopted 3.1.0")
+        #expect(AdoptSheet.toast(skill: "caveman", transcript: []) == "Adopted caveman", "no added line")
+        #expect(AdoptSheet.note(skill: "caveman", transcript: []) == "Adopted")
+    }
+
+    @Test(.timeLimit(.minutes(1))) func batchRowsAndActivityHeadlinesComeFromEachItemsLines() async {
+        await client.lines(command("caveman"), in: personal, Self.adoptLines)
+        await scriptRefresh()
+        await client.lines(command("pdf"), in: personal, [#"added anthropics/skills = "^1.4" (1.4.0)"#])
+        await scriptRefresh()
+        let runner = ActionRunner(queue: MutationQueue())
+        let run = SheetRun()
+        let names = ["caveman": "caveman", "pdf": "pdf"]
+        await run.startBatch(
+            ["caveman", "pdf"], title: AdoptCopy.runningBatch(count: 2), command: command,
+            itemTitle: AdoptCopy.running, itemFailure: AdoptCopy.couldNotAdopt,
+            itemReport: { item, transcript in AdoptSheet.toast(skill: names[item] ?? item, transcript: transcript) },
+            itemNote: { item, transcript in AdoptSheet.note(skill: item, transcript: transcript) },
+            summary: { AdoptCopy.summary(done: $0, scope: $1) }, in: store(personal), runner: runner, onSuccess: {}
+        )?
+        .value
+        #expect(run.items.map(\.note) == ["Adopted 4.0.1 · copy kept", "Adopted 1.4.0"])
+        #expect(runner.activity.map(\.headline) == ["Adopted pdf (1.4.0)", "Adopted caveman (4.0.1)"])
+        #expect(runner.toast?.text == "Adopted 2 skills in My Skills")
+    }
+
+    @Test(.timeLimit(.minutes(1))) func oneAdoptToastsTheVersionWithTheNameSemibold() async {
+        await client.lines(command("caveman"), in: personal, Self.adoptLines)
+        await scriptRefresh()
+        let runner = ActionRunner(queue: MutationQueue())
+        let run = SheetRun()
+        await run.start(
+            command("caveman"), title: AdoptCopy.running("caveman"), failure: AdoptCopy.couldNotAdopt("caveman"),
+            outcome: { _ in AdoptCopy.adopted("caveman", version: nil) },
+            report: { _, transcript in AdoptSheet.toast(skill: "caveman", transcript: transcript) },
+            emphasis: ["caveman"], in: store(personal), runner: runner, onSuccess: {})?
+            .value
+        #expect(runner.toast?.text == "Adopted caveman (4.0.1)" && runner.toast?.emphasis == ["caveman"])
+    }
+
+    /// Flow-F4: "Button in the list header when the Not managed chip is active and at least one known source exists."
+    @Test func theHeaderButtonShowsForNotManagedInMySkillsWithAKnownSource() {
+        let entries = DesignFixtures.personal.entries
+        #expect(AdoptPlan.headerBatch(filter: .notManaged, entries: entries, scope: personal) == notManaged)
+        #expect(AdoptPlan.headerBatch(filter: .all, entries: entries, scope: personal) == nil)
+        #expect(AdoptPlan.headerBatch(filter: .notManaged, entries: entries, scope: project) == nil)
+        let unknownOnly = entries.filter { $0.id == "standup-summary" }
+        #expect(AdoptPlan.headerBatch(filter: .notManaged, entries: unknownOnly, scope: personal) == nil)
+    }
+
+    /// No version is known before `add` (status prints none for a not managed row): the CLI's default, Latest and
+    /// Branch only, none naming a span.
+    @Test func theRuleOffersTheCLIDefaultLatestAndBranchOnly() {
+        let spec = PackageSpec.parse("github:juliusbrussee/caveman")
+        let base = AdoptRule(spec: spec, allowRanges: true, chosen: nil, branch: "")
+        #expect(base.isShown && base.effective == .compatible && base.base == nil)
+        #expect(base.options == [.compatible, .latest, .branch("")])
+        #expect(AddSkillCopy.ruleLabel(.compatible, base: nil) == "As the command-line tool chooses")
+        #expect(base.specText("github:juliusbrussee/caveman") == "github:juliusbrussee/caveman")
+        #expect(base.constraint(of: .compatible) == nil, "the CLI picks ^major.minor of what it installs")
+        let latest = AdoptRule(spec: spec, allowRanges: true, chosen: .latest, branch: "")
+        #expect(latest.specText("github:juliusbrussee/caveman") == "github:juliusbrussee/caveman@*")
+        let branch = AdoptRule(spec: spec, allowRanges: true, chosen: .branch(""), branch: "dev")
+        #expect(branch.specText("github:juliusbrussee/caveman") == "github:juliusbrussee/caveman@dev")
+        #expect(AdoptRule(spec: spec, allowRanges: true, chosen: .branch(""), branch: "").hasProblem, "empty name")
+        #expect(AdoptRule(spec: spec, allowRanges: true, chosen: .branch(""), branch: "1.0").hasProblem)
+        let registry = AdoptRule(spec: PackageSpec.parse("acme/commit"), allowRanges: true, chosen: .latest, branch: "")
+        #expect(registry.options == [.compatible, .latest] && registry.specText("acme/commit") == "acme/commit@*")
+        #expect(!AdoptRule(spec: spec, allowRanges: false, chosen: nil, branch: "").isShown, "nothing to choose")
+        let pinned = AdoptRule(
+            spec: PackageSpec.parse("github:juliusbrussee/caveman@v4"), allowRanges: true, chosen: .latest, branch: "")
+        #expect(
+            !pinned.isShown && pinned.specText("github:juliusbrussee/caveman@v4") == "github:juliusbrussee/caveman@v4")
+    }
+
+    /// Q18: no route reviews the kept copy, so the strip says where it is instead of "Review the diff after adopting".
+    @Test func theStripSaysWhereTheCopyIsKept() {
+        let text = AdoptCopy.differs(folder: "~/.config/skillcask/adopted/")
+        #expect(
+            text
+                == "If the source’s content differs from your copy, the source wins and your copy is kept in "
+                + "~/.config/skillcask/adopted/ to compare.")
+        #expect(!text.contains("Review"))
     }
 }

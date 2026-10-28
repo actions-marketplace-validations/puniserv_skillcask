@@ -5,12 +5,13 @@ import Testing
 
 @testable import SkillcaskUI
 
-/// P2-10: every `CLIError` reads as a sentence with no exit code, the hint passes through unless the table
+/// Every `CLIError` reads as a sentence with no exit code, the hint passes through unless the table
 /// rewords it, the fixture banners say what the boards say, and the toast keeps its words and its 4 s.
 @Suite struct ErrorCopyTests {
     /// One value per `CLIError` case.
     static let everyError: [CLIError] = [
         .binaryMissing(searched: ["/opt/homebrew/bin", "/usr/local/bin"]),
+        .binaryIsApp(path: "/Applications/Skillcask.app/Contents/MacOS/Skillcask"),
         .unreadableVersion(output: "zsh: command not found"),
         .tooOld(found: Version(0, 7, 2), needs: Version(0, 9, 0)),
         .unsupported(feature: "diffJSON"),

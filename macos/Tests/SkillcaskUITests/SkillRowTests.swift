@@ -1,3 +1,4 @@
+import Foundation
 import SkillcaskDomain
 import Testing
 
@@ -68,8 +69,11 @@ import Testing
         #expect(SkillRowTrailing.state(.projectSkill).label == "Project skill")
         #expect(SkillRowTrailing.state(.projectSkill).severity == .ok)
         #expect(SkillRowTrailing.state(.changedOnDisk).severity == .error)
+        // The row writes the day in the Mac's zone ("30 Oct" in GMT).
+        let eligible = Formatters.dayMonth(Date(timeIntervalSince1970: 1_793_351_640))
         #expect(
-            SkillRowTrailing.state(.cooldown(until: "4.3.0 eligible 2026-10-30T09:14:00Z")).label == "4.3.0 on 30 Oct")
+            SkillRowTrailing.state(.cooldown(until: "4.3.0 eligible 2026-10-30T09:14:00Z")).label
+                == "4.3.0 on \(eligible)")
     }
 
     @Test func onlyOkAndNeutralRowsAreQuiet() {
@@ -143,7 +147,7 @@ import Testing
         #expect(RowCopy.secondary(location: nil, source: nil) == "")
     }
 
-    @Test func rowIsTheBoardHeight() {
+    @Test @MainActor func rowIsTheBoardHeight() {
         #expect(SkillRow.height == Size.row)
         #expect(SkillRow.height == 52)
         #expect(SkillRow.staleOpacity == 0.5)

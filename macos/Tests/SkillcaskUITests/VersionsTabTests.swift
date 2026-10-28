@@ -17,7 +17,7 @@ import Testing
         let model = VersionsModel(entry: entry, policy: snapshot.policy, allowedRange: range)
         return VersionsContent(
             model: model, versions: loaded ? info?.versions : nil, agents: ["Claude Code", "Cursor"],
-            checkedAt: now.addingTimeInterval(-240), now: now)
+            checkedAt: now.addingTimeInterval(-240), now: now, timeZone: .gmt)
     }
 
     static func row(_ content: VersionsContent, _ label: String) -> VersionsContent.Row? {
@@ -36,8 +36,8 @@ import Testing
         #expect(
             callout.text
                 == "Your minimum release age is 72 h, set in config.toml and enforced by your organisation. It was "
-                + "released 28 Oct 2026 at 09:14. Skillcask will offer it automatically once it is old enough; nothing "
-                + "to do now.")
+                + "released 28 Oct 2026 at 09:14. Skillcask offers it once it is old enough. An older version in your "
+                + "range may be eligible now; Review changes… on the Overview shows what Update would lock.")
         #expect(content.rows.map(\.label) == ["Installed", "Allowed range", "Available in range", "Newest overall"])
         let waiting = try #require(Self.row(content, "Available in range"))
         #expect(waiting.version == "4.3.0")
@@ -107,13 +107,19 @@ import Testing
         let content = Self.content(DesignFixtures.managedCaveman, info: nil, snapshot: DesignFixtures.apiTagMoved)
         let callout = try #require(content.callout)
         #expect(callout.kind == .warning)
-        #expect(callout.title == "The tag v4.1.0 now points at different content than when it was published.")
+        #expect(
+            callout.title
+                == "The tag 4.0.1 of your installed version now points at different content than when it was locked.")
         #expect(callout.symbol == "tag.slash")
         #expect(callout.link == nil)
+        // The CLI reports the installed version's tag, so the strip is on the Installed row.
+        let installed = try #require(Self.row(content, "Installed"))
+        #expect(installed.version == "4.0.1" && installed.tone == .warning)
+        #expect(installed.detail == "Tag moved · was a81f2c0, now 3fd09e1")
+        #expect(installed.monos == ["a81f2c0", "3fd09e1"])
         let row = try #require(Self.row(content, "Available in range"))
-        #expect(row.version == "4.1.0")
-        #expect(row.detail == "Tag moved · was a81f2c0, now 3fd09e1")
-        #expect(row.monos == ["a81f2c0", "3fd09e1"])
+        #expect(row.version == "4.1.0" && row.tone == .update)
+        #expect(!row.detail.contains("Tag moved") && row.monos.isEmpty)
         #expect(row.trailing == nil)
         #expect(
             content.footnote == "Update stays available but is never the default button while this note is present.")
@@ -123,8 +129,8 @@ import Testing
         let model = Self.content(DesignFixtures.jiraCommunication, info: DesignFixtures.jiraPackageInfo).model
         let listed = model.listed(DesignFixtures.jiraPackageInfo.versions)
         #expect(listed.count == 9)
-        #expect(VersionsCopy.standing(listed[0].standing) == "Too new for your policy until 30 Oct")
-        #expect(VersionsCopy.date(listed[0].released) == "28 Oct 2026")
+        #expect(VersionsCopy.standing(listed[0].standing, timeZone: .gmt) == "Too new for your policy until 30 Oct")
+        #expect(VersionsCopy.date(listed[0].released, timeZone: .gmt) == "28 Oct 2026")
         #expect(VersionsCopy.standing(listed[1].standing) == "Installed")
         #expect(VersionsCopy.date(listed[1].released) == "unknown")
         #expect(VersionsCopy.standing(listed[2].standing) == "Below your range")

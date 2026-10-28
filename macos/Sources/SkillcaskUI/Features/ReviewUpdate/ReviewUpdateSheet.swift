@@ -13,6 +13,11 @@ import SwiftUI
 /// the CLI reports done, exit 0 closes the sheet with the runner's toast, a failure stays here with the CLI's
 /// message and hint. Update is the default button except when review-only (the tag moved): then Return does
 /// nothing and Update is a plain button.
+///
+/// A failed update's banner offers Details, which discloses the run's transcript in the sheet
+/// (`ReviewRunDetails`; Activity cannot open over the sheet), and Retry only where `FailureBanner` allows it
+/// (never for an integrity failure). While `diff` runs, the title, a file-list skeleton and "Fetching changes for
+/// 1.4.0…" show at once (Flow-F3).
 struct ReviewUpdateSheet: View {
     /// What to review: one package (with the version the row offered, nil to let `diff` choose; `reviewOnly`
     /// when the tag moved, so Update is never the default button), or every update in range.
@@ -46,19 +51,23 @@ struct ReviewUpdateSheet: View {
     /// The sheet's mutation: progress in place, Cancel while running, close on success (`SheetRun`).
     @State private var run: SheetRun
     @State private var showsDetails = false
+    /// The failed update's transcript is disclosed under the banner.
+    @State private var showsRunDetails = false
 
     /// - Parameters:
     ///   - review: A prepared review (previews); nil builds one over `store` for `target`.
     ///   - run: A prepared run (previews); nil starts idle.
+    ///   - showsRunDetails: The failed run's transcript starts disclosed (previews).
     init(
         target: Target, store: ScopeStore, onClose: @escaping () -> Void, review: ReviewStore? = nil,
-        run: SheetRun? = nil
+        run: SheetRun? = nil, showsRunDetails: Bool = false
     ) {
         self.target = target
         self.store = store
         self.onClose = onClose
         _review = State(initialValue: review ?? Self.review(for: target, store: store))
         _run = State(initialValue: run ?? SheetRun())
+        _showsRunDetails = State(initialValue: showsRunDetails)
     }
 
     static func review(for target: Target, store: ScopeStore) -> ReviewStore {
@@ -74,9 +83,16 @@ struct ReviewUpdateSheet: View {
         VStack(spacing: 0) {
             header
             if let failure = run.failure {
-                FailureBanner(failure, onRetry: startUpdate)
-                    .padding(.horizontal, Self.headerPaddingH)
-                    .padding(.vertical, Spacing.m)
+                VStack(alignment: .leading, spacing: Spacing.s) {
+                    FailureBanner(
+                        failure, onDetails: runDetails == nil ? nil : { showsRunDetails.toggle() },
+                        onRetry: startUpdate)
+                    if showsRunDetails, let details = runDetails {
+                        ReviewRunDetails(lines: details.lines, copyText: details.copy)
+                    }
+                }
+                .padding(.horizontal, Self.headerPaddingH)
+                .padding(.vertical, Spacing.m)
             }
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -168,7 +184,7 @@ struct ReviewUpdateSheet: View {
         } else {
             switch review.phase {
             case .loading:
-                Spinner(label: ReviewUpdateCopy.loading)
+                fetching
             case .failed(let message):
                 fetchFailed(message)
             case .loaded:
@@ -196,6 +212,37 @@ struct ReviewUpdateSheet: View {
             } else {
                 Color.surfaceWindow
             }
+        }
+    }
+
+    /// The title is already in the header; the file list's skeleton and the fetching line show until `diff`
+    /// answers (Flow-F3 "Title and file list skeleton show at once").
+    private var fetching: some View {
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: Spacing.m) {
+                if !review.isAll {
+                    Text(ReviewUpdateCopy.filesHeading)
+                        .font(Font.Token.captionSemibold)
+                        .foregroundStyle(Color.textSecondary)
+                }
+                ForEach(Array(Self.skeletonFileWidths.enumerated()), id: \.offset) { _, width in
+                    SkeletonBar(width: width)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, ReviewFileList.headingPaddingH)
+            .padding(.top, ReviewFileList.headingPaddingTop)
+            .frame(width: Self.fileListWidth, alignment: .leading)
+            .frame(maxHeight: .infinity, alignment: .top)
+            .background(Color.surfaceGrouped)
+            Rectangle().fill(Color.separator).frame(width: Size.hairline)
+            VStack(alignment: .leading, spacing: Spacing.l) {
+                Spinner(label: review.fetchingText)
+                SkeletonLines(count: Self.skeletonDiffLines)
+                Spacer(minLength: 0)
+            }
+            .padding(Spacing.l)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
     }
 
@@ -227,7 +274,7 @@ struct ReviewUpdateSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: Spacing.l)
-            if review.isUpToDate {
+            if review.isDoneAlone {
                 // The board draws Done alone; Esc still closes the sheet.
                 Button(SheetCopy.cancel, action: onClose)
                     .keyboardShortcut(.cancelAction)
@@ -250,7 +297,7 @@ struct ReviewUpdateSheet: View {
     }
 
     @ViewBuilder private var primaryButton: some View {
-        switch review.primaryButton(isRunning: run.isRunning) {
+        switch review.primaryButton(isRunning: run.isRunning, failure: run.failure) {
         case .done:
             Button(ReviewUpdateCopy.done, action: onClose)
                 .buttonStyle(.borderedProminent)
@@ -276,6 +323,7 @@ struct ReviewUpdateSheet: View {
     // MARK: - Actions
 
     private func startUpdate() {
+        showsRunDetails = false
         review.update(with: run, in: store, runner: runner, onSuccess: { onClose() })
     }
 
@@ -292,6 +340,22 @@ struct ReviewUpdateSheet: View {
 extension ReviewUpdateSheet {
     /// The up-to-date state's check mark (ReviewUpdate-States).
     fileprivate static let upToDateSymbol = "checkmark.circle"
+
+    /// The file rows of the fetching skeleton (path widths, as the ReviewUpdate board's four files read).
+    fileprivate static let skeletonFileWidths: [CGFloat] = [150, 120, 170, 96]
+    /// The diff lines of the fetching skeleton.
+    fileprivate static let skeletonDiffLines = 6
+
+    /// The failed update's recorded run as the in-sheet Details shows it; nil when nothing was recorded (a
+    /// refusal) and the message has no transcript of its own.
+    fileprivate var runDetails: (lines: [String], copy: String)? {
+        if let entry = run.failedEntry {
+            let lines = ActivityCopy.commandLines(of: entry) + ActivityCopy.transcriptLines(of: entry)
+            return (lines, ActivityCopy.copyText(of: entry))
+        }
+        guard let details = run.failure?.details else { return nil }
+        return (details.components(separatedBy: "\n"), details)
+    }
 
     /// Wrap and find show over a diff only.
     fileprivate var showsDiffTools: Bool {
@@ -368,5 +432,16 @@ private struct FindField: View {
         let count = review.matches.count
         guard count > 0 else { return ReviewUpdateCopy.noMatches }
         return ReviewUpdateCopy.matches((review.matchIndex ?? 0) + 1, of: count)
+    }
+}
+
+extension AppStore.Sheet {
+    /// The Versions tab's link: during a cooldown "Read the changes…" reads the waiting version review-only
+    /// (`ReviewStore.readsWaitingVersion` runs `diff --to`, Update never offered); otherwise `update(for:)`.
+    static func readChanges(of entry: SkillEntry) -> Self {
+        guard let update = entry.update, update.available == nil, let cooldown = update.cooldown else {
+            return .update(for: entry)
+        }
+        return .update(package: entry.package ?? entry.id, target: cooldown.version, reviewOnly: true)
     }
 }

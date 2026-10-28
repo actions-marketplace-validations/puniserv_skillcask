@@ -3,7 +3,7 @@ import SkillcaskDomain
 import SwiftUI
 
 extension PreviewRegistry {
-    /// P3-7: the detail column (header and Versions tab) at 720 × 900, one state per Versions and Versions-States
+    /// The detail column (header and Versions tab) at 720 × 900, one state per Versions and Versions-States
     /// panel: `cooldown` (jira-communication, the Versions board), `upToDate` (commit-message), `withinRange` (pdf),
     /// `majorOutside` (legacy-lint), `tagMoved` (caveman, managed, after the tag moved), `expanded` (the cooldown
     /// with "All known versions" open over the package's fixture `info`), and that list while `info <package>`
@@ -19,6 +19,13 @@ extension PreviewRegistry {
         },
         entry("withinRange") { VersionsSample(entry: DesignFixtures.pdf, info: DesignFixtures.pdfInfo, loaded: true) },
         entry("majorOutside") { VersionsSample(entry: DesignFixtures.legacyLint, info: DesignFixtures.legacyLintInfo) },
+        // The cooldown from a note-only `outdated` (the real 0.9.1 shape): eligible date from the note, release
+        // date unknown.
+        entry("cooldownNoteOnly") {
+            VersionsSample(
+                entry: DesignFixtures.entry("jira-communication", in: DesignFixtures.apiNoteOnly),
+                info: DesignFixtures.jiraPackageInfo, snapshot: DesignFixtures.apiNoteOnly)
+        },
         entry("tagMoved") {
             VersionsSample(entry: DesignFixtures.managedCaveman, info: nil, snapshot: DesignFixtures.apiTagMoved)
         },

@@ -11,13 +11,16 @@ extension PreviewRegistry {
 private struct ProbeView: View {
     @State private var enabled = true
 
+    /// The probe's swatch: any non-empty size proves shapes draw; not a design metric.
+    private static let swatch = CGSize(width: 96, height: 32)
+
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.m) {
             RoundedRectangle(cornerRadius: Radius.l)
                 .fill(Color.accentColor)
-                .frame(width: 96, height: 32)
+                .frame(width: Self.swatch.width, height: Self.swatch.height)
             Text("Render probe")
-                .font(.body)
+                .font(Font.Token.body)
                 .foregroundStyle(Color.primary)
             HStack(spacing: Spacing.m) {
                 Button("Button") {}

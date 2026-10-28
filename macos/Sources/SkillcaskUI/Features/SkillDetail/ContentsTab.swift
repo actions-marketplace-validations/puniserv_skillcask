@@ -35,6 +35,8 @@ struct ContentsTab: View {
     @State private var highlighted: Int?
     /// The row whose read error Details disclosed; another row starts closed.
     @State private var detailsShown: SkillEntry.ID?
+    /// The body's blocks and flags, parsed once per text rather than on every body pass.
+    @State private var memo = ContentsMemo()
 
     init(
         entry: SkillEntry, detail: SkillDetail?, isLoading: Bool = false, root: URL, file: ContentsFile? = nil,
@@ -80,7 +82,7 @@ struct ContentsTab: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .background(Color.surfaceWindow)
-        .task(id: TaskKey(url: url, detail: detail)) {
+        .task(id: TaskKey(url: url, detail: detail, fingerprint: detail?.text.map(memo.textHash))) {
             guard file == nil, let url else { return }
             loadedFile = await ContentsFile.load(at: url)
         }
@@ -144,12 +146,12 @@ struct ContentsTab: View {
         case .loading:
             Color.clear
         case .normal(let text, let warnsInvisible):
-            let spans = MarkdownBlocks.spans(text.body)
+            let parsed = memo.parsed(entry: entry, text: text)
             ScrollViewReader { proxy in
                 ScrollView {
-                    document(text, spans: spans, warnsInvisible: warnsInvisible)
+                    document(text, parsed: parsed, warnsInvisible: warnsInvisible)
                 }
-                .task(id: targetLine) { await reveal(targetLine, text: text, spans: spans, proxy: proxy) }
+                .task(id: targetLine) { await reveal(targetLine, text: text, spans: parsed.spans, proxy: proxy) }
             }
         case .tooLarge:
             EmptyState(
@@ -178,7 +180,7 @@ struct ContentsTab: View {
     }
 
     /// The strip, the front matter and the body with its outlined and highlighted blocks.
-    private func document(_ text: SkillText, spans: [MarkdownBlocks.Span], warnsInvisible: Bool) -> some View {
+    private func document(_ text: SkillText, parsed: ContentsMemo.Parsed, warnsInvisible: Bool) -> some View {
         VStack(alignment: .leading, spacing: Spacing.m) {
             if warnsInvisible {
                 MessageStrip(
@@ -189,9 +191,7 @@ struct ContentsTab: View {
             if !text.frontMatter.isEmpty {
                 FrontMatterCard(rows: text.frontMatter)
             }
-            MarkdownBody(
-                spans: spans, flags: ContentsState.flags(for: entry, text: text, spans: spans),
-                highlighted: highlighted)
+            MarkdownBody(spans: parsed.spans, flags: parsed.flags, highlighted: highlighted)
         }
         .padding(.horizontal, Size.columnPadding)
         .padding(.top, Spacing.m)
@@ -219,10 +219,11 @@ struct ContentsTab: View {
         onTargetShown()
     }
 
-    /// The default app for `.md` (S4 note).
+    /// The user's plain-text editor (S4 note), through `SafeOpen`: a SKILL.md that resolves outside the folder or
+    /// to anything but a plain-text file is not opened, Finder shows the folder instead.
     private func openInEditor() {
         guard let url else { return }
-        NSWorkspace.shared.open(url)
+        Workspace.openAsText(url, inside: url.deletingLastPathComponent())
     }
 
     private func copyPath() {
@@ -231,18 +232,78 @@ struct ContentsTab: View {
         NSPasteboard.general.setString(url.path, forType: .string)
     }
 
-    /// The folder that should hold SKILL.md; when it is gone too, Finder shows where it would be.
+    /// Finder selects the folder that should hold SKILL.md (never opens it: `SafeOpen`); when it is gone too, Finder
+    /// shows where it would be.
     private func openFolder() {
         guard let folder = url?.deletingLastPathComponent() else { return }
-        if !NSWorkspace.shared.open(folder) {
-            NSWorkspace.shared.activateFileViewerSelecting([folder.deletingLastPathComponent()])
-        }
+        Workspace.revealFolder(folder)
     }
 
-    /// Re-reads the attributes when the row or its loaded text changes (after Check).
-    private struct TaskKey: Hashable {
+    /// Re-reads the attributes when the row or its loaded text changes (after Check, or a SKILL.md edited outside
+    /// the app). Cheap to hash on every body pass: the url and the text's fingerprint (`ContentsMemo.textHash`,
+    /// computed once per loaded text), never the whole detail with its info document and body. An edit of the same
+    /// length, or one inside the front matter, changes the fingerprint.
+    struct TaskKey: Hashable {
         let url: URL?
-        let detail: SkillDetail?
+        let hasDetail: Bool
+        let fingerprint: Int?
+        let textError: String?
+
+        init(url: URL?, detail: SkillDetail?, fingerprint: Int?) {
+            self.url = url
+            hasDetail = detail != nil
+            self.fingerprint = fingerprint
+            textError = detail?.textError
+        }
+    }
+}
+
+/// The last SKILL.md the Contents tab parsed: its block spans and the audit flags on them, kept for as long as the
+/// text and the row's findings stay the same, so a body pass (hover, highlight, a store tick) re-uses them. A plain
+/// class in `@State`: reading or filling it never invalidates the view.
+@MainActor final class ContentsMemo {
+    struct Parsed: Equatable {
+        let spans: [MarkdownBlocks.Span]
+        let flags: [Int: DiffFlag.Kind]
+    }
+
+    private struct Key: Equatable {
+        let text: SkillText
+        let path: String?
+        let findings: [AuditDocument.Finding]
+    }
+
+    private var key: Key?
+    private var value: Parsed?
+    /// How many times a text was parsed (tests).
+    private(set) var parses = 0
+    private var fingerprinted: (text: SkillText, value: Int)?
+    /// How many times a text was hashed for `fingerprint` (tests).
+    private(set) var fingerprints = 0
+
+    /// The hash of `text` (body, front matter, start line, truncation), kept for the last text (`TaskKey.fingerprint`): a body pass with the
+    /// same loaded text costs one comparison of the same string storage, not a hash of the whole file.
+    func textHash(_ text: SkillText) -> Int {
+        if let fingerprinted, fingerprinted.text == text {
+            return fingerprinted.value
+        }
+        let value = text.hashValue
+        fingerprinted = (text, value)
+        fingerprints += 1
+        return value
+    }
+
+    func parsed(entry: SkillEntry, text: SkillText) -> Parsed {
+        let key = Key(text: text, path: entry.path, findings: entry.findings)
+        if let value, key == self.key {
+            return value
+        }
+        let spans = MarkdownBlocks.spans(text.body)
+        let parsed = Parsed(spans: spans, flags: ContentsState.flags(for: entry, text: text, spans: spans))
+        self.key = key
+        value = parsed
+        parses += 1
+        return parsed
     }
 }
 

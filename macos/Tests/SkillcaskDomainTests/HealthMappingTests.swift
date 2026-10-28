@@ -4,19 +4,21 @@ import Testing
 
 @testable import SkillcaskDomain
 
-func finding(_ rule: String) -> AuditDocument.Finding {
-    try! JSONDecoder()
+func finding(_ rule: String) throws -> AuditDocument.Finding {
+    try JSONDecoder()
         .decode(
             AuditDocument.Finding.self,
             from: Data(#"{"rule":"\#(rule)","path":".skills/x/SKILL.md","line":1,"message":"m"}"#.utf8))
 }
 
-func update(locked: String?, within: String?, latest: String?, note: String? = nil, eligible: String? = nil) -> Update {
+func update(
+    locked: String?, within: String?, latest: String?, note: String? = nil, eligible: String? = nil
+) throws -> Update {
     let json: [String: Any?] = [
         "package": "a/b", "locked": locked, "within": within, "latest": latest, "note": note, "eligible": eligible,
     ]
-    let data = try! JSONSerialization.data(withJSONObject: json.mapValues { $0 ?? NSNull() })
-    return Update(try! JSONDecoder().decode(OutdatedDocument.Package.self, from: data))
+    let data = try JSONSerialization.data(withJSONObject: json.mapValues { $0 ?? NSNull() })
+    return Update(try JSONDecoder().decode(OutdatedDocument.Package.self, from: data))
 }
 
 @Suite struct SkillStateTests {
@@ -58,33 +60,34 @@ func update(locked: String?, within: String?, latest: String?, note: String? = n
         #expect(HealthMapping.health(state: state, update: nil, findings: []) == expected)
     }
 
-    @Test func findingsOutrankUpdatesButNotErrors() {
-        let risky = [finding("risky-pattern")]
-        let newer = update(locked: "1.0.0", within: "1.1.0", latest: "1.1.0")
+    @Test func findingsOutrankUpdatesButNotErrors() throws {
+        let risky = try [finding("risky-pattern")]
+        let invisible = try finding("invisible-character")
+        let modified = try finding("modified")
+        let newer = try update(locked: "1.0.0", within: "1.1.0", latest: "1.1.0")
         #expect(HealthMapping.health(state: .ok, update: newer, findings: risky) == .findings(1))
-        #expect(
-            HealthMapping.health(state: .project, update: nil, findings: risky + [finding("invisible-character")])
-                == .findings(2))
-        #expect(HealthMapping.health(state: .ok, update: newer, findings: [finding("modified")]) == .changedOnDisk)
+        #expect(HealthMapping.health(state: .project, update: nil, findings: risky + [invisible]) == .findings(2))
+        #expect(HealthMapping.health(state: .ok, update: newer, findings: [modified]) == .changedOnDisk)
         #expect(HealthMapping.health(state: .notInstalled, update: newer, findings: risky) == .notInstalled)
         #expect(HealthMapping.health(state: .notManaged, update: nil, findings: risky) == .findings(1))
     }
 
-    @Test func updatesAndCooldowns() {
-        let newer = update(locked: "1.0.0", within: "1.1.0", latest: "2.0.0")
+    @Test func updatesAndCooldowns() throws {
+        let newer = try update(locked: "1.0.0", within: "1.1.0", latest: "2.0.0")
         #expect(
             HealthMapping.health(state: .ok, update: newer, findings: [])
                 == .updateAvailable(from: "1.0.0", to: "1.1.0"))
-        let current = update(locked: "1.0.0", within: "1.0.0", latest: "2.0.0")
+        let current = try update(locked: "1.0.0", within: "1.0.0", latest: "2.0.0")
         #expect(HealthMapping.health(state: .ok, update: current, findings: []) == .installed)
         #expect(current.outsideRange == "2.0.0" && current.available == nil)
-        let cooling = update(
-            locked: "1.0.0", within: "1.0.0", latest: "1.1.0", note: "1.1.0 eligible 2026-10-26T21:44:27Z")
+        // As `outdated` prints it: `within` is the waiting version, named in the note.
+        let cooling = try update(
+            locked: "1.0.0", within: "1.1.0", latest: "1.1.0", note: "1.1.0 eligible 2026-10-26T21:44:27Z")
         #expect(HealthMapping.health(state: .ok, update: cooling, findings: []) == .cooldown(until: cooling.note))
         #expect(cooling.eligible == ISO8601DateFormatter().date(from: "2026-10-26T21:44:27Z"))
-        let planned = update(locked: "1.0.0", within: "1.0.0", latest: "1.1.0", eligible: "2026-10-27T00:00:00Z")
+        let planned = try update(locked: "1.0.0", within: "1.1.0", latest: "1.1.0", eligible: "2026-10-27T00:00:00Z")
         #expect(planned.eligible == ISO8601DateFormatter().date(from: "2026-10-27T00:00:00Z"))
-        let unlocked = update(locked: nil, within: "1.0.0", latest: "1.0.0")
+        let unlocked = try update(locked: nil, within: "1.0.0", latest: "1.0.0")
         #expect(
             unlocked.available == nil
                 && HealthMapping.health(state: .notInLock, update: unlocked, findings: [])

@@ -5,13 +5,20 @@ import SkillcaskDomain
 /// real `<config>/adopted/` the CLI moves copies to (`Scope.configDirectory`), `~`-abbreviated, where the board
 /// writes `~/.config/skillcask/adopted/`.
 ///
-/// Invented (no board draws them): `knownNote`, `projectTitle`, `projectBody`, `problem(_:)`, `running(_:)`,
-/// `adoptingFallback`, `adoptedItem`, `back`, `couldNotAdopt(_:)`, `couldNotAdoptBatch(count:)`, `notRun`, `close`, `nothingToAdopt`, `runningBatch(count:)`, `ended(done:of:failed:)`, `adopted(_:scope:)`,
-/// `summary(done:scope:)`, the singular forms of `batchBody`, and `duration(_:)`'s minutes form.
+/// Invented (no board draws them): `knownNote`, `projectTitle`, `projectBody`, `problem(_:)`, `runningBatch(count:)`,
+/// `adoptingFallback`, `adoptedItem` (no version printed), `back`, `couldNotAdopt(_:)`, `couldNotAdoptBatch(count:)`,
+/// `notRun`, `close`, `nothingToAdopt`, `ended(done:of:failed:)`, `summary(done:scope:)`, `adopted(_:version:)`
+/// without a version, the singular forms of `batchBody`, `duration(_:)`'s minutes form, and the end of
+/// `differs(folder:)` (the board's "Review the diff after adopting" names a review the app cannot open, Q18).
+///
+/// From the CLI's own lines (`src/ui.rs` `done`, stdout): the toast and a finished batch row read the version from
+/// `added <package> = "<constraint>" (<version>)` (`src/commands.rs` `finish_add`, 1542) and "copy kept" from
+/// `adopted <path> (moved to <dest>)` (`adopt`, 1021), which the CLI prints only when it moved a folder aside.
 public enum AdoptCopy {
     // MARK: - Titles
 
-    /// The Skill menu item that opens the batch (Adopt-States "Batch — Adopt All with Known Sources…").
+    /// The Skill menu item and the list header's button that open the batch (Adopt-States "Batch — Adopt All with
+    /// Known Sources…"; Flow-F4 "Button in the list header when the Not managed chip is active").
     public static let adoptAllMenu = "Adopt All with Known Sources…"
 
     /// `Adopt caveman` for one skill, `Adopt 12 skills` for a batch (Adopt-States).
@@ -30,7 +37,8 @@ public enum AdoptCopy {
         "Adopted \(done) of \(count) skills; " + (failed ? "a failure stopped the rest." : "Cancel stopped the rest.")
     }
 
-    /// Activity's title for one run: `Adopting caveman…`. Invented.
+    /// The single sheet's progress title and Activity's title for one run: `Adopting caveman…` (Flow-F4 "S11 in
+    /// sheet · progress").
     public static func running(_ skill: String) -> String {
         "Adopting \(skill)…"
     }
@@ -69,10 +77,13 @@ public enum AdoptCopy {
     public static let sourceLabel = "Source"
     /// The field's placeholder: the three accepted shapes (Adopt-States).
     public static let placeholder = "vendor/name · github:owner/repo · git:https://…"
-    /// The amber strip: what happens to a differing copy (Adopt-States).
-    public static let differs =
-        "If the source’s content differs from your copy, the source wins and your copy is kept aside. Review the "
-        + "diff after adopting."
+    /// The amber strip: what happens to a differing copy. Adopt-States' first sentence; its "Review the diff after
+    /// adopting." has no route in the app (no CLI command compares the kept copy, Q18), so the end says where the
+    /// copy is kept to compare by hand: `… and your copy is kept in ~/.config/skillcask/adopted/ to compare.`
+    public static func differs(folder: String) -> String {
+        "If the source’s content differs from your copy, the source wins and your copy is kept in \(folder) to "
+            + "compare."
+    }
     /// The quiet line under the strip (Adopt-States).
     public static let keepLocal = "Or keep it as a local skill: it stays usable, without updates or a lock entry."
 
@@ -112,9 +123,15 @@ public enum AdoptCopy {
         count.map { "Adopt \($0)" } ?? "Adopt"
     }
 
-    /// A finished row: the board's "Adopted v4.0.1 · copy kept" without the version or "copy kept", since 0.9.1
-    /// reports neither the version `add` installed nor whether a copy was moved aside.
+    /// A finished row when the CLI printed no version (no `added … (<version>)` line).
     public static let adoptedItem = "Adopted"
+
+    /// A finished row (Adopt-States "Adopted v4.0.1 · copy kept", the version as the CLI printed it): `Adopted 4.0.1
+    /// · copy kept` when an `adopted …` line moved this skill's folder aside, `Adopted 4.0.1` when none did.
+    public static func adoptedItem(version: String?, copyKept: Bool) -> String {
+        let adopted = version.map { "Adopted \($0)" } ?? adoptedItem
+        return copyKept ? adopted + " · copy kept" : adopted
+    }
     /// `… 6 more`: the collapsed rest of the checklist (Adopt-States).
     public static func more(_ count: Int) -> String {
         "… \(count) more"
@@ -160,9 +177,10 @@ public enum AdoptCopy {
 
     // MARK: - Outcomes
 
-    /// The toast of one adopt: `Adopted caveman in My Skills`. Invented.
-    public static func adopted(_ skill: String, scope: String) -> String {
-        "Adopted \(skill) in \(scope)"
+    /// The toast of one adopt (Flow-F4): `Adopted caveman (4.0.1)`, the version from the CLI's `added` line;
+    /// `Adopted caveman` when it printed none. Also a batch item's Activity headline.
+    public static func adopted(_ skill: String, version: String?) -> String {
+        version.map { "Adopted \(skill) (\($0))" } ?? "Adopted \(skill)"
     }
 
     /// The batch's one toast: `Adopted 9 skills in My Skills`. Invented.

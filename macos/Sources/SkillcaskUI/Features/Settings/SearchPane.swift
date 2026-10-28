@@ -20,7 +20,9 @@ struct SearchPane: View {
                             .disabled(app.cliContext == nil || store.pendingSkillsSh != nil)
                         VStack(alignment: .leading, spacing: Spacing.xs) {
                             SettingsNote(note)
-                            SettingsCaption(SettingsCopy.skillsShSideEffect)
+                            if CLISettingsStore.flipRunsSearch(app.capabilities) {
+                                SettingsCaption(SettingsCopy.skillsShSideEffect)
+                            }
                             if let failure = store.skillsShFailure {
                                 MessageStrip(
                                     .error, title: failure.title, text: failure.reason ?? failure.action ?? "",
@@ -36,8 +38,12 @@ struct SearchPane: View {
             }
             SettingsCaption(SettingsCopy.searchFooter)
         }
-        .task {
-            await store.loadSkillsSh(from: app.configFile())
+        .task(id: app.capabilities) {
+            if let context = app.cliContext {
+                await store.loadSkillsSh(in: context)
+            } else {
+                await store.loadSkillsSh(from: app.configFile())
+            }
         }
     }
 

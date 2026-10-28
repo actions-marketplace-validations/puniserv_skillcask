@@ -19,7 +19,7 @@ public enum OverviewCopy {
     // MARK: - Strip words (the number is drawn apart, in primary semibold)
 
     // The singular strip words ("skill", "needs sync", "needs a decision", "update") have no board source: every
-    // board draws plural counts. Invented, declared in the P3-4 report.
+    // board draws plural counts. Invented.
 
     /// `skills` of `14 skills`.
     public static func skillsWord(_ count: Int) -> String {
@@ -52,17 +52,17 @@ public enum OverviewCopy {
     public static let notSetUp = Labels.notSetUp
 
     /// `Checked 4 min ago`, `Checked just now`.
-    public static func checked(_ date: Date, now: Date = .now) -> String {
+    public static func checked(_ date: Date, now: Date = .now, timeZone: TimeZone = .current) -> String {
         let minutes = Int(now.timeIntervalSince(date) / 60)
         switch minutes {
         case ..<1: return "Checked just now"
         case 1: return "Checked 1 min ago"
         case ..<60: return "Checked \(minutes) min ago"
-        default: return "Checked \(Formatters.dayMonth(date))"
+        default: return "Checked \(Formatters.dayMonth(date, timeZone: timeZone))"
         }
     }
 
-    /// ADR §5 rule 5: without a check, the strip says so (no board source).
+    /// Without a check, the strip says so (no board source).
     public static let updatesNotChecked = "Updates not checked"
 
     // MARK: - Card titles
@@ -155,7 +155,7 @@ public enum OverviewCopy {
 
     /// An open problem or warning as the Overview board words it. Board sources: link wrong ("link points
     /// elsewhere"), not installed ("is in skills.lock but not installed"), modified (the Security card's "differs
-    /// from the version in the lock"). Every other sentence is invented (declared in the P3-4 report).
+    /// from the version in the lock"). Every other sentence is invented.
     /// - Parameter remedy: What fixes the item in its doctor answer (`ScopeSnapshot.Doctor.remedy(of:)`); defaults
     ///   to the item's own.
     public static func problem(_ item: DoctorItem, remedy: DoctorItem.Remedy?? = nil) -> Line {
@@ -245,7 +245,9 @@ public enum OverviewCopy {
 
     /// `jira-syntax, jira-communication: 4.3.0 becomes available on 30 Oct 2026 (minimum release age 72 h).`; the
     /// age clause only when the policy sets one, the date only when the note carries it.
-    public static func cooldown(_ skills: [String], update: Update, minimumAge: String?) -> String {
+    public static func cooldown(
+        _ skills: [String], update: Update, minimumAge: String?, timeZone: TimeZone = .current
+    ) -> String {
         let names = skills.joined(separator: ", ")
         let version = cooldownVersion(update)
         let age = minimumAge.map { " (minimum release age \($0))" } ?? ""
@@ -253,16 +255,12 @@ public enum OverviewCopy {
             return "\(names): \(version ?? Labels.cooldownPlaceholder)\(age)."
         }
         let what = version.map { "\($0) becomes available" } ?? "A newer version becomes available"
-        return "\(names): \(what) on \(Formatters.dayMonthYear(eligible))\(age)."
+        return "\(names): \(what) on \(Formatters.dayMonthYear(eligible, timeZone: timeZone))\(age)."
     }
 
-    /// `4.3.0` from the note `v4.3.0 eligible 2026-…`, else the newest version `outdated` printed.
+    /// `4.3.0` from the note `v4.3.0 eligible 2026-…` (`Update.cooldown`).
     private static func cooldownVersion(_ update: Update) -> String? {
-        if let note = update.note, let range = note.range(of: " eligible ") {
-            let version = note[..<range.lowerBound].trimmingCharacters(in: .whitespaces)
-            return version.hasPrefix("v") ? String(version.dropFirst()) : version
-        }
-        return update.latest
+        update.cooldown.map { Update.bare($0.version) }
     }
 
     // MARK: - Security card
@@ -337,7 +335,7 @@ public enum OverviewCopy {
 
     /// `skills.acme.example/packages.json` → `skills.`, `acme.`, `example/`, `packages.`, `json`: the runs an address
     /// may wrap between, never inside one. The board wraps its mono cell at `/` only, but there the cell overflows
-    /// its own column; breaking after `.` too keeps the two card columns equal (orchestrator decision, P3-4 round 3).
+    /// its own column; breaking after `.` too keeps the two card columns equal (a deviation from the boards).
     /// A run stays on the line it starts while it fits, so `packagist.org` wraps only in a column too narrow for it.
     public static func addressRuns(_ address: String) -> [String] {
         var runs: [String] = []
@@ -432,14 +430,18 @@ public enum OverviewCopy {
     public static let directory = "Directory"
 
     /// `14 skills are linked into both.` The board only draws two agents; "into it" (one agent), "into all N" and
-    /// the singular "1 skill is" are invented.
+    /// the singular "1 skill is" are invented, and so is `No skills linked yet.` for none (an empty project).
     public static func linked(skills: Int, agents: Int) -> String {
+        guard skills > 0 else { return noneLinked }
         let into = agents == 2 ? "both" : (agents == 1 ? "it" : "all \(agents)")
         return skills == 1 ? "1 skill is linked into \(into)." : "\(skills) skills are linked into \(into)."
     }
 
+    /// Invented: `linked(skills:agents:)` for no skills, instead of "0 skills are linked into both."
+    public static let noneLinked = "No skills linked yet."
+
     /// `Not linked: jira-syntax, sql-review.`: the skills `linked(skills:agents:)` leaves out because they are not
-    /// installed or not linked. Invented (P3-11 review): the board counts every skill as linked.
+    /// installed or not linked. Invented: the board counts every skill as linked.
     public static func notLinked(_ skills: [String]) -> String {
         "Not linked: \(skills.joined(separator: ", "))."
     }

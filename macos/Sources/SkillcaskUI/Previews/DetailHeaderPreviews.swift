@@ -2,13 +2,14 @@ import SkillcaskDomain
 import SwiftUI
 
 extension PreviewRegistry {
-    /// P2-6: the detail header in the Main board's state (pdf, update) and every Detail-States header: project,
+    /// The detail header in the Main board's state (pdf, update) and every Detail-States header: project,
     /// dependency, not managed with a known and an unknown source, abandoned, up to date, and offline (pdf from
     /// the offline snapshot, where `outdated` never answered).
     ///
-    /// The state line states `status.state` (`DetailHeader.stateHealth`, P3-3), so `project` and
+    /// The state line states `status.state` (`DetailHeader.stateHealth`), so `project` and
     /// `notManagedUnknown` read "Project skill" / "Not managed" although their fixtures carry findings.
-    /// `projectClean` is my-notes without findings and renders the same line.
+    /// `projectClean` is my-notes without findings and renders the same line. `notManaged` (caveman in the api
+    /// project) is a planned shape: 0.9.1 reports not managed skills in the personal scope only.
     static let detailHeader: [Entry] = [
         Entry(id: "P2-6", state: "update", size: CGSize(width: 600, height: 260)) {
             AnyView(DetailHeaderSample(entry: DesignFixtures.pdf))

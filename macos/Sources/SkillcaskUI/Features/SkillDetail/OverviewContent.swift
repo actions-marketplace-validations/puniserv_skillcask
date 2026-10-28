@@ -202,7 +202,10 @@ struct OverviewContent: Hashable {
         case .repository:
             guard let repository = info?.repository else { return nil }
             let text = DetailOverviewCopy.repositoryText(repository)
-            let value: Value = URL(string: repository).map { .link(text, url: $0) } ?? .text(text, mono: nil)
+            // Package-supplied: only an http(s) link opens; any other scheme stays text (`SafeOpen`).
+            let value: Value =
+                URL(string: repository).flatMap { SafeOpen.isWebLink($0) ? .link(text, url: $0) : nil }
+                ?? .text(text, mono: nil)
             return Row(label: DetailOverviewCopy.repository, value: value)
         case .newest:
             guard let info, let latest = entry.update?.outsideRange else { return nil }

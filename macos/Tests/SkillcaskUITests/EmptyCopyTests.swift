@@ -4,7 +4,7 @@ import Testing
 
 @testable import SkillcaskUI
 
-/// P2-11: the empty states say what the boards say, the no-matches builder counts in English, and only the dashed
+/// The empty states say what the boards say, the no-matches builder counts in English, and only the dashed
 /// style draws a border.
 @Suite struct EmptyCopyTests {
     // MARK: - Board literals

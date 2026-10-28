@@ -3,7 +3,7 @@ import SkillcaskDomain
 import SwiftUI
 
 extension PreviewRegistry {
-    /// P3-2: the skills column at its board width over the fixture boot, one entry per S2/S11 state: List-States
+    /// The skills column at its board width over the fixture boot, one entry per S2/S11 state: List-States
     /// (empty after Set Up, filtered no matches, stale while refreshing, offline), the Components board's hover
     /// row (review-pr), Running (a Sync in the header with the success toast; the sign-in failure banner), and
     /// the Main board's selected pdf row in white on the accent.

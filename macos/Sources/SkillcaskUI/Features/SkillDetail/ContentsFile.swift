@@ -25,7 +25,7 @@ struct ContentsFile: Hashable, Sendable {
     }
 
     /// Size and date from `FileManager`; a nonisolated async function runs off the caller's actor (tools 6.0), so
-    /// the main actor never waits on the disk (Q6, SUI-20). A missing file keeps both unknown.
+    /// the main actor never waits on the disk (Q6). A missing file keeps both unknown.
     nonisolated static func load(at url: URL) async -> ContentsFile {
         let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
         let bytes = (attributes?[.size] as? NSNumber)?.intValue

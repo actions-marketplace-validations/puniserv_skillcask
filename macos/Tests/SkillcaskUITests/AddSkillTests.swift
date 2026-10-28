@@ -5,7 +5,7 @@ import Testing
 
 @testable import SkillcaskUI
 
-/// The Add Skill sheet's logic (P3-9): the debounced search and its stale answers, the skills.sh consent, the
+/// The Add Skill sheet's logic: the debounced search and its stale answers, the skills.sh consent, the
 /// Installed marker, the spec with its version rule, the gating on `add --skill` and `add --rename`, and Add through
 /// `SheetRun` (success, failure, cancel). Source-shape detection is `PackageSpecTests`. Views are not tested; their
 /// inputs are.
@@ -165,7 +165,7 @@ import Testing
         let search = search()
         search.preload(query: Self.jira, selection: Self.jira, info: AddSkillSamples.jiraInfo)
         #expect(search.command == .add(spec: Self.jira, repository: nil, adopt: false, rename: [:], skills: []))
-        #expect(search.effectiveRule == .compatible && search.ruleOptions == [.compatible, .patches, .exact])
+        #expect(search.effectiveRule == .compatible && search.ruleOptions == [.compatible, .patches, .exact, .latest])
         search.rule = .compatible
         #expect(
             search.command == .add(spec: "\(Self.jira)@^4.2", repository: nil, adopt: false, rename: [:], skills: []))
@@ -574,5 +574,85 @@ import Testing
                 == "in packagist and acme. skills.sh is off; turn it on in Settings › Search to include it.")
         #expect(AddSkillCopy.resultsFrom(7) == "7 results from")
         #expect(AddSkillSheet.toast(package: "a/b", skills: [], version: nil) == "Added a/b")
+    }
+
+    // MARK: - Flow-F2 rules
+
+    /// Flow-F2: "Up to next major (default) / Exact / Latest / Branch". Latest and Branch need `allow-ranges`
+    /// (`is_exact`, `manifest::check_constraint`); Branch only for GitHub and git sources (`add_github`, `add_git`).
+    @Test func latestAndBranchAreOfferedWhereTheCLIAcceptsThem() throws {
+        let base = try #require(VersionRule.Base("4.2.0"))
+        #expect(
+            VersionRule.options(for: base, allowRanges: true, source: .github, branch: "")
+                == [.compatible, .patches, .exact, .latest, .branch("")])
+        #expect(
+            VersionRule.options(for: base, allowRanges: true, source: .registry, branch: "main")
+                == [.compatible, .patches, .exact, .latest])
+        #expect(VersionRule.options(for: base, allowRanges: false, source: .git, branch: "main") == [.exact])
+        #expect(
+            VersionRule.latest.constraint(for: base) == "*" && VersionRule.branch("dev").constraint(for: base) == "dev")
+        #expect(AddSkillCopy.ruleLabel(.exact, base: base) == "Exact")
+        #expect(AddSkillCopy.ruleLabel(.latest, base: base) == "Latest")
+        #expect(AddSkillCopy.ruleLabel(.branch("main"), base: base) == "Branch")
+        #expect(
+            AddSkillCopy.ruleNote(rule: .branch("main"), version: "4.2.0")
+                == "Written to skills.toml; skills.lock pins the branch’s current commit.")
+        #expect(
+            AddSkillCopy.ruleNote(rule: .latest, version: "4.2.0")
+                == "Written to skills.toml; skills.lock pins the version it installs.", "names no version")
+        #expect(AddSkillCopy.ruleLabel(.compatible, base: nil) == "As the command-line tool chooses")
+    }
+
+    /// The CLI reads the `@` part as a ref only when `Constraint::parse` fails, and `check_constraint` limits the
+    /// characters (src/commands.rs 1389–1400, src/manifest.rs `check_constraint`).
+    @Test func aBranchNameIsOneTheCLITakesAsARef() {
+        // check_constraint's characters, and nothing Constraint::parse reads as a version (src/version.rs atom).
+        for good in [
+            "main", "dev", "feature/x-1", "release_2", "dev-main", "v-next", "2024-release", "release-1", "1.0-hotfix",
+            // The rc number overflows u64, so `parse_partial` fails and the CLI takes it as a ref.
+            "v1rc99999999999999999999",
+        ] {
+            #expect(VersionRule.isValidBranch(good), "\(good)")
+        }
+        for bad in [
+            "", "1.0", "v2", "2024", "x", "1.x", "2-beta1", "1.0-dev", "1.0.0-rc.1",
+            // 20 digits that still fit a u64: a version (`x.parse::<u64>()` succeeds).
+            "v1rc10000000000000000000", "-a", "/a", "a/", "a..b", "a//b",
+            "a b", "*", "ä",
+        ] {
+            #expect(!VersionRule.isValidBranch(bad), "\(bad)")
+        }
+    }
+
+    @Test func aGitHubSpecTakesTheBranchAsItsRef() {
+        let search = search()
+        let spec = "github:acme/jira"
+        search.preload(query: spec, selection: spec, info: AddSkillSamples.jiraInfo)
+        #expect(search.ruleOptions.last == .branch(""))
+        search.rule = .branch("")
+        #expect(search.hasBranchProblem && search.command == nil, "the field starts empty; Add waits for a name")
+        search.branch = "2024-release"
+        #expect(search.effectiveRule == .branch("2024-release") && search.constraint == "2024-release")
+        #expect(
+            search.command
+                == .add(spec: "\(spec)@2024-release", repository: nil, adopt: false, rename: [:], skills: []))
+        search.branch = "1.0"
+        #expect(search.hasBranchProblem && search.command == nil, "1.0 would be read as a version")
+        search.rule = .latest
+        #expect(search.command == .add(spec: "\(spec)@*", repository: nil, adopt: false, rename: [:], skills: []))
+    }
+
+    /// The toast reads the version `add` locked from its own line, not `info`'s guess (a ref locks a 12-digit sha).
+    @Test func theAddToastReadsTheVersionFromTheCLILine() {
+        let ref = [OutputLine.stdout(#"added netresearch/agent-jira-skill = "main" (3f2a9c1d0b7e)"#)]
+        #expect(
+            AddSkillSheet.toast(package: Self.jira, skills: ["jira-syntax", "jira-communication"], transcript: ref)
+                == "Added jira-syntax and jira-communication (3f2a9c1d0b7e)")
+        let tag = [OutputLine.stdout(#"added netresearch/agent-jira-skill = "^4.2" (4.2.0)"#)]
+        #expect(
+            AddSkillSheet.toast(package: Self.jira, skills: ["jira-syntax"], transcript: tag)
+                == "Added jira-syntax (4.2.0)")
+        #expect(
+            AddSkillSheet.toast(package: Self.jira, skills: ["jira-syntax"], transcript: []) == "Added \(Self.jira)")
     }
 }

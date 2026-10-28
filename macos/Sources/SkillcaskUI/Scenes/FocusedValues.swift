@@ -1,7 +1,7 @@
 import SwiftUI
 
 extension FocusedValues {
-    /// The stores of the focused window, for the menu bar (SUI-11); every entry is optional, as `FocusedValues`
+    /// The stores of the focused window, for the menu bar; every entry is optional, as `FocusedValues`
     /// requires, and nil when no window has focus.
     @Entry var appStore: AppStore?
     @Entry var scopeStore: ScopeStore?

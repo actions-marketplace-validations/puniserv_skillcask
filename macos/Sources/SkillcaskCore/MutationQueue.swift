@@ -33,6 +33,11 @@ public actor MutationQueue {
         busy[scope, default: 0] > 0
     }
 
+    /// How many mutations of `scope` are running or waiting (tests: a second one has queued).
+    func pending(in scope: Scope) -> Int {
+        busy[scope, default: 0]
+    }
+
     private func finished(_ scope: Scope) {
         busy[scope, default: 1] -= 1
         if busy[scope] == 0 {

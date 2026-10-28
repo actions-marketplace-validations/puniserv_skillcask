@@ -25,6 +25,8 @@ public struct FailureBanner: View {
     nonisolated static let warningSymbol = "exclamationmark.triangle"
     /// The network failure's symbol (AddSkill-States, ReviewUpdate-States).
     nonisolated static let networkSymbol = "wifi.slash"
+    /// A read the app stopped at its time limit. Invented (no board draws it).
+    nonisolated static let timeoutSymbol = "clock.badge.exclamationmark"
     nonisolated static let infoSymbol = "info.circle"
 
     private let message: UserMessage
@@ -54,6 +56,7 @@ public struct FailureBanner: View {
     /// for any other error, the triangle for a warning, the circle for anything quieter.
     nonisolated static func symbol(for message: UserMessage) -> String {
         if message.isIntegrity { return integritySymbol }
+        if message.isTimeout { return timeoutSymbol }
         if message.remedy == .retry { return networkSymbol }
         switch message.severity {
         case .error: return errorSymbol

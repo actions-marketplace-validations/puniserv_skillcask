@@ -36,6 +36,8 @@ public struct EmptyState: View {
         public let shortcutHint: String?
         public let isPrimary: Bool
         public let perform: () -> Void
+        /// Drawn disabled (Add Skill… while a run is in flight).
+        public private(set) var isDisabled = false
 
         /// The accent-tinted default button.
         public static func primary(
@@ -53,6 +55,13 @@ public struct EmptyState: View {
             -> Action
         {
             Action(title: title, shortcutHint: shortcutHint, isPrimary: false, perform: perform)
+        }
+
+        /// This action, disabled when `disabled` is true.
+        public func disabled(_ disabled: Bool) -> Action {
+            var copy = self
+            copy.isDisabled = disabled
+            return copy
         }
 
         /// The button label: `Open Folder… ⌘O`.
@@ -120,7 +129,7 @@ public struct EmptyState: View {
     /// Contents-States "Unreadable": body `max-width: 290px`.
     public static let unreadableTextWidth: CGFloat = 290
 
-    /// The P2-11 rule: a dashed hairline for `.dashed`, no border for `.plain`.
+    /// The rule: a dashed hairline for `.dashed`, no border for `.plain`.
     nonisolated public static func border(for style: Style) -> StrokeStyle? {
         switch style {
         case .dashed: StrokeStyle(lineWidth: Size.hairline, dash: dash)
@@ -191,6 +200,7 @@ public struct EmptyState: View {
                         .foregroundStyle(Color.accent)
                 }
                 .buttonStyle(.plain)
+                .disabled(link.isDisabled)
                 .padding(.top, Spacing.s)
             }
             if let disclosed {
@@ -221,9 +231,11 @@ public struct EmptyState: View {
                     Button(action.label, action: action.perform)
                         .buttonStyle(.borderedProminent)
                         .tint(Color.accent)
+                        .disabled(action.isDisabled)
                 } else {
                     Button(action.label, action: action.perform)
                         .buttonStyle(.bordered)
+                        .disabled(action.isDisabled)
                 }
             }
         }

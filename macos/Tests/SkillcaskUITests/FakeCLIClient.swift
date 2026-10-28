@@ -50,6 +50,8 @@ actor FakeCLIClient: CLIClient {
     enum Answer {
         case result(stdout: String, exit: Int32, lines: [OutputLine])
         case error(CLIError)
+        /// No answer until the caller is cancelled, then `.cancelled`: a command that hangs.
+        case never
     }
 
     private var answers: [Key: [(answer: Answer, gate: Gate?)]] = [:]
@@ -100,6 +102,9 @@ actor FakeCLIClient: CLIClient {
         switch next.answer {
         case .error(let error):
             throw error
+        case .never:
+            try? await Task.sleep(for: .seconds(3600))
+            throw .cancelled
         case .result(let stdout, let exit, let lines):
             for line in lines {
                 onLine(line)

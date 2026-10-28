@@ -1,4 +1,4 @@
-/// The five colours of the status dot (brief §8). Ordered so `max` is the worst.
+/// The five colours of the status dot. Ordered so `max` is the worst.
 public enum Severity: Int, Comparable, Hashable, Sendable, CaseIterable {
     case neutral
     case ok

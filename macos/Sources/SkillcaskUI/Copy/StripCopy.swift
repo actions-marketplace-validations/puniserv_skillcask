@@ -17,6 +17,27 @@ public enum StripCopy {
     /// The sentence after `offlineTitle` on the Components board.
     public static let offlineBody = "Updates and details need a network connection; what the lock knows is shown."
 
+    // MARK: - S1 Overview header: a refresh that read status but not audit or doctor
+
+    /// The warning under the Overview's counts when `audit` or `doctor` failed while `status` answered
+    /// (`ScopeStore.partialFailure`). Invented (no board draws it). One sentence per failed read: `Security findings
+    /// are from an earlier check: audit failed.` while the previous document stands in, `Security findings are
+    /// missing: audit failed.` when there was none; `Health …` for `doctor`.
+    public static func partialRefresh(_ failure: ScopeStore.PartialFailure) -> String {
+        failure.failed
+            .map { read in
+                let what = read == .audit ? "Security findings" : "Health"
+                let command = read == .audit ? "audit" : "doctor"
+                return failure.kept.contains(read)
+                    ? "\(what) \(read == .audit ? "are" : "is") from an earlier check: \(command) failed."
+                    : "\(what) \(read == .audit ? "are" : "is") missing: \(command) failed."
+            }
+            .joined(separator: " ")
+    }
+
+    /// The partial-refresh strip's link once its details show. Invented (its other state is `OutcomeCopy.details`).
+    public static let hideDetails = "Hide details"
+
     // MARK: - S1 not managed (Components, Overview-States)
 
     /// `12 skills on this Mac are not managed yet.`: the bold lead of the amber banner. The boards only draw a
@@ -34,7 +55,8 @@ public enum StripCopy {
             : "Adopt them to get updates and security checks."
     }
 
-    /// The banner's button: opens the Adopt sheet with the not-managed checklist (Components, Overview-States).
+    /// The banner's button: applies the Not managed chip and selects its first row (Flow-F1 step 3), where each
+    /// row offers Adopt….
     public static let review = "Review"
 
     // MARK: - S4 Contents

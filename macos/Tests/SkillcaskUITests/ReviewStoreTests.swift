@@ -5,7 +5,7 @@ import Testing
 
 @testable import SkillcaskUI
 
-/// The Review Update sheet's model (P3-8) over a `CLIClient` fake and the design fixtures: `diff` into packages
+/// The Review Update sheet's model over a `CLIClient` fake and the design fixtures: `diff` into packages
 /// and files with the board's counts, find, flagged lines, review-only, nothing to update, a failed fetch, and
 /// Update through `SheetRun` (success closes, failure and Cancel keep the sheet).
 @Suite @MainActor struct ReviewStoreTests {
@@ -216,7 +216,7 @@ import Testing
         let asked = ReviewStore(package: "anthropics/skills", reviewOnly: true, store: scopeStore())
         #expect(!asked.updateIsDefault)
         let moved = ReviewStore(package: "juliusbrussee/caveman", store: scopeStore(DesignFixtures.apiTagMoved))
-        #expect(moved.tagMove?.tag == "v4.1.0" && moved.isReviewOnly && !moved.updateIsDefault)
+        #expect(moved.tagMove?.tag == "4.0.1" && moved.isReviewOnly && !moved.updateIsDefault)
     }
 
     /// The footer's primary button as the sheet draws it (`ReviewUpdateSheet.primaryButton` switches on this):
@@ -253,7 +253,8 @@ import Testing
     // MARK: - Update
 
     @Test(.timeLimit(.minutes(1))) func updateRunsUpdateForThePackageAndClosesOnSuccess() async {
-        await client.lines(.update(packages: ["anthropics/skills"]), in: scope, ["updated anthropics/skills"])
+        await client.lines(
+            .update(packages: ["anthropics/skills"]), in: scope, ["updated anthropics/skills 1.2.0 -> 1.4.0"])
         await scriptRefresh()
         let store = scopeStore()
         let review = ReviewStore(package: "pdf", store: store)
@@ -265,7 +266,20 @@ import Testing
         await task?.value
         #expect(await client.commands.first == .update(packages: ["anthropics/skills"]))
         #expect(closed && run.phase == .succeeded)
-        #expect(runner.toast?.text == "Updated pdf to 1.4.0")
+        #expect(runner.toast?.text == "Updated pdf to 1.4.0" && runner.toast?.tone == .success)
+    }
+
+    /// The CLI printed no `updated` line for the reviewed package (it resolved what was locked already,
+    /// `src/commands.rs` 1645-1651): the toast says it stayed, in the warning tone, never "Updated pdf to 1.4.0".
+    @Test(.timeLimit(.minutes(1))) func anUpdateThatLockedNothingSaysItStayed() async {
+        await client.lines(.update(packages: ["anthropics/skills"]), in: scope, [])
+        await scriptRefresh()
+        let store = scopeStore()
+        let review = ReviewStore(package: "pdf", store: store)
+        review.preload(DesignFixtures.pdfDiff)
+        let runner = ActionRunner(queue: MutationQueue())
+        await review.update(with: SheetRun(), in: store, runner: runner) {}?.value
+        #expect(runner.toast?.text == "pdf was not updated; it stays at 1.2.0" && runner.toast?.tone == .warning)
     }
 
     @Test(.timeLimit(.minutes(1))) func updateAllIsOneCall() async {

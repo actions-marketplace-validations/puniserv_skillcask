@@ -69,6 +69,7 @@ struct GeneralPane: View {
                     .truncationMode(.middle)
                 Button(SettingsCopy.choose, action: choose)
                     .controlSize(.small)
+                    .disabled(!app.canChangeBinary)
             }
             if let tool, let version = tool.version {
                 HStack(spacing: 0) {
@@ -80,9 +81,13 @@ struct GeneralPane: View {
                         }
                         .buttonStyle(.link)
                         .font(Font.Token.captionMedium)
-                        .foregroundStyle(Color.accent)
+                        .foregroundStyle(app.canChangeBinary ? Color.accent : Color.textTertiary)
+                        .disabled(!app.canChangeBinary)
                     }
                 }
+            }
+            if !app.canChangeBinary {
+                SettingsCaption(SettingsCopy.closeSheetFirst)
             }
             if let chooseFailure {
                 MessageStrip(.error, text: chooseFailure.title, density: .compact)
@@ -106,7 +111,7 @@ struct GeneralPane: View {
             }
             Button(SettingsCopy.clearRecent, action: clearRecent)
                 .controlSize(.small)
-                .disabled(app.projects.isEmpty)
+                .disabled(app.projects.isEmpty || app.presentation != nil)
                 .padding(.top, Spacing.xs)
         }
     }
@@ -123,7 +128,8 @@ struct GeneralPane: View {
         }
     }
 
-    /// Empties the recents through the sidebar's own removal, so stores and the selection follow.
+    /// Empties the recents through the sidebar's own removal, so stores and the selection follow; disabled while a
+    /// sheet is up (the project it is pinned to could not go).
     private func clearRecent() {
         for item in app.projects {
             app.removeFromSidebar(item.scope)

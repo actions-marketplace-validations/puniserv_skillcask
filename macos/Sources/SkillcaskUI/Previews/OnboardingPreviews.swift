@@ -2,10 +2,11 @@ import SkillcaskCore
 import SwiftUI
 
 extension PreviewRegistry {
-    /// P3-12: the S13 onboarding sheet at its board widths, and the first launch with the CLI fine. `missing` is the
+    /// The S13 onboarding sheet at its board widths, and the first launch with the CLI fine. `missing` is the
     /// Onboarding board's sheet, `tooOld` the Onboarding-States card (found 0.7.2 at the Homebrew path),
     /// `detecting` the missing sheet while Try Again or Locate… re-detects, `locateRefused` after Locate… was given
-    /// a file that is not the tool, `locateTooOld` after it was given an old copy. `firstLaunch` is the window over
+    /// a file that is not the tool, `locateTooOld` after it was given the same old copy the sheet found (one copy,
+    /// so the strip's version matches Found). `firstLaunch` is the window over
     /// the fixture boot with no project: My Skills selected, its Overview with the not-managed banner, and the
     /// sidebar hint under Projects. The sheet is drawn alone: a window-modal sheet, its scrim and the unified
     /// toolbar are window chrome the offscreen renderer does not draw.
@@ -19,7 +20,7 @@ extension PreviewRegistry {
         sheet("locateTooOld", height: Self.tooOldHeight + Self.tooOldStripHeight, width: 480) {
             OnboardingSample(
                 state: OnboardingSample.tooOld,
-                locateError: .tooOld(found: Version(0, 8, 0), needs: Capabilities.minimum))
+                locateError: .tooOld(found: OnboardingSample.tooOldVersion, needs: Capabilities.minimum))
         },
         Entry(id: "P3-12", state: "firstLaunch", size: CGSize(width: 1280, height: 800)) {
             AnyView(FirstLaunchSample())
@@ -56,8 +57,9 @@ private struct OnboardingSample: View {
     }
 
     /// Onboarding-States: 0.7.2 at the Homebrew path, 0.9.1 needed.
+    static let tooOldVersion = Version(0, 7, 2)
     static let tooOld = OnboardingState.tooOld(
-        found: Version(0, 7, 2), needs: Capabilities.minimum, path: "/opt/homebrew/bin/skillcask")
+        found: tooOldVersion, needs: Capabilities.minimum, path: "/opt/homebrew/bin/skillcask")
 
     var body: some View {
         CLIOnboardingSheet(state: state, locateError: locateError, validating: validating)

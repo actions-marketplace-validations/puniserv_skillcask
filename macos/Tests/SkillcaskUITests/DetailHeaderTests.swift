@@ -135,8 +135,8 @@ import Testing
         #expect(DetailCopy.insideRange("^1.2") == "inside your allowed range ^1.2.")
         let released = try #require(DesignFixtures.pdfUpdate.released)
         let now = try Date("2026-10-27T12:00:00Z", strategy: .iso8601)
-        #expect(DetailCopy.released(released, now: now) == "Released 24 Oct 2026, 3 days ago.")
-        #expect(Formatters.daysAgo(released, now: released) == "today")
-        #expect(Formatters.daysAgo(released, now: released.addingTimeInterval(86_400)) == "1 day ago")
+        #expect(DetailCopy.released(released, now: now, timeZone: .gmt) == "Released 24 Oct 2026, 3 days ago.")
+        #expect(Formatters.daysAgo(released, now: released, timeZone: .gmt) == "today")
+        #expect(Formatters.daysAgo(released, now: released.addingTimeInterval(86_400), timeZone: .gmt) == "1 day ago")
     }
 }

@@ -4,7 +4,7 @@ import Testing
 
 @testable import SkillcaskUI
 
-/// The Overview card rules of P2-4: only an error card colours its border, the collapsed mode hides the body,
+/// The Overview card rules: only an error card colours its border, the collapsed mode hides the body,
 /// the header joins its title and status and knows whether it has a summary.
 @Suite struct CardTests {
     private typealias PlainCard = CardContainer<EmptyView, EmptyView>

@@ -16,12 +16,21 @@ import SwiftUI
 /// (stated once with its real path) and installs the package in its place. The CLI adopts only in the personal
 /// scope, so in a project the sheet says so and offers no Adopt button (`AdoptPlan.isAvailable`).
 ///
+/// One skill: a Version rule button (the Add Skill popover, `VersionRuleControl`) under the source, "As the
+/// command-line tool chooses" by default, which writes nothing so the CLI picks `^major.minor` of what it installs;
+/// Latest or Branch is appended to the spec as `@<constraint>` (`AdoptRule`: no version is known before `add`). While it runs, the sheet shows "Adopting caveman…" with the live lines and
+/// Cancel (Flow-F4 "S11 in sheet · progress"); exit 0 closes it with "Adopted caveman (4.0.1)", the version from
+/// the CLI's `added` line.
+///
 /// Declared deviations from the board: the green "Your copy matches v4.0.1 at that source" strip of the known
 /// source is replaced by the amber "If the source’s content differs…" strip (the app cannot compare the copy with
-/// the source before adopting), the note under it names no constraint or version, a finished batch row reads
-/// "Adopted · copy kept" without the version and has no "your copy differed" variant (0.9.1 prints no document
-/// saying either), and "Keep as Local Skill" is not offered (no CLI command does it; Cancel leaves the skill as it
-/// is, which the sentence under the strip already says).
+/// the source before adopting), which ends by naming the folder the copy is kept in instead of "Review the diff
+/// after adopting" (no route in the app, Q18); the checklist's version column is empty (`status` prints no version
+/// for a not managed row, `src/commands.rs` 1843–1844); the note under it names no constraint or version; a finished batch
+/// row reads "Adopted 4.0.1 · copy kept" only when the CLI printed `adopted …` for it, and has no "your copy
+/// differed" variant (the CLI does not compare); the batch adopts with the CLI's default rule (no popover per row);
+/// and "Keep as Local Skill" is not offered (no CLI command does it; Cancel leaves the skill as it is, which the
+/// sentence under the strip already says).
 struct AdoptSheet: View {
     /// The not-managed skills to adopt: one from a row or the detail, several from the Skill menu.
     let skills: [String]
@@ -46,6 +55,10 @@ struct AdoptSheet: View {
     @State private var startedAt: Date?
     /// "… 6 more" was pressed: the checklist lists every row.
     @State private var showsAll = false
+    /// The version rule the popover chose; nil leaves it to the CLI. A `.branch` stands for `.branch(branch)`.
+    @State private var rule: VersionRule?
+    /// The Branch rule's branch name.
+    @State private var branch = ""
     @FocusState private var isFieldFocused: Bool
 
     /// - Parameters:
@@ -55,10 +68,11 @@ struct AdoptSheet: View {
     ///   - editing: Previews only: the recorded source unlocked.
     ///   - focused: Previews only: a batch narrowed to this "needs a source" row.
     ///   - showsAll: Previews only: the checklist expanded.
+    ///   - rule: Previews only: a version rule already chosen.
     init(
         skills: [String], store: ScopeStore, onClose: @escaping () -> Void, run: SheetRun = SheetRun(),
         startedAt: Date? = nil, source: String = "", editing: Bool = false, focused: String? = nil,
-        showsAll: Bool = false
+        showsAll: Bool = false, rule: VersionRule? = nil
     ) {
         self.skills = skills
         self.store = store
@@ -69,6 +83,7 @@ struct AdoptSheet: View {
         _isEditing = State(initialValue: editing || focused != nil)
         _focused = State(initialValue: focused)
         _showsAll = State(initialValue: showsAll)
+        _rule = State(initialValue: rule)
     }
 
     /// The source field's height (board `.field { height: 28px }`).
@@ -148,6 +163,21 @@ struct AdoptSheet: View {
         return PackageSpec.validate(source).map(\.text)
     }
 
+    /// The parsed spec the rule applies to; nil while the source is not valid.
+    private func parsedSpec(for item: AdoptPlan.Item) -> PackageSpec? {
+        guard case .success(let text) = spec(for: item) else { return nil }
+        return PackageSpec.parse(text)
+    }
+
+    // MARK: - Version rule
+
+    /// The rule state as `AdoptRule`, for the button, the popover and the spec.
+    private func ruleModel(for item: AdoptPlan.Item) -> AdoptRule {
+        AdoptRule(
+            spec: parsedSpec(for: item), allowRanges: SearchStore.allowsRanges(store.snapshot), chosen: rule,
+            branch: branch)
+    }
+
     private var batchStarted: Bool {
         !run.items.isEmpty
     }
@@ -158,7 +188,11 @@ struct AdoptSheet: View {
         if !plan.isAvailable {
             projectGate
         } else if let single {
-            singleForm(single)
+            if run.isRunning {
+                singleProgress(single)
+            } else {
+                singleForm(single)
+            }
         } else if isBatchView {
             if batchStarted {
                 batchProgress
@@ -223,10 +257,11 @@ struct AdoptSheet: View {
                     .font(Font.Token.callout)
                     .foregroundStyle(Color.textSecondary)
                 sourceField(item)
+                ruleRow(item)
                 if let failure = run.failure {
                     FailureBanner(failure)
                 } else {
-                    MessageStrip(.warning, text: AdoptCopy.differs, density: .sheet)
+                    MessageStrip(.warning, text: AdoptCopy.differs(folder: adoptedFolder), density: .sheet)
                 }
                 Text(known ? AdoptCopy.knownNote(skill: item.name) : AdoptCopy.keepLocal)
                     .font(Font.Token.caption)
@@ -238,6 +273,34 @@ struct AdoptSheet: View {
             .padding(.bottom, Spacing.m)
             Spacer(minLength: 0)
         }
+    }
+
+    /// `Version rule [Up to next major ⌄]` under the source, as the Add Skill preview draws it; hidden while the
+    /// source is not valid, when it already pins a version or ref, or when the policy leaves no choice.
+    @ViewBuilder private func ruleRow(_ item: AdoptPlan.Item) -> some View {
+        let model = ruleModel(for: item)
+        if model.isShown {
+            HStack(spacing: Spacing.cardGap) {
+                Text(AddSkillCopy.versionRule)
+                    .font(Font.Token.callout)
+                    .foregroundStyle(Color.textSecondary)
+                VersionRuleControl(
+                    base: model.base, options: model.options,
+                    rule: Binding(get: { model.effective }, set: { rule = $0 }), branch: $branch,
+                    constraint: { model.constraint(of: $0) }
+                )
+                .disabled(run.isRunning)
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    /// Flow-F4 "S11 in sheet · progress": "Adopting caveman…", the elapsed time and the CLI's lines as they arrive,
+    /// the same block as Add Skill's; the footer keeps Cancel.
+    private func singleProgress(_ item: AdoptPlan.Item) -> some View {
+        AddSkillProgress(
+            model: run.action.map(AddSkillProgress.Model.init)
+                ?? AddSkillProgress.Model(title: AdoptCopy.running(item.name), startedAt: Date(), lines: []))
     }
 
     /// The locked recorded source with Change…, or the editable field in the same box (board `.field`: 28 pt, 1 pt
@@ -486,7 +549,7 @@ struct AdoptSheet: View {
             Text(run.action?.lines.last?.text ?? AdoptCopy.adoptingFallback)
                 .foregroundStyle(Color.textSecondary)
         case .done:
-            Text(AdoptCopy.adoptedItem)
+            Text(item.note ?? AdoptCopy.adoptedItem)
                 .foregroundStyle(Color.textSecondary)
         case .failed(let message, _):
             Text(message.reason ?? message.title)
@@ -538,8 +601,6 @@ struct AdoptSheet: View {
                 .font(Font.Token.callout)
                 .foregroundStyle(Color.textSecondary)
                 .lineLimit(2)
-        } else if single != nil, let action = run.action {
-            Spinner(label: action.lines.last?.text ?? action.title)
         }
     }
 
@@ -569,23 +630,42 @@ struct AdoptSheet: View {
         if isBatchView {
             return !batchStarted && !selectedItems.isEmpty
         }
-        guard let single, case .success = spec(for: single) else { return false }
+        guard let single, case .success = spec(for: single), !ruleModel(for: single).hasProblem else { return false }
         return true
     }
 
     // MARK: - Actions
 
     private func adoptSingle() {
-        guard canAdopt, let single, case .success(let typed) = spec(for: single),
-            let command = AdoptPlan.command(spec: typed, scope: store.scope)
-        else { return }
+        guard canAdopt, let single, case .success(let typed) = spec(for: single) else { return }
+        let text = ruleModel(for: single).specText(typed)
+        guard let command = AdoptPlan.command(spec: text, scope: store.scope) else { return }
         let name = single.name
         // Narrowed from the batch: success returns to the batch (its row is then managed and leaves the list).
         let narrowed = focused != nil
         run.start(
             command, title: AdoptCopy.running(name), failure: AdoptCopy.couldNotAdopt(name),
-            outcome: { AdoptCopy.adopted(name, scope: $0) }, in: store, runner: runner,
+            outcome: { _ in AdoptCopy.adopted(name, version: nil) },
+            report: { _, transcript in Self.toast(skill: name, transcript: transcript) }, emphasis: [name],
+            in: store, runner: runner,
             onSuccess: { if narrowed { backToBatch() } else { onClose() } })
+    }
+
+    /// `Adopted caveman (4.0.1)` from the CLI's `added <package> = "<constraint>" (<version>)` line.
+    nonisolated static func toast(skill: String, transcript: [OutputLine]) -> String {
+        AdoptCopy.adopted(skill, version: report(transcript).addedVersions.values.first)
+    }
+
+    /// A finished batch row: `Adopted 4.0.1 · copy kept` when an `adopted <path> (moved to …)` line names the
+    /// skill's folder, `Adopted 4.0.1` otherwise.
+    nonisolated static func note(skill: String, transcript: [OutputLine]) -> String {
+        let report = report(transcript)
+        return AdoptCopy.adoptedItem(
+            version: report.addedVersions.values.first, copyKept: report.adoptedSkills.contains(skill))
+    }
+
+    private nonisolated static func report(_ transcript: [OutputLine]) -> MutationReport {
+        MutationReport(verbLines: ActionRunner.stdout(of: transcript))
     }
 
     private func adoptBatch() {
@@ -601,6 +681,7 @@ struct AdoptSheet: View {
             }
         }
         startedAt = Date()
+        let known = names
         run.startBatch(
             items.map(\.id), title: AdoptCopy.runningBatch(count: items.count),
             failure: AdoptCopy.couldNotAdoptBatch(count: items.count),
@@ -608,6 +689,8 @@ struct AdoptSheet: View {
             command: { commands[$0] ?? .add(spec: "", repository: nil, adopt: true, rename: [:], skills: []) },
             itemTitle: { AdoptCopy.running(names[$0] ?? $0) },
             itemFailure: { AdoptCopy.couldNotAdopt(names[$0] ?? $0) },
+            itemReport: { item, transcript in Self.toast(skill: known[item] ?? item, transcript: transcript) },
+            itemNote: { item, transcript in Self.note(skill: known[item] ?? item, transcript: transcript) },
             summary: { AdoptCopy.summary(done: $0, scope: $1) }, in: store, runner: runner, onSuccess: { onClose() })
     }
 

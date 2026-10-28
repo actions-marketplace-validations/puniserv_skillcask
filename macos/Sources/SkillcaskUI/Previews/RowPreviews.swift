@@ -2,10 +2,13 @@ import SkillcaskDomain
 import SwiftUI
 
 extension PreviewRegistry {
-    /// P2-5: the Main board's list (the api scope's 14 rows, worst first, pdf selected) in a real `List` so the
+    /// The Main board's list (the api scope's 14 rows, worst first, pdf selected) in a real `List` so the
     /// system draws the selection; the same list offline and stale; and the Components region: one row per
-    /// trailing variant plus the project, dependency and not managed rows on the window surface.
+    /// trailing variant plus the project, dependency and not managed rows on the window surface. `cli` comes first:
+    /// the same list over `DesignFixtures.apiCLI`, the api scope as the 0.9.1 CLI prints it (no descriptions, no
+    /// not managed row); the others draw api's planned shape.
     static let rows: [Entry] = [
+        Entry(id: "P2-5", state: "cli", size: rowsListSize) { AnyView(RowsList(snapshot: DesignFixtures.apiCLI)) },
         Entry(id: "P2-5", state: "rows", size: rowsListSize) { AnyView(RowsList()) },
         Entry(id: "P2-5", state: "offline", size: rowsListSize) { AnyView(RowsList(isOffline: true)) },
         Entry(id: "P2-5", state: "stale", size: rowsListSize) { AnyView(RowsList(isStale: true)) },
@@ -19,7 +22,7 @@ private let rowsListSize = CGSize(
 private let rowVariantsSize = CGSize(width: Size.listWidth + 2 * Spacing.l, height: 11 * Size.row + 2 * Spacing.l)
 
 /// `Filter.all` over the api scope in a `List(selection:)` with pdf selected: the rows as the list screen will
-/// host them. Notes for P3-2: `.inset` adds its own side margins to every row (the board's 6 pt) and draws
+/// host them. For the skills list: `.inset` adds its own side margins to every row (the board's 6 pt) and draws
 /// hairline separators the board lacks (`.listRowSeparator(.hidden)`); `.listRowInsets(EdgeInsets())` leaves the
 /// row's own 14/12 padding as the only inset. Stale is the whole list at `SkillRow.staleOpacity`, selection
 /// included, as List-States fades it. The render tool's window is borderless and never key, so the system draws
@@ -27,16 +30,17 @@ private let rowVariantsSize = CGSize(width: Size.listWidth + 2 * Spacing.l, heig
 /// lays the accent under it, which is what the system draws in an active window. The list screen needs neither:
 /// `List(selection:)` alone raises `backgroundProminence` on the selected row.
 private struct RowsList: View {
+    var snapshot = DesignFixtures.api
     var isOffline = false
     var isStale = false
     @State private var selection: SkillEntry.ID? = DesignFixtures.pdf.id
 
     var body: some View {
-        List(Filter.all.apply(DesignFixtures.api.entries), selection: $selection) { entry in
+        List(Filter.all.apply(snapshot.entries), selection: $selection) { entry in
             let isSelected = entry.id == selection
             SkillRow(
                 entry, isSelected: isSelected, isOffline: isOffline,
-                requiredBy: DesignFixtures.api.requirerSkills(of: entry)
+                requiredBy: snapshot.requirerSkills(of: entry)
             )
             .listRowInsets(EdgeInsets())
             .listRowSeparator(.hidden)
@@ -55,7 +59,9 @@ private struct RowsList: View {
 
 /// The Components board's "Skill row" region: installed, update, changed on disk, not installed, not managed,
 /// project skill (quiet), project with findings, dependency, cooldown, blocked by policy, then the selected row
-/// on the system accent.
+/// on the system accent. The rows come from `DesignFixtures.api`, a planned shape: their descriptions are the
+/// unshipped `status.description` key, and the not managed caveman row sits in a project scope, which 0.9.1 never
+/// reports.
 private struct RowVariants: View {
     /// my-notes with a clean audit: the board's quiet "Project skill" row (ok dot, `.skills/my-notes` · Project).
     static let projectSkill = SkillEntry(

@@ -2,7 +2,7 @@ import SkillcaskCore
 import SwiftUI
 
 extension PreviewRegistry {
-    /// P3-13: each Settings tab as its pane at the board's 600 pt width over the fixture stores (api open). The
+    /// Each Settings tab as its pane at the board's 600 pt width over the fixture stores (api open). The
     /// toolbar tabs are the system Settings window's own chrome and are not drawn here. States: `general` (the board,
     /// tool found automatically), `generalChosen` (a tool picked with Choose…, with "Use the detected one"),
     /// `search` (skills.sh on in config.toml, acme for api), `searchNotSet` (config.toml without the key),
@@ -16,6 +16,8 @@ extension PreviewRegistry {
     static let settings: [Entry] = [
         entry("general", height: 330) { SettingsSample(tab: .general) },
         entry("generalChosen", height: 330) { SettingsSample(tab: .general, configured: true) },
+        // A sheet is open in the main window: Choose… and "Use the detected one" are disabled, the caption says why.
+        entry("generalSheetOpen", height: 360) { SettingsSample(tab: .general, configured: true, sheetOpen: true) },
         entry("search", height: 300) { SettingsSample(tab: .search) },
         entry("searchNotSet", height: 300) { SettingsSample(tab: .search, skillsSh: .notSet) },
         entry("updatesUnknown", height: 400) { SettingsSample(tab: .updates) },
@@ -75,12 +77,12 @@ private struct SettingsSample: View {
         tab: SettingsView.Tab, configured: Bool = false, skillsSh: CLISettingsStore.SkillsSh = .on,
         gitHub: CLISettingsStore.GitHub = .unknown, token: String = "", failure: UserMessage? = nil,
         tokenStorage: CLISettingsStore.TokenStorage? = nil, tokenWarnings: [String] = [],
-        variables: [SettingsStore.EnvironmentVariable] = boardVariables
+        variables: [SettingsStore.EnvironmentVariable] = boardVariables, sheetOpen: Bool = false
     ) {
         self.tab = tab
         self.configured = configured
         self.token = token
-        stores = Boot.fixtures()
+        stores = Boot.fixtures(sheet: sheetOpen ? .addSkill(query: nil) : nil)
         stores.settings.checkUpdatesOnOpen = DesignFixtures.settings.checkOnOpen
         stores.app.cliSettings.preload(
             skillsSh: skillsSh, gitHub: gitHub, gitHubFailure: failure, tokenStorage: tokenStorage,

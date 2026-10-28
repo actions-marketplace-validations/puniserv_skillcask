@@ -3,7 +3,7 @@ import Observation
 import SkillcaskCore
 import SkillcaskDomain
 
-/// The window's root state (ADR §3): whether the CLI is usable, the scopes in the sidebar, which one is selected,
+/// The window's root state: whether the CLI is usable, the scopes in the sidebar, which one is selected,
 /// and one `ScopeStore` per visited scope. Lives as long as the app; never recreated on a scope switch, so
 /// switching back is instant and the previous snapshot shows while it refreshes.
 @MainActor @Observable public final class AppStore {
@@ -23,7 +23,7 @@ import SkillcaskDomain
         public let name: String
         /// The project's `~`-abbreviated path; nil for the personal row (one line on the board).
         public let subtitle: String?
-        /// A project folder has a skills.toml (ADR §5: else `.noManifest`, the Set Up block); always true for the
+        /// A project folder has a skills.toml (else `.noManifest`, the Set Up block); always true for the
         /// personal scope here (its `init -g` state is only known from `status -g`).
         public let isSetUp: Bool
 
@@ -40,7 +40,8 @@ import SkillcaskDomain
     /// What the toolbar, menus, rows and detail ask the window to present over the selected scope, through
     /// `request(_:)`. `MainWindow` shows every case but `.remove` as a sheet through `SheetHost` (`presentedSheet`);
     /// `.remove` is the system alert of S10 (`removal`). Each case carries what its destination needs to open:
-    /// Review Update (S7, P3-8), Add Skill (S8, P3-9), Adopt and Remove (S9, S10, P3-10).
+    /// Review Update (S7), Add Skill (S8), Adopt and Remove (S9, S10), Find Projects (Flow-F1
+    /// step 4).
     public enum Sheet: Identifiable, Hashable, Sendable {
         /// Review one package's update. `target` is the version the row or strip offered; nil lets `diff` choose
         /// the newest inside the range. `reviewOnly` is set when the tag moved (Q3): the sheet then never makes
@@ -54,6 +55,9 @@ import SkillcaskDomain
         case adopt(skills: [String])
         /// Remove skills: a system alert, not a sheet.
         case remove(skills: [String])
+        /// Find Projects in Folder…: `projects` under `root`, then the checklist of the folders it found. App-level:
+        /// the scope it is pinned to is only where the window was.
+        case findProjects(root: URL)
 
         public var id: String {
             switch self {
@@ -62,6 +66,7 @@ import SkillcaskDomain
             case .addSkill(let query): "add-\(query ?? "")"
             case .adopt(let skills): "adopt-\(skills.joined(separator: ","))"
             case .remove(let skills): "remove-\(skills.joined(separator: ","))"
+            case .findProjects(let root): "find-projects-\(root.path)"
             }
         }
 
@@ -126,8 +131,6 @@ import SkillcaskDomain
     public private(set) var cli: CLIState = .locating
     /// Why the last boot failed, for the onboarding sheet's Details (S13).
     public private(set) var bootError: CLIError?
-    /// The last failure of an app-level read (Find Projects); a later banner shows it.
-    public var lastError: CLIError?
     /// Project roots without a skills.toml, from the last manifest check (`refreshSetUp`).
     public private(set) var notSetUp: Set<URL> = []
     public var selectedScope: Scope? {
@@ -142,7 +145,7 @@ import SkillcaskDomain
     /// Set on the main actor before the first `await`, so two presses can never both pass the check.
     public private(set) var isRedetecting = false
 
-    /// The S13 onboarding sheet covers the window (P3-12): the CLI is missing or too old, or being re-detected
+    /// The S13 onboarding sheet covers the window: the CLI is missing or too old, or being re-detected
     /// after such a failure.
     public var isOnboarding: Bool {
         detectionFailed && !isReady
@@ -173,11 +176,12 @@ import SkillcaskDomain
         return true
     }
 
-    /// Closes the sheet or alert whose pinned scope has no store any more (the CLI went away), so `isPresenting`
-    /// cannot stick behind an empty sheet or an alert that never shows. `MainWindow` calls it whenever the
-    /// presentation or the CLI state changes.
+    /// Closes the sheet or alert whose pinned scope has no store any more (the CLI went away, or the scope left
+    /// the sidebar), so `isPresenting` cannot stick behind an empty sheet or an alert that never shows.
+    /// `MainWindow` calls it whenever the presentation, the CLI state or the sidebar's projects change.
+    /// Asks `hasStore(for:)`, not `store(for:)`: the check must not build (or bring back) a store as a side effect.
     public func dropOrphanedPresentation() {
-        if let orphan = Self.orphan(presentation, hasStore: { store(for: $0) != nil }) {
+        if let orphan = Self.orphan(presentation, hasStore: { hasStore(for: $0) }) {
             dismiss(orphan)
         }
     }
@@ -196,7 +200,10 @@ import SkillcaskDomain
     /// Where the located binary is, for Settings › General.
     public private(set) var binary: Locator.Choice?
     @ObservationIgnored private var client: (any CLIClient)?
-    @ObservationIgnored private var stores: [Scope: ScopeStore] = [:]
+    /// Internal, not private, so tests can leave stale stores behind a CLI that is not ready.
+    @ObservationIgnored var stores: [Scope: ScopeStore] = [:]
+    /// The badges of the projects not opened yet: one background `status` each (Flow-F5).
+    public let summaries = ScopeSummaries()
     /// Where every scope store records the reads the user starts (S15): `ActionRunner.record(_:)`, set by `Boot`.
     @ObservationIgnored public var recordActivity: ActionRunner.ActivitySink?
 
@@ -215,7 +222,12 @@ import SkillcaskDomain
         self.environment = policy
         environmentSource = source
         baseEnvironment = environment
-        self.makeClient = makeClient ?? { ProcessRunner(executable: $0, source: source) }
+        // The live client refuses commands a folder without skills.toml would send to a parent project, and times
+        // out reads (`GuardedClient`); an injected `makeClient` (tests) is used as given.
+        self.makeClient =
+            makeClient ?? {
+                GuardedClient(ProcessRunner(executable: $0, source: source), manifestExists: manifestExists)
+            }
         self.textReader = textReader
         self.manifestExists = manifestExists
     }
@@ -283,13 +295,42 @@ import SkillcaskDomain
             scope: scope, client: client, capabilities: capabilities, settings: settings, queue: queue,
             textReader: textReader)
         store.recordActivity = recordActivity
+        store.onManifestMissing = { [weak self] in
+            Task { await self?.refreshSetUp() }
+        }
         stores[scope] = store
         return store
     }
 
-    /// The store of `scope` only when the scope was visited: the sidebar badge reads this.
+    /// Whether `scope` has, or may get, a store that belongs on screen, without building one: the CLI is ready
+    /// (`store(for:)`'s guard comes first, so a store left from an old client does not count) and the scope is
+    /// still in the sidebar (My Skills always is). A project removed from the sidebar has none, even though
+    /// `store(for:)` would build it again.
+    func hasStore(for scope: Scope) -> Bool {
+        client != nil && capabilities != nil && isListed(scope)
+    }
+
+    /// My Skills, or a project in the sidebar.
+    func isListed(_ scope: Scope) -> Bool {
+        scope.isPersonal || scopes.contains { $0.scope == scope }
+    }
+
+    /// Whether `scope` has a skills.toml as the last manifest check saw it (`ScopeItem.isSetUp`); a scope not in
+    /// the sidebar counts as set up (nothing in the window acts on it). The toolbar and the Skill and Scope menus
+    /// act only on a set-up scope.
+    public func isSetUp(_ scope: Scope) -> Bool {
+        item(for: scope)?.isSetUp ?? true
+    }
+
+    /// The store of `scope` only when the scope was visited.
     public func visitedStore(for scope: Scope) -> ScopeStore? {
         stores[scope]
+    }
+
+    /// The sidebar badge of `scope`: its store's snapshot once visited, else its background `status` summary
+    /// (red and amber rows only: `outdated` runs on an explicit Check); nil draws no badge.
+    public func attention(for scope: Scope) -> Attention? {
+        stores[scope]?.snapshot?.attention ?? summaries.attention[scope]
     }
 
     // MARK: - Settings
@@ -322,13 +363,15 @@ import SkillcaskDomain
 
     /// Settings › General, "Use the detected one": forgets the chosen binary and detects again (bundled, then
     /// `PATH`). The scope stores built over the old client are dropped so every later run uses the new one.
+    /// Refused while a sheet or the Remove alert is up (`canChangeBinary`): it holds a store this would drop.
     public func useDetectedBinary() async {
-        guard !isRedetecting else { return }
+        guard !isRedetecting, canChangeBinary else { return }
         isRedetecting = true
         defer { isRedetecting = false }
         settings.binaryPath = nil
         client = nil
         stores.removeAll()
+        summaries.reset()
         cli = .locating
         await boot()
     }
@@ -364,6 +407,7 @@ import SkillcaskDomain
         if selectedScope == nil {
             selectedScope = initialScope
         }
+        summarizeProjects()
     }
 
     private func locate() async {
@@ -391,8 +435,10 @@ import SkillcaskDomain
     /// rebuilt over it; a refused one leaves Settings and `cli` as they were. Returns why it was refused, nil when the app is ready, `.cancelled` when a detection was already
     /// running. `url` is stored as given (the symlink the user picked, not the file it resolves to), so a Homebrew
     /// upgrade that moves the Cellar target keeps working.
+    /// Refused (`.cancelled`, nothing changes) while a sheet or the Remove alert is up: dropping the stores would
+    /// pull the store out from under it (Settings is a window of its own, so it stays usable meanwhile).
     @discardableResult public func locate(executable url: URL) async -> CLIError? {
-        guard !isRedetecting else { return .cancelled }
+        guard !isRedetecting, canChangeBinary else { return .cancelled }
         isRedetecting = true
         defer { isRedetecting = false }
         let path = url.path
@@ -407,6 +453,7 @@ import SkillcaskDomain
                 self.client = client
                 // Built over the old client: dropped so every open scope's next command runs the chosen tool.
                 stores.removeAll()
+                summaries.reset()
                 bootError = nil
                 cli = .ready(capabilities)
                 detectionFailed = false
@@ -416,6 +463,11 @@ import SkillcaskDomain
         }
         await boot()
         return nil
+    }
+
+    /// Choose… and "Use the detected one" may rebuild the stores: not while a presentation holds one.
+    public var canChangeBinary: Bool {
+        presentation == nil
     }
 
     /// `Locator.locate` off the main actor: the file checks never block the window.
@@ -447,6 +499,7 @@ import SkillcaskDomain
         detectionFailed = true
         switch error {
         case .binaryMissing(let paths): cli = .missing(searched: paths)
+        case .binaryIsApp(let path): cli = .missing(searched: [path])
         case .tooOld(let found, let needs): cli = .tooOld(found: found, needs: needs)
         default: cli = .missing(searched: searched)
         }
@@ -468,12 +521,41 @@ import SkillcaskDomain
 
     /// Adds `folder` to the sidebar (first in the recents) and opens it.
     public func open(folder: URL) {
-        settings.remember(project: folder)
-        selectedScope = .project(folder.standardizedFileURL)
-        Task { await refreshSetUp() }
+        open(folders: [folder])
     }
 
-    /// Which recent projects have a skills.toml, through `manifestExists` off the main actor (SUI-20), so the
+    /// Adds `folders` to the sidebar in their order, ahead of the other recents, and selects the first: Open
+    /// Folder…, a drop on the sidebar and Find Projects' Add all come here. A folder without skills.toml shows the
+    /// Set Up block once the manifest check returned. Returns that check (and the badges after it), for tests; nil
+    /// (nothing added) for no folder or while the CLI is not ready, when every way in is disabled.
+    @discardableResult public func open(folders: [URL]) -> Task<Void, Never>? {
+        guard isReady, let first = folders.first else { return nil }
+        for folder in folders.reversed() {
+            settings.remember(project: folder)
+        }
+        selectedScope = .project(first.standardizedFileURL)
+        return Task {
+            await refreshSetUp()
+            summarizeProjects()
+        }
+    }
+
+    /// A drop on the sidebar: the directories among `urls` open as Open Folder… would (`open(folders:)`), the first
+    /// selected; files, symlinks and anything not on disk are ignored. Nil (the drop is refused) when none is a
+    /// directory or the CLI is not ready.
+    @discardableResult public func open(
+        dropped urls: [URL], isDirectory: (URL) -> Bool = AppStore.isDirectory
+    ) -> Task<Void, Never>? {
+        open(folders: urls.filter { $0.isFileURL && isDirectory($0) })
+    }
+
+    /// Whether `url` is a real directory on disk. A symlink to one is not (`isDirectoryKey` does not follow the last
+    /// component), as the CLI refuses a symlinked project directory.
+    public nonisolated static func isDirectory(_ url: URL) -> Bool {
+        (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+    }
+
+    /// Which recent projects have a skills.toml, through `manifestExists` off the main actor, so the
     /// sidebar can draw the not-set-up rows and the detail the Set Up block. Runs on boot, after Open Folder…
     /// and after Find Projects; the fixture boot injects a check that never touches the disk.
     public func refreshSetUp() async {
@@ -483,29 +565,60 @@ import SkillcaskDomain
         notSetUp = missing
     }
 
-    /// Drops a project from the sidebar and forgets its store; the personal row cannot be removed.
-    public func removeFromSidebar(_ scope: Scope) {
-        guard case .project(let url) = scope else { return }
+    /// Previews: the manifest check's answer at once, without the hop off the main actor (fixture checks only).
+    func preloadSetUp() {
+        notSetUp = Set(settings.recentProjects.map(\.standardizedFileURL).filter { !manifestExists($0) })
+    }
+
+    /// Set Up (Overview-States "Folder without skills.toml"): `init` through the runner, whose refresh fills the
+    /// store, then the manifest check again, so the row drops "Not set up" and the list shows "No skills yet"
+    /// without a restart (Flow-F1 "Empty after Set Up"). The check runs whatever `init` said: the disk decides.
+    public func setUp(_ store: ScopeStore, runner: ActionRunner) async {
+        await runner.setUp(in: store)
+        await refreshSetUp()
+    }
+
+    /// Drops a project from the sidebar and forgets its store and badge; the personal row cannot be removed, and
+    /// neither can a project a sheet or the Remove alert is pinned to (Settings › General's Clear Recent can be
+    /// pressed while the main window shows one). Returns whether it was removed.
+    @discardableResult public func removeFromSidebar(_ scope: Scope) -> Bool {
+        guard case .project(let url) = scope, canRemoveFromSidebar(scope) else { return false }
         settings.forget(project: url)
         stores.removeValue(forKey: scope)
+        summaries.forget(scope)
         if selectedScope == scope {
             selectedScope = .personal
         }
+        return true
     }
 
-    /// `projects --json -- <root>`: every folder under `root` with a skills.toml joins the sidebar.
-    public func findProjects(under root: URL) async {
-        guard let client, let capabilities else { return }
+    /// No presentation is pinned to `scope`.
+    public func canRemoveFromSidebar(_ scope: Scope) -> Bool {
+        presentation?.scope != scope
+    }
+
+    /// `projects --json -- <root>`: the folders under `root` with a skills.toml, for the Find Projects sheet.
+    public func projects(under root: URL) async -> Result<[URL], CLIError> {
+        guard let client, let capabilities else { return .failure(.cancelled) }
         do {
             let invocation = try Invocation(.projects(roots: [root]), in: .project(root), capabilities: capabilities)
             let document = try await client.document(ProjectsDocument.self, for: invocation)
-            for project in document.projects.reversed() {
-                settings.remember(project: URL(fileURLWithPath: (project.path as NSString).expandingTildeInPath))
-            }
-            await refreshSetUp()
+            return .success(
+                document.projects.map {
+                    URL(fileURLWithPath: ($0.path as NSString).expandingTildeInPath).standardizedFileURL
+                })
         } catch {
-            lastError = error
+            return .failure(error)
         }
+    }
+
+    /// Starts the badge reads of My Skills and the set-up projects that have no store yet (the selected one gets
+    /// its store).
+    private func summarizeProjects() {
+        guard let client, let capabilities else { return }
+        let unopened = scopes.filter { $0.isSetUp && stores[$0.scope] == nil && $0.scope != selectedScope }
+            .map(\.scope)
+        summaries.summarize(unopened, client: client, capabilities: capabilities)
     }
 
     // MARK: - Names

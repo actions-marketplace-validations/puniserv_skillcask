@@ -18,6 +18,8 @@ struct OverviewTab: View {
     var onShowSkill: (String) -> Void = { _ in }
     /// Opens Add Skill for the replacement of an abandoned package.
     var onAddReplacement: () -> Void = {}
+    /// The abandoned strip's "Add <replacement>" is enabled (`ToolbarRules.canAddSkill`: no run in flight).
+    var canAddReplacement = true
     /// Asks `info` again (the offline strip's Retry).
     var onRetry: () -> Void = {}
     /// Switches to the Security tab.
@@ -78,7 +80,9 @@ struct OverviewTab: View {
             MessageStrip(
                 .warning, text: StripCopy.abandoned(replacement: replacement), monoFragment: replacement,
                 symbol: MessageStrip.abandonedSymbol, density: .strip,
-                trailing: replacement.map { .button(StripCopy.addReplacement($0), action: onAddReplacement) })
+                trailing: replacement.map { .button(StripCopy.addReplacement($0), action: onAddReplacement) }
+            )
+            .disabled(!canAddReplacement)
         case .dependency(let skill, let requirers):
             MessageStrip(
                 .neutral, text: DetailOverviewCopy.dependency(skill, requiredBy: requirers),
@@ -152,7 +156,7 @@ struct OverviewTab: View {
         case .folder(let path, let url):
             HStack(alignment: .firstTextBaseline, spacing: Spacing.cardGap) {
                 monoPath(path)
-                link(DetailOverviewCopy.openFolder) { openURL(url) }
+                link(DetailOverviewCopy.openFolder) { Workspace.revealFolder(url) }
             }
         case .security(let severity, let text, let showsLink):
             HStack(alignment: .center, spacing: Spacing.cardGap) {

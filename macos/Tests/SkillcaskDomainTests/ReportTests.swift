@@ -16,6 +16,26 @@ import Testing
         #expect(report.added == ["netresearch/agent-jira-skill"])
         #expect(report.installed == ["jira-communication", "jira-syntax"])
         #expect(report.warnings == ["abandoned"] && !report.isEmpty)
+        #expect(report.addedVersions == ["netresearch/agent-jira-skill": "v4.3.0"])
+    }
+
+    /// `finish_add` prints `added <pkg> = {constraint:?} ({version})`; `adopt` prints `adopted <shown rel> (moved to
+    /// <dest>)` for each folder it moved (src/commands.rs 1542, 1021).
+    @Test func addedVersionAndAdoptedSkillsOfAnAdopt() {
+        let stdout = """
+            adopted ~/.claude/skills/caveman (moved to /Users/me/.config/skillcask/adopted/1761700000/.claude/skills/caveman)
+            adopted ~/.agents/skills/caveman (moved to /Users/me/.config/skillcask/adopted/1761700000/.agents/skills/caveman)
+            added juliusbrussee/caveman = "^4.0" (4.0.1)
+            added acme/dep 2.0.0 (dependency of juliusbrussee/caveman)
+            installed caveman (juliusbrussee/caveman 4.0.1)
+            """
+        let report = MutationReport(verbLines: stdout)
+        #expect(report.addedVersions == ["juliusbrussee/caveman": "4.0.1"], "a dependency's line has no constraint")
+        #expect(report.adoptedSkills == ["caveman"])
+        // A GitHub or git ref locks a commit and prints its first 12 hex digits (src/github.rs 278).
+        #expect(
+            MutationReport(verbLines: "added a/b = \"main\" (3f2a9c1d0b7e)").addedVersions == ["a/b": "3f2a9c1d0b7e"])
+        #expect(MutationReport(verbLines: "added a/b = \"*\" (1.0 beta)").addedVersions.isEmpty)
     }
 
     @Test func verbLinesOfUpdateRemoveAdoptAndInit() {

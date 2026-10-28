@@ -101,6 +101,13 @@ import Testing
         #expect(!Capabilities(version: Version(0, 10, 0)).isTooOld)
     }
 
+    /// 0.9.4 shipped `status --json` `via` and `config` (upstream `184fb5e`, `a9358da`); 0.9.3 had neither.
+    @Test func featuresOfZeroNineFour() {
+        let caps = Capabilities(version: Version(0, 9, 4))
+        #expect(caps.features == [.statusVia, .config])
+        #expect(Capabilities(version: Version(0, 9, 3)).features.isEmpty)
+    }
+
     @Test func explicitFeatureSet() {
         let caps = Capabilities(version: Version(0, 10, 0), features: [.jsonMutations])
         #expect(caps.supports(.jsonMutations) && !caps.supports(.diffJSON))

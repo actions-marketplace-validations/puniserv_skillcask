@@ -17,6 +17,7 @@ case "${FAKE_MODE:-$cmd}" in
     args) printf '%s\n' "$@" ;;
     cwd) pwd -P ;;
     stdin) cat ;;
+    quit) exec 0<&-; exit 0 ;;
     slow) sleep "${FAKE_SECONDS:-1}"; echo done ;;
     sleep) trap 'exit 143' TERM; sleep 30 & wait $! ;;
     stubborn) trap '' TERM; exec sleep 30 ;;

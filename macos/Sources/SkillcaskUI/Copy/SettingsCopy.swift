@@ -71,6 +71,9 @@ public enum SettingsCopy {
     public static let skillsShSideEffect =
         "Changing this runs one search for “\(CLISettingsStore.rememberQuery)” on Packagist, and on skills.sh when "
         + "turned on, so the command-line tool can save it."
+    /// Under the tool line while a sheet or the Remove alert is open in the main window: Choose… and "Use the
+    /// detected one" would rebuild what it works on. Invented.
+    public static let closeSheetFirst = "Close the open sheet in the main window to change the tool."
     /// Invented.
     public static let couldNotSaveSkillsSh = "Couldn’t save the skills.sh setting."
     /// Why, when the run itself succeeded but the file did not change. Invented.

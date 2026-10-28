@@ -72,6 +72,14 @@ public struct AdoptPlan: Hashable, Sendable {
         return rows.map(\.id)
     }
 
+    /// The list header's "Adopt All with Known Sources…" (Flow-F4 "Button in the list header when the Not managed
+    /// chip is active and at least one known source exists"): the batch's skills while `filter` is Not managed in
+    /// the personal scope (the only one the CLI adopts in) and a row has a recorded source; nil hides the button.
+    public static func headerBatch(filter: Filter, entries: [SkillEntry], scope: Scope) -> [String]? {
+        guard filter == .notManaged, scope.isPersonal else { return nil }
+        return batchSkills(entries)
+    }
+
     /// `add --adopt -- <spec>` in `scope`, or nil when `scope` is a project (the CLI refuses it) or `spec` is empty.
     public static func command(spec: String, scope: Scope) -> Invocation.Command? {
         let spec = spec.trimmingCharacters(in: .whitespacesAndNewlines)

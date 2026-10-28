@@ -3,7 +3,7 @@ import Observation
 import SkillcaskCore
 import SkillcaskDomain
 
-/// Runs the commands that change or check a scope (ADR §3): mutations through `MutationQueue` so one runs at a
+/// Runs the commands that change or check a scope: mutations through `MutationQueue` so one runs at a
 /// time per scope, `doctor` without `--fix` directly. While a command runs, `current` carries its live transcript
 /// and a cancel; when it ends, an `ActivityEntry` is appended (S15), `outcome` becomes the toast or the failure
 /// banner (S11), and the scope's store runs its targeted refresh.
@@ -100,6 +100,10 @@ import SkillcaskDomain
         let report: @Sendable (String, [OutputLine]) -> String
         /// Whether the first run toasted; Retry ends the same way.
         let announce: Bool
+        /// The toast's semibold parts.
+        let emphasis: [String]
+        /// The toast's tone, from the transcript (`run`'s `tone`).
+        let tone: Tone?
         weak var store: ScopeStore?
         /// Set when the run ended in an integrity failure: `retry()` refuses it.
         var isIntegrity = false
@@ -197,7 +201,8 @@ import SkillcaskDomain
         return Task {
             await run(
                 failedRun.command, title: failedRun.title, failure: failedRun.failure, outcome: { _ in "" },
-                report: failedRun.report, in: store, announce: failedRun.announce)
+                report: failedRun.report, emphasis: failedRun.emphasis, tone: failedRun.tone, in: store,
+                announce: failedRun.announce)
         }
     }
 
@@ -221,13 +226,9 @@ import SkillcaskDomain
 
     // MARK: - Derived
 
-    /// One run at a time in the whole app (`run` refuses a second while `current` is set), so every scope's
-    /// toolbar and Overview actions are disabled while any run is in flight; `scope` names the asker only.
-    public func isBusy(_ scope: Scope) -> Bool {
-        current != nil
-    }
-
-    /// Whether any run is in flight.
+    /// Whether any run is in flight. One run at a time in the whole app (`run` refuses a second while `current` is
+    /// set), so every scope's toolbar, menu and Overview actions that start a run or open a mutating sheet (Add
+    /// Skill… included, through `ToolbarRules.canAddSkill`) are disabled while it is true.
     public var isRunning: Bool {
         current != nil
     }
@@ -247,7 +248,7 @@ import SkillcaskDomain
         case restoreFromLock
     }
 
-    /// Starts `action` from a button: the runner owns the task, the view calls one line (SUI-5).
+    /// Starts `action` from a button: the runner owns the task, the view calls one line.
     public func start(_ action: Action, in store: ScopeStore) {
         Task {
             switch action {
@@ -260,12 +261,59 @@ import SkillcaskDomain
         }
     }
 
-    /// Sync = `install`: installs exactly what skills.lock pins (brief §6).
+    /// Sync = plain `install`. Where skills.toml and skills.lock agree it installs what the lock pins
+    /// (at most `fill_new_keys` adds keys an old lock lacks, never another version): "Syncing with skills.lock…",
+    /// and the toast counts the CLI's `installed <skill> (<package> <version>)` lines (`src/commands.rs`
+    /// `materialize`): "Synced api · 1 skill installed" (Flow-F5). Where a row needs sync (skills.toml and the lock
+    /// disagree, `syncResolves`), the same `install` resolves skills.toml and rewrites the lock first
+    /// (`src/commands.rs` `install`: `settle_deps`, `settle_and_save`), so the title and toast say that instead.
+    /// Not `install --frozen` for the agreeing case: on a snapshot older than a skills.toml edit it would fail
+    /// where Sync used to work.
     public func sync(in store: ScopeStore) async {
+        let resolves = Self.syncResolves(store.snapshot)
         await run(
-            .install(frozen: false), title: ActionCopy.syncing, failure: ActionCopy.couldNotSync,
-            outcome: ActionCopy.synced,
+            .install(frozen: false), title: resolves ? ActionCopy.resolving : ActionCopy.syncing,
+            failure: ActionCopy.couldNotSync, outcome: ActionCopy.synced,
+            report: { scope, transcript in
+                let installed = MutationReport(verbLines: Self.stdout(of: transcript)).installed.count
+                return resolves
+                    ? ActionCopy.resolved(scope, installed: installed) : ActionCopy.synced(scope, installed: installed)
+            },
             in: store)
+    }
+
+    /// A row's skills.toml entry and skills.lock disagree (`Health.needsSync`: drift, not in the lock, not in the
+    /// manifest), so `install` resolves and writes the lock before it installs.
+    public nonisolated static func syncResolves(_ snapshot: ScopeSnapshot?) -> Bool {
+        (snapshot?.entries ?? []).contains { if case .needsSync = $0.health { true } else { false } }
+    }
+
+    /// A finished run's stdout as lines, uncapped: from the result's bytes, else (a client that only streamed) the
+    /// streamed stdout lines.
+    nonisolated static func stdoutLines(of run: RunResult, streamed: [OutputLine]) -> [OutputLine] {
+        guard !run.stdout.isEmpty else {
+            return streamed.filter { if case .stdout = $0 { true } else { false } }
+        }
+        return run.stdoutText.split(separator: "\n", omittingEmptySubsequences: false).map { .stdout(String($0)) }
+    }
+
+    /// A finished run's whole output for its toast: stdout as `stdoutLines(of:streamed:)`, then stderr from the
+    /// result (else the streamed stderr lines). Uncapped, unlike the live transcript, so a long run's toast still
+    /// counts every line; the order between the two streams is not kept (the reports read one kind each).
+    nonisolated static func outputLines(of run: RunResult, streamed: [OutputLine]) -> [OutputLine] {
+        let stderr: [OutputLine] =
+            run.stderr.isEmpty
+            ? streamed.filter { if case .stderr = $0 { true } else { false } }
+            : run.stderr.split(separator: "\n").map { .stderr(String($0)) }
+        return stdoutLines(of: run, streamed: streamed) + stderr
+    }
+
+    /// The stdout lines of a transcript, joined, for `MutationReport(verbLines:)`.
+    nonisolated static func stdout(of transcript: [OutputLine]) -> String {
+        transcript.compactMap { line -> String? in
+            if case .stdout(let text) = line { text } else { nil }
+        }
+        .joined(separator: "\n")
     }
 
     /// Check = `doctor` without `--fix`: reports, changes nothing.
@@ -276,12 +324,26 @@ import SkillcaskDomain
             in: store)
     }
 
-    /// Repair = `doctor --fix`: links, the git index and the gitignore block; downloads nothing.
+    /// Repair = `doctor --fix --json`: links, the git index and the gitignore block; downloads nothing. With
+    /// problems left the CLI prints `ok: false` and exits 1 (`src/commands.rs` `doctor`): the toast says how many
+    /// it fixed and how many are left, in the warning tone.
     public func repair(in store: ScopeStore) async {
         await run(
             .doctor(fix: true), title: ActionCopy.repairing, failure: ActionCopy.couldNotRepair,
             outcome: ActionCopy.repaired,
+            report: { scope, transcript in
+                guard let document = Self.doctorDocument(in: transcript), !document.ok else {
+                    return ActionCopy.repaired(scope)
+                }
+                return ActionCopy.repaired(scope, fixed: document.fixed.count, left: document.problems.count)
+            },
+            tone: { transcript in Self.doctorDocument(in: transcript)?.ok == false ? .warning : .success },
             in: store)
+    }
+
+    /// The `doctor --json` document on a transcript's stdout (one line, `print_json`).
+    nonisolated static func doctorDocument(in transcript: [OutputLine]) -> DoctorDocument? {
+        try? JSONDecoder().decode(DoctorDocument.self, from: Data(stdout(of: transcript).utf8))
     }
 
     /// Set Up = `init`: writes skills.toml in the scope's folder; downloads nothing.
@@ -308,38 +370,58 @@ import SkillcaskDomain
     /// the window's banner or its Retry. Cancelling the calling task cancels the run. `failure` is the failure's
     /// title as Copy words it ("Couldn’t sync."); nil falls back to `OutcomeCopy.couldNot(title)` for callers not
     /// yet migrated (that reads "Couldn’t Syncing…." for a progressive title, so every caller should pass one).
+    ///
+    /// The returned value arrives after the scope's refresh. `onEnd` gets the same end, and the run's id (its
+    /// `ActivityEntry`), as soon as the run is recorded and its toast set, before that refresh: a sheet closes
+    /// there, so the toast shows while the list header carries the refresh (S11). Not called for a refused run.
+    /// `emphasis` are the toast's semibold parts (the skill names). `onStdout` gets the stdout of a run that
+    /// exited 0, whole, from the run's result (the live transcript keeps only its last
+    /// `ActivityEntry.transcriptLimit` lines), just before `onEnd`.
     @discardableResult public func run(
         _ command: Invocation.Command, title: String, failure: String? = nil,
         outcome outcomeText: @escaping @Sendable (String) -> String,
-        report: (@Sendable (_ scope: String, _ transcript: [OutputLine]) -> String)? = nil, in store: ScopeStore,
+        report: (@Sendable (_ scope: String, _ transcript: [OutputLine]) -> String)? = nil, emphasis: [String] = [],
+        tone: Tone? = nil,
+        in store: ScopeStore,
         from origin: Origin = .window,
-        announce: Bool = true
+        announce: Bool = true, onEnd: (@MainActor @Sendable (RunEnd, UUID) -> Void)? = nil,
+        onStdout: (@MainActor @Sendable (_ stdout: [OutputLine]) -> Void)? = nil
     ) async -> RunEnd? {
         guard current == nil else { return nil }
         let failureTitle = failure ?? OutcomeCopy.couldNot(title)
         let report: @Sendable (String, [OutputLine]) -> String = report ?? { scope, _ in outcomeText(scope) }
         if origin == .window {
             failedRun = FailedRun(
-                command: command, title: title, failure: failure, report: report, announce: announce, store: store)
+                command: command, title: title, failure: failure, report: report, announce: announce,
+                emphasis: emphasis, tone: tone, store: store)
         }
         let invocation: Invocation
         do {
             invocation = try Invocation(command, in: store.scope, capabilities: store.capabilities)
         } catch {
-            return finish(
-                id: UUID(), title: title, failure: failureTitle, command: ActionCopy.unbuilt, startedAt: Date(),
+            let id = UUID()
+            let end = finish(
+                id: id, title: title, failure: failureTitle, command: ActionCopy.unbuilt, startedAt: Date(),
                 duration: .zero, status: nil, error: error, transcript: [], outcomeText: report, origin: origin,
-                announce: announce, store: store, record: .init(isMutation: false, expectsDocument: false))
+                announce: announce, store: store,
+                record: .init(isMutation: false, expectsDocument: false, emphasis: emphasis, tone: tone))
+            onEnd?(end, id)
+            return end
         }
         let id = UUID()
         let startedAt = Date()
         let client = store.client
         let queue = queue
-        let task = Task { [weak self] () -> RunEnd in
-            let onLine: @Sendable (OutputLine) -> Void = { [weak self] line in
-                guard let self else { return }
-                Task { @MainActor in self.append(line, to: id) }
+        // The lines reach the transcript in the order the client delivered them, through one stream drained by one
+        // loop on the main actor; the run completes only after the loop has appended the last one.
+        let (lineStream, lineSink) = AsyncStream<OutputLine>.makeStream()
+        let delivery = Task { [weak self] in
+            for await line in lineStream {
+                self?.append(line, to: id)
             }
+        }
+        let task = Task { [weak self] () -> RunEnd in
+            let onLine: @Sendable (OutputLine) -> Void = { line in lineSink.yield(line) }
             let result: Result<RunResult, CLIError>
             do {
                 if invocation.isMutation {
@@ -357,13 +439,15 @@ import SkillcaskDomain
             } catch {
                 result = .failure(.launchFailed(String(describing: error)))
             }
+            lineSink.finish()
+            await delivery.value
             guard let self else {
                 return .failed(ErrorCopy.message(for: .cancelled, title: failureTitle))
             }
             return await complete(
                 id: id, title: title, failure: failureTitle, invocation: invocation, result: result,
-                outcomeText: report, origin: origin,
-                announce: announce, store: store)
+                outcomeText: report, emphasis: emphasis, tone: tone, origin: origin,
+                announce: announce, store: store, onEnd: onEnd, onStdout: onStdout)
         }
         current = RunningAction(
             id: id, title: title, scope: store.scope, command: invocation.displayCommand, startedAt: startedAt,
@@ -376,8 +460,8 @@ import SkillcaskDomain
     }
 
     /// The one toast of a batch (Adopt All: "Adopted 9 skills"), after its items ran with `announce: false`.
-    public func announce(_ text: String) {
-        outcome = .toast(ToastMessage(id: UUID(), text: text))
+    public func announce(_ text: String, emphasis: [String] = []) {
+        outcome = .toast(ToastMessage(id: UUID(), text: text, emphasizing: emphasis))
     }
 
     /// Cancels the running command, if any.
@@ -407,12 +491,23 @@ import SkillcaskDomain
         let expectsDocument: Bool
         var environmentOverrides: [String] = []
         var omittedLines = 0
+        /// The toast's semibold parts.
+        var emphasis: [String] = []
+        /// The toast's tone from the transcript; nil is `.success`.
+        var tone: Tone?
+        /// What the toast and its tone read, when it differs from the recorded transcript: the run's whole output
+        /// (`outputLines(of:streamed:)`); nil reads the transcript.
+        var output: [OutputLine]?
     }
+
+    /// The tone of a run's toast, read from its transcript.
+    public typealias Tone = @Sendable (_ transcript: [OutputLine]) -> ToastMessage.Tone
 
     private func complete(
         id: UUID, title: String, failure: String, invocation: Invocation, result: Result<RunResult, CLIError>,
-        outcomeText: @escaping @Sendable (String, [OutputLine]) -> String, origin: Origin, announce: Bool,
-        store: ScopeStore
+        outcomeText: @escaping @Sendable (String, [OutputLine]) -> String, emphasis: [String], tone: Tone?,
+        origin: Origin, announce: Bool, store: ScopeStore, onEnd: (@MainActor @Sendable (RunEnd, UUID) -> Void)?,
+        onStdout: (@MainActor @Sendable ([OutputLine]) -> Void)? = nil
     ) async -> RunEnd {
         guard let running = current, running.id == id else {
             return .failed(ErrorCopy.message(for: .cancelled, title: failure))
@@ -423,11 +518,12 @@ import SkillcaskDomain
         var repair: DoctorDocument?
         var record = Record(
             isMutation: invocation.isMutation, expectsDocument: invocation.expectsDocument,
-            omittedLines: running.omittedLines)
+            omittedLines: running.omittedLines, emphasis: emphasis, tone: tone)
         switch result {
         case .success(let run):
             status = run.status
             record.environmentOverrides = run.environmentOverrides
+            record.output = Self.outputLines(of: run, streamed: running.lines)
             verdict = Self.verdict(of: run)
             // Repair's document is the only record of what it fixed: the follow-up refresh shows it (S12).
             if verdict == nil, run.invocation.command == .doctor(fix: true) {
@@ -442,7 +538,11 @@ import SkillcaskDomain
             duration: duration,
             status: status, error: verdict, transcript: running.lines, outcomeText: outcomeText, origin: origin,
             announce: announce, store: store, record: record)
-        // Always refresh afterwards (ADR §9 #4): a cancelled or failed run may have changed files. In a task of its
+        if case .succeeded = end, case .success(let run) = result, let onStdout {
+            onStdout(Self.stdoutLines(of: run, streamed: running.lines))
+        }
+        onEnd?(end, id)
+        // Always refresh afterwards: a cancelled or failed run may have changed files. In a task of its
         // own, which does not inherit this one's cancellation: after Cancel the reads must still run.
         let kept = repair
         await Task { await store.refreshAfterMutation(repair: kept) }.value
@@ -457,7 +557,8 @@ import SkillcaskDomain
         store: ScopeStore, record: Record
     ) -> RunEnd {
         current = nil
-        let said = error == nil ? outcomeText(ShellCopy.name(of: store.scope), transcript) : failure
+        let output = record.output ?? transcript
+        let said = error == nil ? outcomeText(ShellCopy.name(of: store.scope), output) : failure
         insert(
             ActivityEntry(
                 id: id, title: title, headline: said, command: command, scope: store.scope, startedAt: startedAt,
@@ -480,7 +581,9 @@ import SkillcaskDomain
             failedRun = nil
         }
         if announce {
-            outcome = .toast(ToastMessage(id: id, text: said))
+            outcome = .toast(
+                ToastMessage(
+                    id: id, text: said, emphasizing: record.emphasis, tone: record.tone?(output) ?? .success))
         }
         return .succeeded
     }
@@ -500,12 +603,22 @@ import SkillcaskDomain
         expandedActivity.subtract(dropped)
     }
 
-    /// The one decoding rule (ADR §4): a command that prints a document succeeded when stdout holds one, whatever
-    /// the exit code (`doctor` exits 1 with problems); a mutation without `--json` is judged by its exit.
+    /// The one decoding rule: a command that prints a document succeeded when it exited 0 or 1 (D32:
+    /// `doctor` exits 1 with problems) and stdout is a JSON document; a signal, any other exit, or stdout that
+    /// is not JSON is a failure. A command without `--json` is judged by its exit.
     static func verdict(of run: RunResult) -> CLIError? {
-        if run.invocation.expectsDocument, !run.stdout.isEmpty {
-            return nil
+        guard run.invocation.expectsDocument else { return run.failure() }
+        switch run.status {
+        case .exited(0), .exited(1):
+            if run.stdout.isEmpty {
+                return run.failure() ?? .noDocument
+            }
+            if (try? JSONDecoder().decode(JSONValue.self, from: run.stdout)) != nil {
+                return nil
+            }
+            return .decode("stdout is not a JSON document", raw: run.stdout)
+        default:
+            return run.failure()
         }
-        return run.failure()
     }
 }

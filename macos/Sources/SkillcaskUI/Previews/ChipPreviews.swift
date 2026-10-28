@@ -2,7 +2,7 @@ import SkillcaskDomain
 import SwiftUI
 
 extension PreviewRegistry {
-    /// P2-3: the filter bar with the api scope's counts plus one idle and one active chip, and the pills:
+    /// The filter bar with the api scope's counts plus one idle and one active chip, and the pills:
     /// sources in board order, the agent pill and two reach groups from the pdf audit row.
     static let chips: [Entry] = [
         Entry(id: "P2-3", state: "chips", size: CGSize(width: 640, height: 150)) { AnyView(ChipsSample()) },

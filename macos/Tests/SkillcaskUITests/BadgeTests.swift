@@ -4,9 +4,9 @@ import Testing
 
 @testable import SkillcaskUI
 
-/// The sidebar badge rule of brief §8: errors and warnings in one badge coloured by the worst, updates in a
+/// The sidebar badge rule: errors and warnings in one badge coloured by the worst, updates in a
 /// separate blue one, nothing at zero; the badge text, its colours and what VoiceOver reads.
-@Suite struct BadgeTests {
+@Suite @MainActor struct BadgeTests {
     @Test func fixtureScopesShowTheBoardBadges() {
         let api = ScopeBadge(DesignFixtures.api.attention).model
         #expect(api.needing == 8 && api.attentionSeverity == .error && api.updates == 3)

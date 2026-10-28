@@ -4,7 +4,7 @@ import Testing
 
 @testable import SkillcaskUI
 
-/// Settings (S14, P3-13): the environment table reaching new runs and path resolution, config.toml's path, the
+/// Settings (S14): the environment table reaching new runs and path resolution, config.toml's path, the
 /// skills.sh write, and the GitHub token's rules (stdin only, never kept, never in a message).
 @Suite(.serialized) @MainActor struct SettingsTests {
     static let capabilities = Capabilities(version: Capabilities.minimum)

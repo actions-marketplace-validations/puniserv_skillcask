@@ -74,7 +74,7 @@ private struct ChipButtonStyle: ButtonStyle {
 
 /// The idle hairline as a filled ring (the capsule minus the capsule inset by `width`), not a stroke: the
 /// preview renderer's `cacheDisplay` draws a stroked 22 pt capsule with stray vertical bars at both ends
-/// (P2-3 chips), while fills come out exact there and on screen alike.
+/// (the chip previews), while fills come out exact there and on screen alike.
 struct CapsuleRing: Shape {
     let width: CGFloat
 

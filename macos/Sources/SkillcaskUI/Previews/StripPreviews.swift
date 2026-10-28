@@ -2,7 +2,7 @@ import SkillcaskCore
 import SwiftUI
 
 extension PreviewRegistry {
-    /// P2-7: the message strips of the Components board, then each caller's strip at its column width: the list
+    /// The message strips of the Components board, then each caller's strip at its column width: the list
     /// header offline line (S2), the first-launch not-managed banner (S1), the Contents invisible-character warning
     /// (S4), and the Overview tab's abandoned and offline lines (S3).
     static let strips: [Entry] = [
@@ -46,7 +46,7 @@ extension PreviewRegistry {
 
 /// The values the strip samples share.
 private enum StripFixtures {
-    /// The detail column the P2-6 header previews use.
+    /// The detail column the detail header previews use.
     static let detailWidth: CGFloat = 600
 
     /// My Skills' not-managed rows: 12 on Overview-States.

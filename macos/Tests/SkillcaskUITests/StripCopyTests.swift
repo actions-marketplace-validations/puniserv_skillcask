@@ -4,7 +4,7 @@ import Testing
 
 @testable import SkillcaskUI
 
-/// P2-7: the strips say what the boards say, the not-managed count reads in the singular for one skill, each kind
+/// The strips say what the boards say, the not-managed count reads in the singular for one skill, each kind
 /// draws its severity, and a strip has a trailing control only when the caller gives one with words.
 @Suite struct StripCopyTests {
     @Test func boardSentencesAreVerbatim() {

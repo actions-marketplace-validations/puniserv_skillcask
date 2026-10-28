@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The unified toolbar (Main board, designer's note): Add Skill… primary, Update All with its count badge, Sync,
 /// Check, and the ⋯ menu with Show Activity, Reveal skills.toml and Open in Terminal. Enablement is
-/// `ToolbarRules`; every action also lives in the menu bar (`SkillcaskCommands`, SUI-11), which carries the
+/// `ToolbarRules`; every action also lives in the menu bar (`SkillcaskCommands`), which carries the
 /// shortcuts. Add Skill… and Update All set `AppStore.sheet`, which `MainWindow` presents through `SheetHost`.
 struct ScopeToolbar: ToolbarContent {
     let app: AppStore
@@ -12,10 +12,20 @@ struct ScopeToolbar: ToolbarContent {
 
     private var snapshot: ScopeSnapshot? { store?.snapshot }
 
-    /// The scope has data and nothing of its own is running.
+    /// The scope has a skills.toml: a folder without one acts on nothing (its commands would reach a parent
+    /// project), so every action but the ⋯ menu waits for Set Up.
+    private var isSetUp: Bool {
+        store.map { app.isSetUp($0.scope) } ?? false
+    }
+
+    /// Add Skill…: `ToolbarRules.canAddSkill`, the rule ⌘N and the empty list share.
+    private var canAddSkill: Bool {
+        isSetUp && ToolbarRules.canAddSkill(snapshot, isBusy: runner.isRunning)
+    }
+
+    /// The scope is set up, has data and no run is in flight.
     private var isIdle: Bool {
-        guard let store, ToolbarRules.isLoaded(snapshot) else { return false }
-        return !runner.isBusy(store.scope)
+        isSetUp && ToolbarRules.isLoaded(snapshot) && !runner.isRunning
     }
 
     var body: some ToolbarContent {
@@ -29,7 +39,7 @@ struct ScopeToolbar: ToolbarContent {
             }
             .buttonStyle(.borderedProminent)
             .tint(Color.accent)
-            .disabled(!app.isReady || store == nil || !ToolbarRules.isLoaded(snapshot) || app.isPresenting)
+            .disabled(!app.isReady || !canAddSkill || app.isPresenting)
             Button {
                 app.request(.updateAll)
             } label: {
@@ -47,7 +57,7 @@ struct ScopeToolbar: ToolbarContent {
             } label: {
                 Label(ShellCopy.sync, systemImage: "arrow.triangle.2.circlepath").labelStyle(.titleOnly)
             }
-            .help(ShellCopy.syncHelp)
+            .help(ActionRunner.syncResolves(snapshot) ? ShellCopy.resolveHelp : ShellCopy.syncHelp)
             .disabled(!isIdle || !ToolbarRules.canSync(snapshot))
             Button {
                 if let store {

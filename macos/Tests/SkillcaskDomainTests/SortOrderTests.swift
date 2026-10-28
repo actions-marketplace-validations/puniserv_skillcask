@@ -5,7 +5,11 @@ import Testing
 
 /// The three sort orders of the S2 note over the sample snapshot, and the typed audit rules and policy rows.
 @Suite struct SortOrderTests {
-    let entries = Sample.snapshot().entries
+    let entries: [SkillEntry]
+
+    init() throws {
+        entries = try Sample.snapshot().entries
+    }
 
     @Test func nameIsAlphabetical() {
         #expect(
@@ -31,22 +35,22 @@ import Testing
         #expect(SortOrder.sourceRank(of: entries[0]) == (7, ""))
     }
 
-    @Test func findingKindsAreTyped() {
+    @Test func findingKindsAreTyped() throws {
         #expect(FindingKind(rule: "modified") == .modified && !FindingKind(rule: "modified").isTextFinding)
         #expect(FindingKind(rule: "risky-pattern") == .riskyPattern)
         #expect(FindingKind(rule: "invisible-character") == .invisibleCharacter)
         #expect(FindingKind(rule: "something-new") == .other("something-new"))
         #expect(FindingKind(rule: "something-new").isTextFinding)
-        let findings = Sample.decode(AuditDocument.self, Sample.audit).skills.flatMap(\.findings)
+        let findings = try Sample.decode(AuditDocument.self, Sample.audit).skills.flatMap(\.findings)
         #expect(findings.map(\.isModified) == [true, false])
         #expect(DiffFlag.Kind(rule: "modified") == nil && DiffFlag.Kind(rule: "risky-pattern") == .risky)
     }
 
-    @Test func policyRowsKnowTheirKindAndOrigin() {
-        let rows = Sample.snapshot().policy
+    @Test func policyRowsKnowTheirKindAndOrigin() throws {
+        let rows = try Sample.snapshot().policy
         #expect(rows.map(\.kind) == [.minReleaseAge, .allowRanges])
         #expect(rows.map(\.isEnforced) == [false, false] && rows.map(\.origin) == ["config.toml", "skills.toml"])
-        let enforced = Sample.decode(
+        let enforced = try Sample.decode(
             StatusDocument.self,
             #"{"ok":true,"entries":[],"policy":{"allow-sources":{"from":"config.toml, enforced","value":["packagist","acme"]},"x-new":{"from":"env","value":1}}}"#
         )

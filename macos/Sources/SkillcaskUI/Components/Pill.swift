@@ -29,7 +29,7 @@ public struct Pill: View {
     /// Raised by a selected list row (`SkillRow`): the pill then draws white on translucent white.
     @Environment(\.backgroundProminence) private var prominence
 
-    /// The boards' pill on a selected row, `#fff` on `rgba(255,255,255,0.22)`: not tokens (tokens.md G5), the
+    /// The boards' pill on a selected row, `#fff` on `rgba(255,255,255,0.22)`: not tokens (`macos/DESIGN.md` G5), the
     /// white every system accent carries.
     static let onSelectionText = Color.white
     static let onSelectionFill = Color.white.opacity(0.22)

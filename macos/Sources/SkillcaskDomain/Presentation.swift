@@ -1,6 +1,6 @@
 import SkillcaskCore
 
-/// Which screen a scope shows (ADR §6). Computed by the store from (snapshot?, last error, refreshing).
+/// Which screen a scope shows. Computed by the store from (snapshot?, last error, refreshing).
 public enum Presentation: Hashable, Sendable {
     /// First load, no snapshot yet.
     case loading

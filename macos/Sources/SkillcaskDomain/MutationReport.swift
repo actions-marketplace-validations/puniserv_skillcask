@@ -11,6 +11,10 @@ public struct MutationReport: Hashable, Sendable {
     }
 
     public var added: [String] = []
+    /// The version `add` resolved for the package it added, from its own line `added <pkg> = "<constraint>"
+    /// (<version>)` (`src/commands.rs` `finish_add`); a dependency's `added <pkg> <version> (dependency of …)` is
+    /// not in here. Keyed by package, the version as the CLI printed it.
+    public var addedVersions: [String: String] = [:]
     public var installed: [String] = []
     public var updated: [Updated] = []
     public var locked: [String] = []
@@ -38,7 +42,11 @@ public struct MutationReport: Hashable, Sendable {
             guard let space = line.firstIndex(of: " ") else { continue }
             let rest = String(line[line.index(after: space)...])
             switch line[..<space] {
-            case "added": added.append(Self.firstWord(rest))
+            case "added":
+                added.append(Self.firstWord(rest))
+                if let version = Self.addedVersion(rest) {
+                    addedVersions[Self.firstWord(rest)] = version
+                }
             case "installed": installed.append(Self.firstWord(rest))
             case "updated":
                 if let updated = Self.updatedLine(rest) {
@@ -64,6 +72,21 @@ public struct MutationReport: Hashable, Sendable {
         let words = text.split(separator: " ").map(String.init)
         guard words.count == 4, words[2] == "->" else { return nil }
         return Updated(package: words[0], from: words[1], to: words[3])
+    }
+
+    /// `<pkg> = "<constraint>" (<version>)` → `<version>`; nil for any other shape.
+    static func addedVersion(_ text: String) -> String? {
+        guard text.contains(" = \""), text.hasSuffix(")"), let open = text.lastIndex(of: "(") else { return nil }
+        let version = text[text.index(after: open)..<text.index(before: text.endIndex)]
+        guard !version.isEmpty, !version.contains(" ") else { return nil }
+        return String(version)
+    }
+
+    /// The skill a line `adopted <shown path> (moved to <dest>)` moved aside: the last component of the path
+    /// (`~/.claude/skills/caveman` → `caveman`), as the CLI moves `<target>/<skill>` and `.agents/skills/<skill>`
+    /// (`src/commands.rs` `adopt`).
+    public var adoptedSkills: Set<String> {
+        Set(adopted.compactMap { $0.split(separator: "/").last.map(String.init) })
     }
 
     static func firstWord(_ text: String) -> String {

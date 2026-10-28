@@ -2,14 +2,14 @@ import SkillcaskDomain
 import SwiftUI
 
 extension PreviewRegistry {
-    /// P2-4: the six Overview cards of the api scope in the detail column's two-column grid (`cards`, Health with
+    /// The six Overview cards of the api scope in the detail column's two-column grid (`cards`, Health with
     /// the error border), the Overview-States Healthy variant of the website scope (`collapsed`: Health, Updates
     /// and Security as one line each, nothing coloured on a border) and the Components board's "Overview card"
     /// region (`variants`: the board's two cards, error and default, plus a collapsed one-line card the board does
     /// not draw there, added for coverage).
     ///
     /// The card bodies are samples quoting the boards; the real doctor lines, update rows and tables are the
-    /// screen's (P3-4). The grid gap is `Spacing.cardGap` (10, Overview-States) where `Overview.dc.html` draws 12.
+    /// screen's. The grid gap is `Spacing.cardGap` (10, Overview-States) where `Overview.dc.html` draws 12.
     static let cards: [Entry] = [
         Entry(id: "P2-4", state: "cards", size: CGSize(width: 700, height: 760)) { AnyView(CardsSample()) },
         Entry(id: "P2-4", state: "collapsed", size: CGSize(width: 600, height: 250)) {

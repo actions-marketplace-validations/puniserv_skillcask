@@ -18,6 +18,8 @@ import Testing
             ("github:owner/repo", "owner/repo"),
             ("git:https://git.acme.example/team/sql-review.git@v2", "team/sql-review"),
             ("git:https://git.acme.example/sql-review.git", "https://git.acme.example/sql-review.git"),
+            ("git:https://host.example/a/b/%2e%2E/repo", "a/repo"),
+            ("git:https:\\\\host.example\\owner\\Repo.git", "owner/repo"),
         ] as [(String, String?)])
     func sourceShapes(text: String, package: String?) {
         #expect(PackageSpec.parse(text)?.package == package)
@@ -129,6 +131,31 @@ import Testing
         ("git:https://host.example/owner/repo#frag", false, true),
         ("git:https://host.example/owner/re%20po", false, true),
         ("git:https://git.acme.example/sql-review.git", false, true), ("git:", false, false),
+        // url::Url::parse (WHATWG) under check_url and name_of: `\\` is `/`, dot segments resolve, the scheme
+        // takes any case and any run of slashes, an empty userinfo is no credential
+        ("git:https:\\\\host.example\\owner\\repo", true, true),
+        ("git:https://host.example/owner\\repo.git", true, true),
+        ("git:https://host.example/owner/x/../repo", true, true),
+        ("git:https://host.example/a/b/%2e%2E/repo", true, true),
+        ("git:https://host.example/o/r/.", true, true), ("git:HTTPS://host.example/owner/repo", true, true),
+        ("git:https:host.example/owner/repo", true, true), ("git:https:///host.example/owner/repo", true, true),
+        ("git:https://@host.example/owner/repo", true, true), ("git:https://host.example:8443/owner/repo", true, true),
+        ("git:https://host.example/owner/repo/..", false, true), ("git:https://host.example/a/%2e", false, true),
+        ("git:https://:@host.example/owner/repo", false, true), ("git:https://host.example/a/b?", false, true),
+        // url's host and port parsers: ports up to 65535, a numeric last label must be IPv4, IPv6 in brackets,
+        // percent-encoded hosts (refused here outright; see HTTPSURL's "Not mirrored")
+        ("git:https://host.example:65535/owner/repo", true, true), ("git:https://host.example:/owner/repo", true, true),
+        ("git:https://host.example:08443/owner/repo", true, true),
+        ("git:https://host.example:65536/owner/repo", false, true),
+        ("git:https://host.example:12a/owner/repo", false, true),
+        ("git:https://1.2.3.4/owner/repo", true, true), ("git:https://0x7f.1/owner/repo", true, true),
+        ("git:https://4294967295/owner/repo", true, true), ("git:https://1.2.3./owner/repo", true, true),
+        ("git:https://256.0.0.1/owner/repo", false, true), ("git:https://1.2.3.4.5/owner/repo", false, true),
+        ("git:https://999999999999/owner/repo", false, true), ("git:https://4294967296/owner/repo", false, true),
+        ("git:https://a.1/owner/repo", false, true), ("git:https://ex.09/owner/repo", false, true),
+        ("git:https://[::1]/owner/repo", true, true), ("git:https://[zz]/owner/repo", false, true),
+        ("git:https://ho%00st/owner/repo", false, true), ("git:https://ho%20st/owner/repo", false, true),
+        ("git:https://ho%2fst/owner/repo", false, true),
     ])
     func mirrorsTheCLIChecks(spec: String, accepted: Bool, detected: Bool) {
         switch PackageSpec.validate(spec) {

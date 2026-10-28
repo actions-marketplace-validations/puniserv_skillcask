@@ -10,7 +10,7 @@ import SkillcaskDomain
 /// (the close button's `aria-label`), `ok`, `sign-in needed`, `3.2 s · 14:02`, and the read titles `Opened api`,
 /// `Checked for updates`, `Reviewed changes for pdf 1.2.0 → 1.4.0`.
 ///
-/// Invented (declared in the P3-14 report): `this session · 1 run`, `this session · 250 runs · last 100 kept`,
+/// Invented: `this session · 1 run`, `this session · 250 runs · last 100 kept`,
 /// `No runs yet this session.`, `Hide Activity`, `running`, the exit words `needs attention`, `refused by policy`,
 /// `failed`, `network error`, `hash mismatch`, `file error`, `exit 101` (any other code), `cancelled`, `stopped`,
 /// `unreadable output`, `not run`, the duration past a minute `1 min 12 s`, `No output.`,
@@ -93,6 +93,8 @@ public enum ActivityCopy {
         case .refused: "refused by policy"
         case .cancelled: "cancelled"
         case .killed: "stopped"
+        // Invented: the app stopped a read that did not answer within `GuardedClient.readTimeout`.
+        case .timedOut: "timed out"
         case .unreadable: "unreadable output"
         case .notRun: "not run"
         case .failed(let code):
@@ -116,7 +118,7 @@ public enum ActivityCopy {
         case .ok: .ok
         case .findings, .refused: .warning
         case .cancelled, .notRun: .neutral
-        case .failed, .killed, .unreadable: .error
+        case .failed, .killed, .timedOut, .unreadable: .error
         }
     }
 

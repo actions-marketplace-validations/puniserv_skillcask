@@ -18,7 +18,6 @@ struct ResultPreview: View {
     let onRetryAdd: () -> Void
 
     @State private var showsDetails = false
-    @State private var showsRulePopover = false
 
     var body: some View {
         switch search.preview {
@@ -205,28 +204,13 @@ struct ResultPreview: View {
             Text(AddSkillCopy.versionRule)
                 .font(Font.Token.calloutSemibold)
                 .foregroundStyle(Color.textPrimary)
-            Button {
-                showsRulePopover = true
-            } label: {
-                HStack(spacing: Spacing.inline) {
-                    Text(
-                        search.keptConstraint == nil
-                            ? AddSkillCopy.ruleLabel(search.effectiveRule, base: base) : AddSkillCopy.keptRule)
-                    Text(search.keptConstraint ?? search.effectiveRule.constraint(for: base))
-                        .font(Font.Token.monoSmall)
-                        .foregroundStyle(Color.textSecondary)
-                    Image(systemName: "chevron.down")
-                        .imageScale(.small)
-                        .accessibilityHidden(true)
-                }
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .accessibilityHint(AddSkillCopy.ruleHint)
-            .popover(isPresented: $showsRulePopover, arrowEdge: .bottom) {
-                VersionRulePopover(search: search, base: base)
-            }
-            Text(AddSkillCopy.ruleNote(version: base.exact))
+            VersionRuleControl(
+                base: base, options: search.ruleOptions,
+                rule: Binding(get: { search.effectiveRule }, set: { search.rule = $0 }), branch: $search.branch,
+                constraint: { $0.constraint(for: base) },
+                keptLabel: search.keptConstraint == nil ? nil : AddSkillCopy.keptRule,
+                keptConstraint: search.keptConstraint)
+            Text(AddSkillCopy.ruleNote(rule: search.effectiveRule, version: base.exact))
                 .font(Font.Token.caption)
                 .foregroundStyle(Color.textSecondary)
                 .lineLimit(2)
@@ -309,33 +293,5 @@ struct ResultPreview: View {
         case .error: return .searchName
         case .neutral, .ok, .update: return nil
         }
-    }
-}
-
-/// The version rule popover: the rules the policy allows, each with the constraint it writes to skills.toml.
-private struct VersionRulePopover: View {
-    @Bindable var search: SearchStore
-    let base: VersionRule.Base
-
-    var body: some View {
-        Picker(AddSkillCopy.versionRule, selection: rule) {
-            ForEach(search.ruleOptions, id: \.self) { option in
-                HStack(spacing: Spacing.inline) {
-                    Text(AddSkillCopy.ruleLabel(option, base: base))
-                    Text(option.constraint(for: base))
-                        .font(Font.Token.monoSmall)
-                        .foregroundStyle(Color.textSecondary)
-                }
-                .tag(option)
-            }
-        }
-        .pickerStyle(.radioGroup)
-        .labelsHidden()
-        .font(Font.Token.body)
-        .padding(Spacing.m)
-    }
-
-    private var rule: Binding<VersionRule> {
-        Binding(get: { search.effectiveRule }, set: { search.rule = $0 })
     }
 }

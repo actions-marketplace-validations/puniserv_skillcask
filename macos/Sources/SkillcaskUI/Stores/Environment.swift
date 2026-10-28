@@ -3,7 +3,7 @@ import SwiftUI
 
 extension EnvironmentValues {
     /// The CLI seam for views that need it directly (previews swap a fake); stores get theirs by init. The default
-    /// is one stored instance (SUI-3): an inline class allocation would be re-created on every access.
+    /// is one stored instance: an inline class allocation would be re-created on every access.
     @Entry public var cliClient: any CLIClient = UnavailableCLIClient.shared
 }
 
@@ -21,7 +21,7 @@ public struct UnavailableCLIClient: CLIClient {
 }
 
 extension View {
-    /// Injects the three app-lifetime stores and the CLI seam at the root of a scene (SUI-2): views read them with
+    /// Injects the three app-lifetime stores and the CLI seam at the root of a scene: views read them with
     /// `@Environment(AppStore.self)`, `@Environment(ActionRunner.self)`, `@Environment(SettingsStore.self)`.
     public func skillcaskEnvironment(
         app: AppStore, runner: ActionRunner, settings: SettingsStore, client: any CLIClient

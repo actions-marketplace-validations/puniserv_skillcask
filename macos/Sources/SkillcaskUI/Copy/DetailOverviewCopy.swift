@@ -192,19 +192,19 @@ public enum DetailOverviewCopy {
     public static let lockFile = "skills.lock"
 
     /// `Last checked 4 min ago from skills.lock. Numbers come from the command-line tool, never estimated.`
-    public static func lastChecked(_ date: Date, now: Date = .now) -> String {
-        "Last checked \(checkedAgo(date, now: now)) from \(lockFile). Numbers come from the command-line tool, never "
+    public static func lastChecked(_ date: Date, now: Date = .now, timeZone: TimeZone = .current) -> String {
+        "Last checked \(checkedAgo(date, now: now, timeZone: timeZone)) from \(lockFile). Numbers come from the command-line tool, never "
             + "estimated."
     }
 
     /// `just now`, `1 min ago`, `4 min ago`, or `30 Oct` after an hour: when the footnote's documents were read.
-    static func checkedAgo(_ date: Date, now: Date) -> String {
+    static func checkedAgo(_ date: Date, now: Date, timeZone: TimeZone = .current) -> String {
         let minutes = Int(now.timeIntervalSince(date) / 60)
         switch minutes {
         case ..<1: return "just now"
         case 1: return "1 min ago"
         case ..<60: return "\(minutes) min ago"
-        default: return Formatters.dayMonth(date)
+        default: return Formatters.dayMonth(date, timeZone: timeZone)
         }
     }
 }
