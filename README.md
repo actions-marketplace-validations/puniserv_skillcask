@@ -549,20 +549,16 @@ file through the GitLab raw files API
 
 ## macOS app
 
-`macos/` holds a small SwiftUI app (macOS 14+) over the CLI: open a project folder (or Global for
-`-g`), see its skills with their state and available updates, read `info`, and run `install`,
-`add` (with `search`), `update`, `remove` and `doctor`, and change the settings of `config.toml`
-(`skillcask -g config`, 0.9.4 or newer) in its Settings window. It runs the `skillcask` binary and
-reads its `--json` output (D35), so install skillcask first; the app finds it on `PATH`, in
-`/opt/homebrew/bin`, `/usr/local/bin` or `~/.cargo/bin`, or at the path set in its Settings.
+`macos/` holds a SwiftUI app for macOS 14+ over the CLI (D35): open My Skills (the `-g` scope) or a
+project folder, see each skill's state, updates and audit findings, read its SKILL.md and diffs,
+and run `add` (also `--adopt`), `update`, `remove`, `install` and `doctor --fix`. It has no package
+logic of its own: it runs the `skillcask` binary and reads its `--json` output.
 
-```sh
-macos/bundle.sh                    # swift build -c release, then macos/.build/Skillcask.app
-open macos/.build/Skillcask.app
-macos/test.sh                      # swift test; also works with only the Command Line Tools
-```
-
-The bundle is signed ad hoc, not notarized: it opens on the machine that built it.
+`macos/bundle.sh` builds a universal `Skillcask.app` that carries its own CLI at
+`Contents/Helpers/skillcask`. Run outside a bundle (`swift run` from `macos/`), the app uses the
+path set in its Settings, else looks on `PATH`, in `/opt/homebrew/bin`, `/usr/local/bin` and
+`~/.cargo/bin`. Building, signing, Gatekeeper, tests and renders:
+[macos/README.md](macos/README.md).
 
 ## Design
 

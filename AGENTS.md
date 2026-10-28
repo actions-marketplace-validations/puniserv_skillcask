@@ -18,6 +18,9 @@ cargo test --locked
 `cargo test --locked --test cli -- --ignored` runs end-to-end against live Packagist; run it after
 touching registry or HTTP code.
 
+After touching `macos/` (macOS only), run `macos/test.sh`: swift-format lint, build and tests; it
+fails on any compiler warning. Trust 0 warnings only on a clean build (`swift package clean`).
+
 CI tests Linux, macOS and Windows. Paths, symlinks and exec bits must work on all three.
 
 ## Invariants
