@@ -1,0 +1,75 @@
+# Skillcask for macOS
+
+A SwiftUI app over the `skillcask` CLI (spec D35). It runs on macOS 14 or newer; building it needs
+Swift 6.3 or newer (CI builds it with Xcode 26.6, Swift 6.3.3; Xcode 26.0 to 26.3 ship Swift 6.2). How the app looks and behaves, and the rules it keeps: [DESIGN.md](DESIGN.md).
+
+## Try it
+
+```sh
+macos/bundle.sh                    # universal Skillcask.app with the CLI inside, plus a zip
+open macos/.build/Skillcask.app
+```
+
+Without a bundle, `swift run Skillcask` from `macos/` starts the app against the CLI it finds: the
+path set in Settings, else `PATH`, `/opt/homebrew/bin`, `/usr/local/bin` and `~/.cargo/bin`.
+`SKILLCASK_UI_FIXTURES=1 swift run Skillcask` starts it on the built-in sample data and runs no CLI.
+
+## Build the app
+
+`bundle.sh` builds the app (one universal SwiftPM build) and the CLI (one cargo build per
+architecture, joined with `lipo`) from this repository for arm64 and x86_64, renders the icon from
+`icon.svg` (Quick Look, `sips` and `iconutil`, all part of macOS), and writes:
+
+- `macos/.build/Skillcask.app`, with the CLI at `Contents/Helpers/skillcask`, which the app prefers
+  over `PATH` unless Settings names a binary;
+- `macos/.build/Skillcask-<version>-macos-universal.zip`.
+
+The version is the one in `Cargo.toml`. `SKILLCASK_CLI=<path>` bundles a prebuilt CLI instead;
+`SIGN_IDENTITY` picks the signing identity (default `-`, ad hoc). Both Rust targets must be
+installed (`rustup target add aarch64-apple-darwin x86_64-apple-darwin`) unless `SKILLCASK_CLI` is
+set.
+
+## Signing and Gatekeeper
+
+The bundle is signed ad hoc with the hardened runtime, inside-out (the helper, then the app), not
+notarized: it opens on the machine that built it. Gatekeeper blocks a downloaded copy ("cannot be
+opened" / "damaged"). On macOS 14, right-click the app and choose Open. On macOS 15 and later, try
+to open it once, then choose Open Anyway in System Settings › Privacy & Security. Clearing the
+quarantine flag after unzipping also works, but do it only for a copy you built yourself or got from
+a source you trust:
+
+```sh
+xattr -dr com.apple.quarantine Skillcask.app
+```
+
+Distributing the app needs a Developer ID Application certificate (`SIGN_IDENTITY="Developer ID
+Application: …" macos/bundle.sh`) and notarization with the maintainer's Apple Developer account
+(`xcrun notarytool submit <zip> --wait`, then `xcrun stapler staple` on the app, and zip again).
+
+## Test
+
+```sh
+macos/test.sh                      # lint, build and tests; fails on any compiler warning
+macos/Scripts/smoke-app.sh         # launches the built app and checks it uses the bundled CLI
+```
+
+`test.sh` also works with only the Command Line Tools. Extra arguments go to `swift test`
+(`macos/test.sh --filter ProcessRunner`); `SKILLCASK_BIN=<path>` also runs the contract tests
+against that CLI. An incremental build hides warnings in unchanged files, so trust a count of 0 only
+after `swift package clean`. CI's `macos-app` job runs `test.sh` on a clean checkout.
+
+`smoke-app.sh` needs a logged-in GUI session. It checks the app's `--version` refusal, then starts
+the built app on the sample data and live (with a fresh `SKILLCASK_HOME` and a `PATH` without
+skillcask), signals only the processes it started, and restores the app's defaults afterwards.
+
+## Render the previews
+
+```sh
+TZ=UTC macos/Scripts/render-previews.sh           # every registered preview (UTC: dates match on every Mac)
+macos/Scripts/render-previews.sh --list           # the preview ids
+macos/Scripts/render-previews.sh P1-1             # one id or prefix
+```
+
+Each preview is drawn offscreen in light and dark at 2x into
+`macos/.build/renders/<id>/{light,dark}/<state>.png` (git-ignored). The script fails when the build
+fails or a PNG is missing or blank.
