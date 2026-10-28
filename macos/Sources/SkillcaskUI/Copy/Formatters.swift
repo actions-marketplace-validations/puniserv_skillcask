@@ -14,6 +14,12 @@ public enum Formatters {
         date.formatted(dayMonthYearStyle)
     }
 
+    /// `09:14`: hours and minutes on a 24-hour clock in GMT, as `dayMonth` (Versions board "released 28 Oct 2026
+    /// at 09:14").
+    public static func time(_ date: Date) -> String {
+        date.formatted(timeStyle)
+    }
+
     /// `3 days ago`, `1 day ago` or `today`, counting GMT calendar days from `date` to `now` (Main board's
     /// "Released 24 Oct 2026, 3 days ago"); a date after `now` reads `today`.
     public static func daysAgo(_ date: Date, now: Date) -> String {
@@ -39,6 +45,10 @@ public enum Formatters {
         .day()
         .month(.abbreviated)
         .year()
+
+    private static let timeStyle = Date.FormatStyle(locale: Locale(identifier: "en_GB"), timeZone: .gmt)
+        .hour(.twoDigits(amPM: .omitted))
+        .minute(.twoDigits)
 
     private static let dayMonthStyle = Date.FormatStyle(locale: Locale(identifier: "en_GB"), timeZone: .gmt)
         .day()

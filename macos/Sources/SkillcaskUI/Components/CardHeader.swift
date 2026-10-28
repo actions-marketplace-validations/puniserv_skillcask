@@ -52,7 +52,9 @@ public struct CardHeader<Accessory: View>: View {
                     .alignmentGuide(.firstTextBaseline) { $0[.bottom] }
             }
             titleView
-            Spacer(minLength: Spacing.s)
+            // The HStack's own gaps already separate title and summary; a zero minimum keeps Healthy's one-liners
+            // ("Security · no findings  Nothing changed on disk") on one line in a 330 pt card.
+            Spacer(minLength: 0)
             if hasSummary, let summary {
                 Text(summary)
                     .font(Font.Token.captionSemibold)

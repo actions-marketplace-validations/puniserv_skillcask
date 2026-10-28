@@ -5,11 +5,13 @@ import SwiftUI
 /// in mono, a second line saying where the skill comes from (`SkillRowSecondary`) and a trailing slot that says
 /// exactly one thing (`SkillRowTrailing`). 52 pt tall (`Size.row`), one `Spacing.rowGap` between the parts.
 ///
-/// Selection: inside a `List(selection:)` the system draws the accent highlight and raises
-/// `backgroundProminence` for the selected row, which turns the text white and the source pill translucent;
-/// `isSelected` forces the same emphasis for a row drawn on its own (the component sheet, previews). The row
-/// never paints a selection colour itself, so the highlight is always the system's, including when the window is
-/// inactive. `isOffline` hides what only `outdated` knows. Stale while refreshing is not the row's: the boards fade
+/// Selection: inside a `List(selection:)` the system draws the accent highlight; the list passes `isSelected`
+/// from the store's selection, and the row turns its text white and the source pill translucent whenever it is
+/// selected in an active window (`usesSelectedStyle(isSelected:active:)`). `backgroundProminence` is not relied
+/// on alone: it is not raised in every hosting (offscreen renders draw the accent but keep it `.standard`). In an
+/// inactive window (`controlActiveState == .inactive`) the system's grey highlight carries the normal colours.
+/// The row never paints a selection colour itself, so the highlight is always the system's. `accessory`, when
+/// given, replaces the trailing slot (the list's hover controls). `isOffline` hides what only `outdated` knows. Stale while refreshing is not the row's: the boards fade
 /// the whole list, selection included, so the list screen applies `staleOpacity` to its `List`.
 public struct SkillRow: View {
     public let entry: SkillEntry
@@ -18,14 +20,28 @@ public struct SkillRow: View {
     /// The skills that require a dependency row (`ScopeSnapshot.requirerSkills(of:)`); nil or empty falls back to
     /// the `via` package names.
     public let requiredBy: [String]?
+    /// Drawn in place of the trailing slot when set: the list row's hover controls (Components board, "hover with
+    /// actions").
+    public let accessory: AnyView?
 
     @Environment(\.backgroundProminence) private var prominence
+    @Environment(\.controlActiveState) private var controlActiveState
 
-    public init(_ entry: SkillEntry, isSelected: Bool = false, isOffline: Bool = false, requiredBy: [String]? = nil) {
+    public init(
+        _ entry: SkillEntry, isSelected: Bool = false, isOffline: Bool = false, requiredBy: [String]? = nil,
+        accessory: AnyView? = nil
+    ) {
         self.entry = entry
         self.isSelected = isSelected
         self.isOffline = isOffline
         self.requiredBy = requiredBy
+        self.accessory = accessory
+    }
+
+    /// The selected-row rule: white text and the translucent pill for a selected row in an active (key or main)
+    /// window; an inactive window's grey highlight keeps the normal colours.
+    nonisolated public static func usesSelectedStyle(isSelected: Bool, active: Bool) -> Bool {
+        isSelected && active
     }
 
     /// The row height, `.row{height:52px}`.
@@ -54,7 +70,13 @@ public struct SkillRow: View {
         HStack(spacing: Spacing.rowGap) {
             dot
             column
-            trailingSlot
+            if let accessory {
+                accessory
+                    .fixedSize()
+                    .layoutPriority(1)
+            } else {
+                trailingSlot
+            }
         }
         .padding(.leading, Self.leadingPadding)
         .padding(.trailing, Self.trailingPadding)
@@ -76,7 +98,8 @@ public struct SkillRow: View {
     }
 
     private var emphasized: Bool {
-        isSelected || prominence == .increased
+        Self.usesSelectedStyle(
+            isSelected: isSelected || prominence == .increased, active: controlActiveState != .inactive)
     }
 
     private var primaryColor: Color {

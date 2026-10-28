@@ -56,8 +56,12 @@ public enum DetailCopy {
         "\(version) is available"
     }
 
-    /// The rest of the strip sentence; the board also quotes the range (`^1.2`), which no CLI document prints.
-    public static let insideRange = "inside your allowed range."
+    /// The rest of the strip sentence: `inside your allowed range ^1.2.` with the constraint from `info`'s `why`
+    /// line, or `inside your allowed range.` when it is not known.
+    public static func insideRange(_ range: String?) -> String {
+        guard let range, !range.isEmpty else { return "inside your allowed range." }
+        return "inside your allowed range \(range)."
+    }
 
     /// `Released 24 Oct 2026, 3 days ago.`
     public static func released(_ date: Date, now: Date) -> String {

@@ -61,7 +61,8 @@ private struct ChipButtonStyle: ButtonStyle {
             .frame(height: Size.chip)
             .background(isActive ? Color.accentSoft : Color.clear, in: Capsule())
             .overlay {
-                Capsule().strokeBorder(isActive ? Color.clear : Color.separatorStrong, lineWidth: Size.hairline)
+                CapsuleRing(width: Size.hairline)
+                    .fill(isActive ? Color.clear : Color.separatorStrong, style: FillStyle(eoFill: true))
             }
             .contentShape(Capsule())
             .opacity(configuration.isPressed ? Self.pressedOpacity : 1)
@@ -69,6 +70,19 @@ private struct ChipButtonStyle: ButtonStyle {
 
     /// Press feedback; the board has no pressed state, so this is the system push button's dimming.
     private static let pressedOpacity = 0.6
+}
+
+/// The idle hairline as a filled ring (the capsule minus the capsule inset by `width`), not a stroke: the
+/// preview renderer's `cacheDisplay` draws a stroked 22 pt capsule with stray vertical bars at both ends
+/// (P2-3 chips), while fills come out exact there and on screen alike.
+struct CapsuleRing: Shape {
+    let width: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        var path = Capsule().path(in: rect)
+        path.addPath(Capsule().path(in: rect.insetBy(dx: width, dy: width)))
+        return path
+    }
 }
 
 #Preview("FilterChip, light") {

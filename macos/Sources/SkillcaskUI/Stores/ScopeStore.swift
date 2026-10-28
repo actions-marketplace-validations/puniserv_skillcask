@@ -1,0 +1,365 @@
+import Foundation
+import Observation
+import SkillcaskCore
+import SkillcaskDomain
+
+/// Everything the window knows about one scope (ADR §3, §5): the documents of the last refresh as a
+/// `ScopeSnapshot`, the list's filter, query and selection, and the selected row's `SkillDetail`. One store per
+/// scope, cached by `AppStore`, never shared, writing only to itself, so no result of one scope can land in another.
+///
+/// Refresh policy: opening runs the offline trio (`status`, `audit`, `doctor`) in parallel; `outdated` runs only
+/// on an explicit `checkUpdates()`. Every write after an `await` is guarded by the generation captured at the
+/// start and by `Task.isCancelled`, so a late answer is dropped (CC-10). Documents are replaced, never nilled
+/// first: the previous snapshot stays on screen while `isRefreshing`. Selection is an id re-resolved against the
+/// new snapshot; a vanished row deselects and the Overview shows.
+@MainActor @Observable public final class ScopeStore {
+    /// Reads a skill's SKILL.md off the main actor; injected so previews and tests need no files on disk.
+    public typealias TextReader = @Sendable (URL) async throws -> SkillText
+
+    /// A scope re-selected within this interval is not refreshed again (ADR §5).
+    public static let freshness: TimeInterval = 60
+
+    public let scope: Scope
+    /// The CLI seam this store (and `ActionRunner`, for this scope) talks through.
+    public let client: any CLIClient
+    /// What the located CLI can do; every `Invocation` of this scope carries it.
+    public let capabilities: Capabilities
+    private let textReader: TextReader
+    /// Settings read on open (`checkUpdatesOnOpen`); nil in tests that need none.
+    private let settings: SettingsStore?
+    /// The app's queue, asked before an automatic refresh (ADR §5 rule 4); nil in tests that need none.
+    private let queue: MutationQueue?
+
+    // MARK: - State
+
+    public private(set) var snapshot: ScopeSnapshot?
+    public private(set) var presentation: Presentation = .loading
+    /// The selected row's id (`SkillEntry.ID`); bound to the list's selection.
+    public var selection: SkillEntry.ID?
+    /// The active filter chip.
+    public var filter: Filter = .all
+    /// The list's sort menu; the state order is the default (S2 note).
+    public var sort: SkillcaskDomain.SortOrder = .state
+    /// The search field's text.
+    public var query = ""
+    /// The offline trio is in flight: the header progress and the list fade.
+    public private(set) var isRefreshing = false
+    /// `outdated` is in flight: Check Now is disabled, the strip may say so.
+    public private(set) var isCheckingUpdates = false
+    /// When the documents were last read, whatever the trigger.
+    public private(set) var checkedAt: Date?
+    /// The last failure of a read-only command; kept beside the snapshot so the header can say what went wrong.
+    public private(set) var lastError: CLIError?
+    public private(set) var detail: SkillDetail?
+    public private(set) var isLoadingDetail = false
+
+    @ObservationIgnored private var generation = 0
+    @ObservationIgnored private var checkGeneration = 0
+    @ObservationIgnored private var detailGeneration = 0
+    @ObservationIgnored private var documents = Documents()
+
+    /// The raw documents behind `snapshot`, kept so a check can add `outdated` without re-reading the trio.
+    private struct Documents {
+        var status: StatusDocument?
+        var audit: AuditDocument?
+        var doctor: DoctorDocument?
+        var outdated: OutdatedDocument?
+    }
+
+    public init(
+        scope: Scope, client: any CLIClient, capabilities: Capabilities, settings: SettingsStore? = nil,
+        queue: MutationQueue? = nil, textReader: @escaping TextReader = ScopeStore.readText
+    ) {
+        self.scope = scope
+        self.client = client
+        self.capabilities = capabilities
+        self.settings = settings
+        self.queue = queue
+        self.textReader = textReader
+    }
+
+    // MARK: - Derived
+
+    /// The rows the list shows: the chip's filter, the search field's query, the sort menu's order.
+    public var visibleEntries: [SkillEntry] {
+        filter.apply(snapshot?.entries ?? [], query: query, sort: sort)
+    }
+
+    /// The entry of `selection` in the current snapshot; nil when nothing is selected or the row vanished.
+    public var selectedEntry: SkillEntry? {
+        snapshot?.entry(id: selection)
+    }
+
+    /// The last network command failed: what only `outdated` knows is hidden.
+    public var isOffline: Bool {
+        presentation == .offline
+    }
+
+    /// The skills that require a dependency row (`ScopeSnapshot.requirerSkills(of:)`).
+    public func requirerSkills(for entry: SkillEntry) -> [String] {
+        snapshot?.requirerSkills(of: entry) ?? []
+    }
+
+    // MARK: - Refresh
+
+    /// The offline trio unless the snapshot is younger than `freshness`: what a scope re-selection runs. Deferred
+    /// while a mutation of this scope runs or waits (ADR §5 rule 4: the runner refreshes when it finishes). With
+    /// Settings "check updates when a project opens", the first open also runs `outdated` in the background.
+    public func refreshIfStale() async {
+        if let checkedAt, snapshot != nil, Date().timeIntervalSince(checkedAt) < Self.freshness {
+            return
+        }
+        if let queue, await queue.isBusy(scope) {
+            return
+        }
+        let firstOpen = snapshot == nil
+        await refresh()
+        if firstOpen, snapshot != nil, settings?.checkUpdatesOnOpen == true {
+            await checkUpdates()
+        }
+    }
+
+    /// `status`, `audit` and `doctor` in parallel, then one snapshot. `outdated` is kept from the last check.
+    public func refresh() async {
+        generation += 1
+        let mine = generation
+        isRefreshing = true
+        async let status = result(StatusDocument.self, .status)
+        async let audit = result(AuditDocument.self, .audit)
+        async let doctor = result(DoctorDocument.self, .doctor(fix: false))
+        let (statusResult, auditResult, doctorResult) = await (status, audit, doctor)
+        guard mine == generation, !Task.isCancelled else { return }
+        isRefreshing = false
+        switch statusResult {
+        case .success(let document):
+            documents.status = document
+            documents.audit = try? auditResult.get()
+            documents.doctor = try? doctorResult.get()
+            lastError = nil
+            rebuild()
+        case .failure(.cancelled):
+            break
+        case .failure(let error):
+            lastError = error
+            if snapshot == nil {
+                presentation = Presentation.forFailedLoad(error)
+            }
+        }
+    }
+
+    /// `outdated --json`: the one network read, never implicit (Check Now, ⌘R, the Updates card, or Settings
+    /// "check on open"). Its own generation, so a check never drops an in-flight trio and a newer check drops an
+    /// older one; the new document joins whatever trio documents are current when it lands.
+    public func checkUpdates() async {
+        checkGeneration += 1
+        let mine = checkGeneration
+        isCheckingUpdates = true
+        let outcome = await result(OutdatedDocument.self, .outdated)
+        guard mine == checkGeneration, !Task.isCancelled else { return }
+        isCheckingUpdates = false
+        switch outcome {
+        case .success(let document):
+            documents.outdated = document
+            lastError = nil
+            rebuild()
+        case .failure(.cancelled):
+            break
+        case .failure(let error):
+            lastError = error
+            if snapshot != nil, case .failed(.network, _, _, _) = error {
+                presentation = .offline
+            } else if snapshot == nil {
+                presentation = Presentation.forFailedLoad(error)
+            }
+        }
+    }
+
+    /// The refresh a finished mutation asks for (ADR §5): the offline trio, and `outdated` again only when it had
+    /// been checked before, so "last checked" stays truthful.
+    public func refreshAfterMutation() async {
+        await refresh()
+        if documents.outdated != nil {
+            await checkUpdates()
+        }
+    }
+
+    /// Previews and tests: the documents and selection of a scope without running anything. The snapshot is
+    /// rebuilt from `documents` by every later refresh, so a seeded `ScopeSnapshot` is shown as given.
+    /// `presentation` and `isRefreshing` let a preview show the list offline or stale while refreshing.
+    public func preload(
+        snapshot: ScopeSnapshot, selection: SkillEntry.ID? = nil, detail: SkillDetail? = nil,
+        presentation: Presentation = .ready, isRefreshing: Bool = false
+    ) {
+        self.snapshot = snapshot
+        self.selection = selection
+        self.detail = detail
+        // Counted from now, not from the snapshot's own date: a seeded scope is fresh, so opening it does not start
+        // a refresh that would fade the list (the strip still shows the snapshot's "Checked 4 min ago").
+        checkedAt = Date()
+        self.presentation = presentation
+        self.isRefreshing = isRefreshing
+    }
+
+    private func rebuild() {
+        guard let status = documents.status else { return }
+        let built = ScopeSnapshot(
+            status: status, audit: documents.audit, doctor: documents.doctor, outdated: documents.outdated)
+        snapshot = built
+        checkedAt = built.checkedAt
+        presentation = .ready
+        if selection != nil, built.entry(id: selection) == nil {
+            selection = nil
+            detail = nil
+        }
+    }
+
+    private func result<T: Decodable & Sendable>(
+        _ type: T.Type, _ command: Invocation.Command
+    ) async -> Result<T, CLIError> {
+        do {
+            let invocation = try Invocation(command, in: scope, capabilities: capabilities)
+            return .success(try await client.document(type, for: invocation))
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    // MARK: - Selection
+
+    /// Selects `id` and loads its detail; `nil` shows the Overview.
+    public func select(_ id: SkillEntry.ID?) async {
+        selection = id
+        await loadDetail()
+    }
+
+    /// Esc or a click on empty detail space (S3): no row is selected, the detail drops, the Scope Overview shows.
+    public func clearSelection() {
+        selection = nil
+        detail = nil
+    }
+
+    /// `info --json -- <skill>` (offline, milliseconds) and the SKILL.md, in parallel, under the detail generation:
+    /// what `.task(id: store.selection)` runs. A not managed row has no info document; a row without a path has
+    /// no file.
+    public func loadDetail() async {
+        detailGeneration += 1
+        let mine = detailGeneration
+        guard let entry = selectedEntry else {
+            detail = nil
+            isLoadingDetail = false
+            return
+        }
+        if detail != nil, loadedDetailID != entry.id {
+            detail = nil
+        }
+        isLoadingDetail = true
+        async let info = infoResult(for: entry)
+        async let text = textResult(for: entry)
+        let (infoResult, textResult) = await (info, text)
+        guard mine == detailGeneration, !Task.isCancelled else { return }
+        isLoadingDetail = false
+        loadedDetailID = entry.id
+        var infoError: CLIError?
+        if case .failure(let error) = infoResult {
+            infoError = error
+        }
+        detail = SkillDetail(
+            info: try? infoResult.get(), text: textResult.text, infoError: infoError, textError: textResult.error)
+    }
+
+    @ObservationIgnored private var loadedDetailID: SkillEntry.ID?
+
+    private func infoResult(for entry: SkillEntry) async -> Result<InfoDocument?, CLIError> {
+        guard !entry.isNotManaged else { return .success(nil) }
+        return await result(InfoDocument.self, .info(.skill(entry.id))).map { Optional($0) }
+    }
+
+    private func textResult(for entry: SkillEntry) async -> (text: SkillText?, error: String?) {
+        guard let path = entry.path else { return (nil, nil) }
+        let url = scope.root.appending(path: path).appending(path: "SKILL.md")
+        do {
+            return (try await textReader(url), nil)
+        } catch {
+            return (nil, ContentsCopy.readError(error))
+        }
+    }
+
+    // MARK: - Package versions
+
+    /// `info --json -- <package>` per package, kept for the session (ADR §5): the Versions tab's full list.
+    public private(set) var packageInfo: [String: InfoDocument] = [:]
+    /// Packages whose `info` is in flight.
+    public private(set) var loadingPackageInfo: Set<String> = []
+    /// Why the last `info <package>` failed; cleared when it is asked again.
+    public private(set) var packageInfoErrors: [String: CLIError] = [:]
+
+    /// The network `info --json -- <package>` behind the Versions tab's "All known versions": run only when the
+    /// list is expanded, never on selection; answered from the session cache when it was loaded before.
+    /// Cancelling the calling task (collapsing the list, leaving the row) cancels the command; a cancelled load
+    /// records no error, so expanding again retries.
+    ///
+    /// A call while one is in flight runs nothing of its own: it waits for that run and, when the run leaves
+    /// neither a document nor an error (it was cancelled: the list collapsed and opened again before the command
+    /// returned), asks itself, so a re-expanded list never stays on a spinner nobody drives.
+    public func loadPackageInfo(_ package: String) async {
+        while packageInfo[package] == nil, !Task.isCancelled {
+            guard loadingPackageInfo.contains(package) else {
+                await runPackageInfo(package)
+                return
+            }
+            await waitForPackageInfo(package)
+            if packageInfoErrors[package] != nil {
+                return
+            }
+        }
+    }
+
+    @ObservationIgnored private var packageInfoWaiters: [String: [UUID: CheckedContinuation<Void, Never>]] = [:]
+
+    private func runPackageInfo(_ package: String) async {
+        loadingPackageInfo.insert(package)
+        packageInfoErrors[package] = nil
+        let outcome = await result(InfoDocument.self, .info(.package(package)))
+        loadingPackageInfo.remove(package)
+        switch outcome {
+        case .success(let document):
+            packageInfo[package] = document
+        case .failure(.cancelled):
+            break
+        case .failure(let error):
+            if !Task.isCancelled {
+                packageInfoErrors[package] = error
+            }
+        }
+        let waiters = packageInfoWaiters.removeValue(forKey: package) ?? [:]
+        for waiter in waiters.values {
+            waiter.resume()
+        }
+    }
+
+    /// Suspends until the in-flight run for `package` ends, or the caller is cancelled.
+    private func waitForPackageInfo(_ package: String) async {
+        let id = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                guard !Task.isCancelled, loadingPackageInfo.contains(package) else {
+                    continuation.resume()
+                    return
+                }
+                packageInfoWaiters[package, default: [:]][id] = continuation
+            }
+        } onCancel: {
+            Task { @MainActor in self.resumeWaiter(id, of: package) }
+        }
+    }
+
+    private func resumeWaiter(_ id: UUID, of package: String) {
+        packageInfoWaiters[package]?.removeValue(forKey: id)?.resume()
+    }
+
+    /// The default reader: a nonisolated async function runs off the caller's actor (tools 6.0), so the file read
+    /// never blocks the main actor (SUI-20).
+    public nonisolated static func readText(at url: URL) async throws -> SkillText {
+        try SkillText.read(contentsOf: url)
+    }
+}

@@ -19,6 +19,8 @@ public struct Pill: View {
         case agent
         /// A source the policy blocks: warning tint and text, an SF Symbol then the name.
         case blocked(symbol: String)
+        /// The selected item among plain pills: Iris on the soft accent (Main board "pdf · installed").
+        case accent
     }
 
     public let text: String
@@ -87,13 +89,13 @@ public struct Pill: View {
     private var symbol: String? {
         switch style {
         case .source(let symbol), .blocked(let symbol): symbol
-        case .plain, .mono, .agent: nil
+        case .plain, .mono, .agent, .accent: nil
         }
     }
 
     private var font: Font {
         switch style {
-        case .plain, .source, .blocked: Font.Token.captionMedium
+        case .plain, .source, .blocked, .accent: Font.Token.captionMedium
         case .mono: Font.Token.monoSmall
         case .agent: Font.Token.calloutMedium
         }
@@ -102,6 +104,7 @@ public struct Pill: View {
     private var textColor: Color {
         switch style {
         case .blocked: Color.statusWarningText
+        case .accent: Color.accent
         case .plain, .source, .mono, .agent: prominence == .increased ? Self.onSelectionText : Color.pillText
         }
     }
@@ -109,6 +112,7 @@ public struct Pill: View {
     private var fill: Color {
         switch style {
         case .blocked: Color.statusWarningTint
+        case .accent: Color.accentSoft
         case .plain, .source, .mono, .agent: prominence == .increased ? Self.onSelectionFill : Color.pillFill
         }
     }
@@ -117,14 +121,14 @@ public struct Pill: View {
         switch style {
         case .agent: Size.pillLarge
         case .mono: Size.reachChip
-        case .plain, .source, .blocked: Size.pill
+        case .plain, .source, .blocked, .accent: Size.pill
         }
     }
 
     private var paddingH: CGFloat {
         switch style {
         case .agent: Spacing.s
-        case .plain, .source, .mono, .blocked: Spacing.inline
+        case .plain, .source, .mono, .blocked, .accent: Spacing.inline
         }
     }
 }

@@ -43,9 +43,9 @@ public enum Size {
     public static let search: CGFloat = 26
     /// Mini progress bar height (track `separator`, fill `accent`, `Radius.miniProgress`).
     public static let miniProgress: CGFloat = 3
-    /// Reach chip height: the Components board `.pill.mono` (`height: 18px`) of a Security chip group. The
-    /// Security board draws the same chips 20 pt tall; reported as a board discrepancy, the component sheet wins.
-    public static let reachChip: CGFloat = 18
+    /// Reach chip height: the Security board's `.ch` (`height: 20px`) of a chip group. The Components board's
+    /// `.pill.mono` draws 18; the Security tab is the only place chips live, so the screen board wins.
+    public static let reachChip: CGFloat = 20
     /// The 1 pt stroke of chip borders, card borders and separators (`border: 1px solid`).
     public static let hairline: CGFloat = 1
 

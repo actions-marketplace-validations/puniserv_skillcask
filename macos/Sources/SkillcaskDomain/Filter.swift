@@ -16,19 +16,11 @@ public enum Filter: String, CaseIterable, Hashable, Sendable {
         }
     }
 
-    /// Entries matching the chip and the query (name, package or description, case-insensitive), worst first,
-    /// then by name.
-    public func apply(_ entries: [SkillEntry], query: String = "") -> [SkillEntry] {
+    /// Entries matching the chip and the query (name, package or description, case-insensitive), in `sort` order
+    /// (worst first, then by name, unless the list's sort menu says otherwise).
+    public func apply(_ entries: [SkillEntry], query: String = "", sort: SortOrder = .state) -> [SkillEntry] {
         let needle = query.trimmingCharacters(in: .whitespaces).lowercased()
-        return
-            entries
-            .filter { matches($0) && (needle.isEmpty || $0.searchText.contains(needle)) }
-            .sorted { lhs, rhs in
-                if lhs.health.severity != rhs.health.severity {
-                    return lhs.health.severity > rhs.health.severity
-                }
-                return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
-            }
+        return sort.apply(entries.filter { matches($0) && (needle.isEmpty || $0.searchText.contains(needle)) })
     }
 }
 

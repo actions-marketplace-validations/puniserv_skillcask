@@ -13,7 +13,7 @@ public enum HealthMapping {
         case .other(let text): return .unknown(text)
         case .ok, .project, .handWritten, .notManaged, .notLinked: break
         }
-        if findings.contains(where: { $0.rule == "modified" }) {
+        if findings.contains(where: \.isModified) {
             return .changedOnDisk
         }
         if !findings.isEmpty {
@@ -35,6 +35,13 @@ public enum HealthMapping {
         case .handWritten: return .localSkill
         default: return .installed
         }
+    }
+
+    /// The health a detail header states (S3 note "dot+label from status.state"): the state and the update only,
+    /// audit findings left out (they show in the Overview's Security row and on the list row), except a `modified`
+    /// finding, which is a state ("Changed on disk").
+    public static func stateHealth(state: SkillState, update: Update?, findings: [AuditDocument.Finding]) -> Health {
+        health(state: state, update: update, findings: findings.filter(\.isModified))
     }
 
     static func stateText(_ state: SkillState) -> String {

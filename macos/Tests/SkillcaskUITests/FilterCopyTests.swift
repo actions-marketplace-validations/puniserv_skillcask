@@ -1,4 +1,5 @@
 import SkillcaskDomain
+import SwiftUI
 import Testing
 
 @testable import SkillcaskUI
@@ -69,5 +70,18 @@ import Testing
         #expect(SourceCopy.blocked(.github) == "GitHub · blocked")
         #expect(Pill.style(of: .project) == .plain)
         #expect(Pill.style(of: .github) == .source(symbol: "circle.fill"))
+    }
+
+    /// The idle chip's hairline is a filled ring inside the chip's frame: its edge is painted, its middle and
+    /// everything outside are not, so nothing reaches past the capsule.
+    @Test func chipHairlineIsARingInsideTheFrame() {
+        let rect = CGRect(x: 0, y: 0, width: 80, height: 22)
+        let ring = CapsuleRing(width: 1).path(in: rect)
+        #expect(ring.contains(CGPoint(x: 40, y: 0.5), eoFill: true))
+        #expect(ring.contains(CGPoint(x: 0.5, y: 11), eoFill: true))
+        #expect(ring.contains(CGPoint(x: 79.5, y: 11), eoFill: true))
+        #expect(!ring.contains(CGPoint(x: 40, y: 11), eoFill: true))
+        #expect(!ring.contains(CGPoint(x: 0.5, y: 0.5), eoFill: true))
+        #expect(ring.boundingRect == rect)
     }
 }

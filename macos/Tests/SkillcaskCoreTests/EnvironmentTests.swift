@@ -95,11 +95,14 @@ import Testing
         #expect(text.frontMatter.map(\.key) == ["name", "description", "license"])
         #expect(text.frontMatter.map(\.value) == ["notes", "Team \"notes\"", "it's"])
         #expect(text.body == "# Notes\n\nBody.\n" && !text.truncated)
+        // Lines 1–6 are the front matter and its fences; `# Notes` is line 7.
+        #expect(text.bodyStartLine == 7)
     }
 
     @Test func withoutFrontMatterTheWholeFileIsTheBody() {
         let text = SkillText.parse("# Title\n---\nnot front matter\n")
         #expect(text.frontMatter.isEmpty && text.body == "# Title\n---\nnot front matter\n")
+        #expect(text.bodyStartLine == 1)
     }
 
     @Test(arguments: [

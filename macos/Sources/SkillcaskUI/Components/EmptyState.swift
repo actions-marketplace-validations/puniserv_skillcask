@@ -2,7 +2,8 @@ import SwiftUI
 
 /// The empty-state block (Components board "Empty state", Overview-States, List-States, Contents-States): an
 /// optional SF Symbol, a `type.headline` title, a secondary body, an optional mono detail line, a row of system
-/// push buttons and an optional accent link, centred in a column with `Spacing.s` between them.
+/// push buttons and an optional accent link with the text it discloses, centred in a column with `Spacing.s`
+/// between them.
 ///
 /// `.dashed` is the Overview's hint block: a 1 pt `Color.separatorStrong` dashed border inside `Radius.l` on
 /// `Color.surfaceCard`, 28/20 padding, hugging its content. `.plain` is the in-column message of the list and the
@@ -62,6 +63,8 @@ public struct EmptyState: View {
     }
 
     public let icon: String?
+    /// A small symbol drawn inside `icon`'s page, as the boards' file-problem glyph draws an X in a document.
+    public let iconBadge: String?
     public let tone: Tone
     public let title: String
     /// The secondary sentence under the title (the board's body; `body` is the view's).
@@ -70,21 +73,26 @@ public struct EmptyState: View {
     public let detail: String?
     public let actions: [Action]
     public let link: Action?
+    /// Text the link has disclosed, under it in `type.mono.small`; nil while closed.
+    public let disclosed: String?
     public let style: Style
     /// The widest the body runs before it wraps; nil lets it take the block's width.
     public let textWidth: CGFloat?
 
     public init(
-        icon: String?, tone: Tone = .quiet, title: String, body: String? = nil, detail: String? = nil,
-        actions: [Action] = [], link: Action? = nil, style: Style = .plain, textWidth: CGFloat? = nil
+        icon: String?, iconBadge: String? = nil, tone: Tone = .quiet, title: String, body: String? = nil,
+        detail: String? = nil, actions: [Action] = [], link: Action? = nil, disclosed: String? = nil,
+        style: Style = .plain, textWidth: CGFloat? = nil
     ) {
         self.icon = icon
+        self.iconBadge = iconBadge
         self.tone = tone
         self.title = title
         self.message = body
         self.detail = detail
         self.actions = actions
         self.link = link
+        self.disclosed = disclosed
         self.style = style
         self.textWidth = textWidth
     }
@@ -95,6 +103,10 @@ public struct EmptyState: View {
     static let iconSize: CGFloat = 32
     /// The SVG glyphs' `stroke-width: 1.2` on a 16-unit box at 32 pt reads as a light SF Symbol weight.
     static let iconWeight: Font.Weight = .light
+    /// The badge inside the page: the Contents-States X spans 4 of the glyph's 16 units, centred 2 units below the
+    /// page's middle.
+    static let badgeSize: CGFloat = iconSize / 4
+    static let badgeOffset: CGFloat = iconSize / 8
     /// The dashed block's vertical padding (`padding: 28px 20px`, Overview-States).
     static let dashedPaddingV: CGFloat = 28
     /// CSS `border: 1px dashed`: 3 pt dashes, 3 pt gaps, the closest a stroke gets to a 1 px dashed border.
@@ -149,6 +161,7 @@ public struct EmptyState: View {
                     .scaledToFit()
                     .fontWeight(Self.iconWeight)
                     .frame(width: Self.iconSize, height: Self.iconSize)
+                    .overlay { iconBadge.map(badge) }
                     .foregroundStyle(tone == .error ? Color.statusErrorText : Color.textTertiary)
                     .accessibilityHidden(true)
             }
@@ -180,9 +193,25 @@ public struct EmptyState: View {
                 .buttonStyle(.plain)
                 .padding(.top, Spacing.s)
             }
+            if let disclosed {
+                Text(disclosed)
+                    .font(Font.Token.monoSmall)
+                    .foregroundStyle(Color.textSecondary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: textWidth)
+            }
         }
         .multilineTextAlignment(.center)
         .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func badge(_ symbol: String) -> some View {
+        Image(systemName: symbol)
+            .resizable()
+            .scaledToFit()
+            .fontWeight(.medium)
+            .frame(width: Self.badgeSize, height: Self.badgeSize)
+            .offset(y: Self.badgeOffset)
     }
 
     private var buttons: some View {

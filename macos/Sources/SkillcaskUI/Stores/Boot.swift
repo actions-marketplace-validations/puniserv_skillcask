@@ -1,0 +1,103 @@
+import Foundation
+import SkillcaskCore
+import SkillcaskDomain
+
+/// Builds the app-lifetime stores: the live set over the real binary, or the fixture set the render tool and
+/// `swift run` with `SKILLCASK_UI_FIXTURES=1` use to show the boards' data without a CLI. Fixture mode is a
+/// preview and demo mode, never on by default: `current()` picks it only when the variable is exactly `1`.
+public enum Boot {
+    /// The environment variable that switches `swift run` to the fixture stores.
+    public static let fixturesVariable = "SKILLCASK_UI_FIXTURES"
+
+    /// The three stores a scene injects with `skillcaskEnvironment`, and the client behind them.
+    @MainActor public struct Stores {
+        public let app: AppStore
+        public let runner: ActionRunner
+        public let settings: SettingsStore
+        /// The seam the stores were built over, for `.environment(\.cliClient)`.
+        public let client: any CLIClient
+    }
+
+    /// The board scopes: `api` (`~/work/api`), `website` (`~/work/site`), personal.
+    public static let apiScope = Scope.project(at: "~/work/api")
+    /// `website` (`~/work/site`): the healthy scope of Overview-States.
+    public static let websiteScope = Scope.project(at: "~/work/site")
+    /// `infra-playbooks` (`~/work/infra`): the board's folder without a skills.toml.
+    public static let infraScope = Scope.project(at: "~/work/infra")
+
+    /// `SKILLCASK_UI_FIXTURES=1` in the environment: demo mode.
+    public static var usesFixtures: Bool {
+        ProcessInfo.processInfo.environment[fixturesVariable] == "1"
+    }
+
+    /// Fixture stores when the variable asks for them, the live stores otherwise.
+    @MainActor public static func current() -> Stores {
+        usesFixtures ? fixtures() : live()
+    }
+
+    /// The real app: `UserDefaults.standard`, the located binary through `ProcessRunner`, one `MutationQueue`.
+    @MainActor public static func live() -> Stores {
+        let settings = SettingsStore()
+        let queue = MutationQueue()
+        let app = AppStore(settings: settings, queue: queue)
+        return Stores(
+            app: app, runner: ActionRunner(queue: queue), settings: settings, client: UnavailableCLIClient.shared)
+    }
+
+    /// The window as the Main board shows it: the api scope open with pdf selected, website, the not-set-up
+    /// infra-playbooks and My Skills in the sidebar with their badges, every document from `DesignFixtures`
+    /// through a `FixtureCLIClient`. Settings
+    /// live in their own defaults suite, reset on every boot, so demo runs never touch the user's settings.
+    @MainActor public static func fixtures(
+        selecting scope: Scope? = apiScope, selection: SkillEntry.ID? = "pdf"
+    ) -> Stores {
+        let suite = "skillcask.ui.fixtures"
+        let defaults = UserDefaults(suiteName: suite) ?? .standard
+        defaults.removePersistentDomain(forName: suite)
+        let settings = SettingsStore(defaults: defaults)
+        settings.recentProjects = [apiScope.root, websiteScope.root, infraScope.root]
+        let queue = MutationQueue()
+        let client = FixtureCLIClient()
+        let infra = infraScope.root
+        let app = AppStore(
+            settings: settings, queue: queue, client: client, capabilities: Capabilities(version: Capabilities.minimum),
+            textReader: fixtureText, manifestExists: { $0 != infra })
+        app.store(for: apiScope)?
+            .preload(
+                snapshot: DesignFixtures.api, selection: selection,
+                detail: selection.map { SkillDetail(info: fixtureInfo(for: $0), text: fixtureText(for: $0)) })
+        app.store(for: websiteScope)?.preload(snapshot: DesignFixtures.website)
+        app.store(for: .personal)?.preload(snapshot: DesignFixtures.personal)
+        app.selectedScope = scope
+        return Stores(app: app, runner: ActionRunner(queue: queue), settings: settings, client: client)
+    }
+
+    /// The SKILL.md of a fixture skill, by the last folder of its path; the boards have two.
+    @Sendable static func fixtureText(at url: URL) async throws -> SkillText {
+        guard let text = fixtureText(for: url.deletingLastPathComponent().lastPathComponent) else {
+            throw CocoaError(.fileReadNoSuchFile)
+        }
+        return text
+    }
+
+    static func fixtureText(for skill: String) -> SkillText? {
+        switch skill {
+        case "pdf": DesignFixtures.pdfText
+        case "my-notes": DesignFixtures.myNotesText
+        case "api-docs": DesignFixtures.apiDocsText
+        default: nil
+        }
+    }
+
+    static func fixtureInfo(for skill: String) -> InfoDocument? {
+        switch skill {
+        case "pdf": DesignFixtures.pdfInfo
+        case "jira-syntax", "jira-communication": DesignFixtures.jiraPackageInfo
+        case "legacy-lint": DesignFixtures.legacyLintInfo
+        case "safe-refactor": DesignFixtures.safeRefactorInfo
+        case "commit-message": DesignFixtures.commitMessageInfo
+        case "my-notes": DesignFixtures.myNotesInfo
+        default: nil
+        }
+    }
+}

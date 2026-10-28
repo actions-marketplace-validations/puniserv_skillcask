@@ -162,11 +162,29 @@ public enum DesignFixtures {
 
     // MARK: - Contents (`Contents`, `Contents-States`)
 
-    /// Front matter with four keys and a body with a raw U+202E on line 9 that `parse` escapes. The audit finding
+    /// The Contents board's Markdown: front matter with four keys, then two `##` headings, two paragraphs, a
+    /// numbered list and a closing paragraph, with a raw U+202E on line 11 that `parse` escapes. The audit finding
     /// says line 3 (the board's number); the front matter takes lines 1–6 and the board shows the character in the
-    /// body, so the two cannot agree. The curl line is line 12 as the finding says. `myNotesFile.bytes` is the
-    /// board's "1.8 KB", not the size of this file.
+    /// body, so the two cannot agree. The curl line is line 17 as the finding says (the boards' "line 12" cannot
+    /// hold with the board's blocks under a six-line front matter). `myNotesFile.bytes` is the board's "1.8 KB",
+    /// not the size of this file.
     public static let myNotesText = SkillText.parse(text("skill.my-notes", "md"))
+    /// my-notes with four more sections between its two, so the curl line (49) sits below the fold of the
+    /// Contents preview: "Show in file" has to scroll to it.
+    public static let myNotesLongText = SkillText.parse(text("skill.my-notes.long", "md"))
+    /// `myNotes` with its findings on the lines of `myNotesLongText`.
+    public static let myNotesLong = SkillEntry(
+        id: myNotes.id, name: myNotes.name, kind: myNotes.kind, source: myNotes.source, version: myNotes.version,
+        state: myNotes.state, health: myNotes.health, update: myNotes.update,
+        findings: decode(
+            [AuditDocument.Finding].self,
+            json: """
+                [{"rule": "risky-pattern", "path": ".skills/my-notes/SKILL.md", "line": 49,
+                  "message": "downloads code into a shell"},
+                 {"rule": "invisible-character", "path": ".skills/my-notes/SKILL.md", "line": 3,
+                  "message": "U+202E RIGHT-TO-LEFT OVERRIDE"}]
+                """),
+        path: myNotes.path, description: myNotes.description, reach: myNotes.reach)
     public static let pdfText = SkillText.parse(text("skill.pdf", "md"))
     /// Too large: the first 256 KiB only.
     public static let apiDocsText = SkillText.parse(text("skill.api-docs", "md"), truncated: true)
@@ -441,6 +459,15 @@ public enum DesignFixtures {
             return try JSONDecoder().decode(type, from: Data(contentsOf: url(name, "json")))
         } catch {
             fatalError("design fixture \(name).json does not decode as \(type): \(error)")
+        }
+    }
+
+    /// A small document written inline, for a variant whose difference from its fixture file is a few values.
+    static func decode<T: Decodable>(_ type: T.Type, json: String) -> T {
+        do {
+            return try JSONDecoder().decode(type, from: Data(json.utf8))
+        } catch {
+            fatalError("inline design fixture does not decode as \(type): \(error)")
         }
     }
 

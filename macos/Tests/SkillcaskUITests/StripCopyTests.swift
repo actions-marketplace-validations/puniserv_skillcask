@@ -69,5 +69,9 @@ import Testing
             MessageStrip(.warning, text: "x", trailing: .link(StripCopy.seeSecurity, action: {})).trailingTitle
                 == "See Security")
         #expect(MessageStrip(.warning, text: "x", trailing: .button("", action: {})).trailingTitle == nil)
+        #expect(
+            MessageStrip(.neutral, text: "x", trailing: .accentLink("Show caveman", action: {})).trailingTitle
+                == "Show caveman")
+        #expect(MessageStrip.Kind.neutral.severity == .neutral)
     }
 }

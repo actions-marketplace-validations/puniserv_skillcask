@@ -6,10 +6,16 @@ import SkillcaskDomain
 /// always right, destructive style; hidden for dependency and project skills. Adopt… replaces Update for
 /// not-managed rows. Package + source pill hidden for project/local skills." Offline, `outdated` has not
 /// answered, so the slot reads "Updates unknown" (Detail-States) and the update strip stays hidden.
+///
+/// Safety rule (Versions-States "Tag moved"): when the version in range comes from a tag that now points at other
+/// content (`Update.note`, Q3), Update is never the default: the slot is a plain "Review changes…" and the blue
+/// strip is hidden, since the Versions tab explains the move. Update stays reachable from the Review sheet.
 public struct DetailActions: Hashable, Sendable {
     /// What fills the primary slot: a button, or a quiet text where the button would be.
     public enum Primary: Hashable, Sendable {
         case update(to: String)
+        /// A plain bordered "Review changes…": an update whose tag moved (never a default Update button).
+        case reviewChanges
         case adopt
         case upToDate
         case updatesUnknown
@@ -23,7 +29,8 @@ public struct DetailActions: Hashable, Sendable {
     public let showsStrip: Bool
     public let showsSourcePill: Bool
     /// The mono path (`.skills/my-notes`, Detail-States) on the third line of a project or local skill, where a
-    /// package row shows its package name; the "Project" pill stays hidden.
+    /// package row shows its package name; the header draws the kind pill ("Project", "Local") beside it, as
+    /// Detail-States does (P3-3 board/note decision, see `DetailHeader.packageLine`).
     public let showsPath: Bool
 
     public init(
@@ -48,7 +55,9 @@ public struct DetailActions: Hashable, Sendable {
         case .notManaged:
             primary = .adopt
         case .package, .dependency, .packageOnly:
-            if let target {
+            if target != nil, isTagMoved(entry) {
+                primary = .reviewChanges
+            } else if let target {
                 primary = .update(to: target)
             } else if offline || entry.update == nil {
                 primary = .updatesUnknown
@@ -73,7 +82,12 @@ public struct DetailActions: Hashable, Sendable {
         }
         return DetailActions(
             primary: primary, showsEditNote: entry.isProjectSkill, showsRemove: showsRemove,
-            showsStrip: target != nil, showsSourcePill: showsSourcePill, showsPath: showsPath)
+            showsStrip: target != nil && !isTagMoved(entry), showsSourcePill: showsSourcePill, showsPath: showsPath)
+    }
+
+    /// The row's update comes from a moved tag (`tag v4.1.0 moved from … to …`).
+    public static func isTagMoved(_ entry: SkillEntry) -> Bool {
+        entry.update?.note.flatMap(VersionsModel.TagMove.init(note:)) != nil
     }
 
     /// The version an update would lock: from the row's `Health` when it carries one, else from `outdated`.

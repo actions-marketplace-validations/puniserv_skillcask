@@ -37,21 +37,21 @@ import Testing
     @Test func flagsResolveFromTheFixtureFindings() throws {
         let findings = DesignFixtures.myNotes.findings
         #expect(findings.map(\.rule) == ["risky-pattern", "invisible-character"])
-        #expect(findings.map(\.line) == [12, 3])
-        // A diff of my-notes whose new version has at least 12 lines: both findings land.
+        #expect(findings.map(\.line) == [17, 3])
+        // A diff of my-notes whose new version has at least 17 lines: both findings land.
         let text = """
             local/my-notes lock -> disk
             --- a/my-notes/SKILL.md
             +++ b/my-notes/SKILL.md
-            @@ -1,12 +1,12 @@
-            \(Array(repeating: " line", count: 12).joined(separator: "\n"))
+            @@ -1,17 +1,17 @@
+            \(Array(repeating: " line", count: 17).joined(separator: "\n"))
 
             """
         let file = try #require(UnifiedDiff(text: text).packages.first?.files.first)
         #expect(file.path == "my-notes/SKILL.md")
         let flags = DiffFlag.flags(for: file, findings: findings)
-        #expect(flags == [DiffFlag(line: 12, kind: .risky), DiffFlag(line: 3, kind: .invisible)])
-        #expect(DiffView.flagsByLine(flags) == [12: .risky, 3: .invisible])
+        #expect(flags == [DiffFlag(line: 17, kind: .risky), DiffFlag(line: 3, kind: .invisible)])
+        #expect(DiffView.flagsByLine(flags) == [17: .risky, 3: .invisible])
         // pdf's SKILL.md on the board: the curl line is new line 12, the overridden name new line 13.
         let skill = try #require(Self.pdfFiles.first)
         let rows = skill.diffLines

@@ -18,6 +18,9 @@ public struct DetailHeader: View {
     /// The skills that require a dependency ("Required by caveman"), from `ScopeSnapshot.requirerSkills(of:)`;
     /// nil falls back to the package names of the entry's `via` list.
     public let requiredBy: [String]?
+    /// The constraint the strip quotes (`^1.2`, from `info`'s `why` via `DetailOverviewCopy.allowedRange`); nil
+    /// leaves it out.
+    public let allowedRange: String?
     /// The day the strip's "3 days ago" counts to; previews and tests pin it.
     public let now: Date
     public let onUpdate: () -> Void
@@ -27,13 +30,15 @@ public struct DetailHeader: View {
 
     public init(
         entry: SkillEntry, isOffline: Bool = false, selectedTab: Binding<DetailTab>, requiredBy: [String]? = nil,
-        now: Date = .now, onUpdate: @escaping () -> Void = {}, onAdopt: @escaping () -> Void = {},
+        allowedRange: String? = nil, now: Date = .now, onUpdate: @escaping () -> Void = {},
+        onAdopt: @escaping () -> Void = {},
         onRemove: @escaping () -> Void = {}, onReviewChanges: @escaping () -> Void = {}
     ) {
         self.entry = entry
         self.isOffline = isOffline
         _selectedTab = selectedTab
         self.requiredBy = requiredBy
+        self.allowedRange = allowedRange
         self.now = now
         self.onUpdate = onUpdate
         self.onAdopt = onAdopt
@@ -50,7 +55,7 @@ public struct DetailHeader: View {
                     actionRow
                         .padding(.top, Spacing.xxl)
                 }
-                DetailTabs(selection: $selectedTab)
+                DetailTabs(selection: $selectedTab, tabs: DetailTabs.tabs(for: entry))
             }
             .padding(.top, Spacing.xl)
             .padding(.horizontal, Size.columnPadding)
@@ -71,6 +76,12 @@ public struct DetailHeader: View {
 
     private var actions: DetailActions {
         DetailActions.resolve(entry, offline: isOffline)
+    }
+
+    /// The health the state line states: `HealthMapping.stateHealth` (state and update; findings only when one
+    /// is `modified`), so a project skill with findings still reads "Project skill" (S3 note).
+    nonisolated static func stateHealth(for entry: SkillEntry) -> Health {
+        HealthMapping.stateHealth(state: entry.state, update: entry.update, findings: entry.findings)
     }
 
     private var stateFont: Font {
@@ -108,23 +119,34 @@ public struct DetailHeader: View {
     /// caller resolved them, else the `via` package names), `Update available` for a row with an update (the
     /// versions sit beside the name and on the button), else the `Health` label.
     private var stateLine: StatusLabel {
-        if case .dependency(_, let via) = entry.kind, entry.health.severity <= .ok {
+        let health = Self.stateHealth(for: entry)
+        if case .dependency(_, let via) = entry.kind, health.severity <= .ok {
             let requirers = requiredBy.flatMap { $0.isEmpty ? nil : $0 } ?? via
             return StatusLabel(.neutral, Labels.requiredBy(requirers), font: stateFont)
         }
-        if case .updateAvailable = entry.health {
+        if case .updateAvailable = health {
             return StatusLabel(.update, DetailCopy.updateAvailable, font: stateFont)
         }
-        return StatusLabel(entry.health, font: stateFont)
+        return StatusLabel(health, font: stateFont)
     }
 
     /// The third line: the package name with its source pill, the path of a project or local skill
-    /// (`.skills/my-notes`, Detail-States), or "No package recorded" for a not managed skill without a source.
+    /// (`.skills/my-notes`, Detail-States) with its kind pill, or "No package recorded" for a not managed skill
+    /// without a source.
+    ///
+    /// Board/note conflict (P3-3): the S3 note hides the package + source pill for project and local skills, while
+    /// Detail-States draws a "Project" pill beside the path. The board is followed: the kind pill ("Project",
+    /// "Local") stands beside the path, no source pill is drawn (`DetailActions.showsSourcePill` stays false).
     @ViewBuilder private var packageLine: some View {
         if actions.showsPath, let path = entry.path {
-            Text(path)
-                .font(Font.Token.mono)
-                .foregroundStyle(Color.textSecondary)
+            HStack(spacing: Spacing.s) {
+                Text(path)
+                    .font(Font.Token.mono)
+                    .foregroundStyle(Color.textSecondary)
+                if let kind = SourceKind.kind(of: entry) {
+                    Pill(source: kind)
+                }
+            }
         } else if let package = DetailActions.packageText(of: entry) {
             HStack(spacing: Spacing.s) {
                 Text(package)
@@ -152,6 +174,9 @@ public struct DetailHeader: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(Color.accent)
+            case .reviewChanges:
+                Button(DetailCopy.reviewChanges, action: onReviewChanges)
+                    .buttonStyle(.bordered)
             case .adopt:
                 Button(DetailCopy.adopt, action: onAdopt)
                     .buttonStyle(.borderedProminent)
@@ -210,7 +235,7 @@ public struct DetailHeader: View {
     private func stripText(to target: String) -> Text {
         var text =
             Text(DetailCopy.available(target)).fontWeight(.semibold) + Text(verbatim: " ")
-            + Text(DetailCopy.insideRange)
+            + FailureBanner.styled(DetailCopy.insideRange(allowedRange), fragment: allowedRange, font: Font.Token.body)
         if let released = entry.update?.released {
             text = text + Text(verbatim: " ") + Text(DetailCopy.released(released, now: now))
         }

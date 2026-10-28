@@ -137,7 +137,7 @@
         {
           "rule": "risky-pattern",
           "path": ".skills/my-notes/SKILL.md",
-          "line": 12,
+          "line": 17,
           "message": "downloads code into a shell"
         },
         {

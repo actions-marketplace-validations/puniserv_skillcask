@@ -7,6 +7,15 @@ import Testing
 /// The S3 header rules (`DetailActions.resolve`) over the design fixtures, the header's copy pinned to the Main
 /// and Detail-States boards, and the tab titles in board order.
 @Suite struct DetailHeaderTests {
+    @Test func aMovedTagOffersReviewChangesNeverUpdate() {
+        let actions = DetailActions.resolve(DesignFixtures.managedCaveman, offline: false)
+        #expect(DetailActions.isTagMoved(DesignFixtures.managedCaveman))
+        #expect(actions.primary == .reviewChanges)
+        #expect(!actions.showsStrip)
+        #expect(DetailActions.resolve(DesignFixtures.pdf, offline: false).primary == .update(to: "1.4.0"))
+        #expect(!DetailActions.isTagMoved(DesignFixtures.pdf))
+    }
+
     @Test func pdfOffersTheUpdateWithStripRemoveAndPill() {
         let actions = DetailActions.resolve(DesignFixtures.pdf, offline: false)
         #expect(actions.primary == .update(to: "1.4.0"))
@@ -122,7 +131,8 @@ import Testing
         #expect(DetailCopy.updateAvailable == "Update available")
         #expect(DetailCopy.noPackageRecorded == "No package recorded")
         #expect(DetailCopy.available("1.4.0") == "1.4.0 is available")
-        #expect(DetailCopy.insideRange == "inside your allowed range.")
+        #expect(DetailCopy.insideRange(nil) == "inside your allowed range.")
+        #expect(DetailCopy.insideRange("^1.2") == "inside your allowed range ^1.2.")
         let released = try #require(DesignFixtures.pdfUpdate.released)
         let now = try Date("2026-10-27T12:00:00Z", strategy: .iso8601)
         #expect(DetailCopy.released(released, now: now) == "Released 24 Oct 2026, 3 days ago.")

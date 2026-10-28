@@ -209,7 +209,7 @@ import Testing
             (Size.columnPadding, 24), (Size.cardPaddingV, 12), (Size.cardPaddingH, 14), (Size.chip, 22),
             (Size.pill, 16), (Size.pillLarge, 22), (Size.statusDot, 8), (Size.badge, 18), (Size.badgeSmall, 16),
             (Size.button, 24), (Size.buttonSmall, 22), (Size.tab, 22), (Size.search, 26), (Size.miniProgress, 3),
-            (Size.reachChip, 18), (Size.hairline, 1), (Size.iconToolbar, 13), (Size.iconSidebar, 16),
+            (Size.reachChip, 20), (Size.hairline, 1), (Size.iconToolbar, 13), (Size.iconSidebar, 16),
             (Size.iconInline, 12), (Size.windowMinWidth, 960),
             (Size.sidebarWidth, 220), (Size.sidebarMinWidth, 180), (Size.listWidth, 360), (Size.listMinWidth, 300),
             (Size.detailMinWidth, 400),

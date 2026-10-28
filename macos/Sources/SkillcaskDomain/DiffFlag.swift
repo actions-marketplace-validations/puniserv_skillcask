@@ -45,12 +45,12 @@ public struct DiffFlag: Hashable, Sendable {
 }
 
 extension DiffFlag.Kind {
-    /// The audit rule names of `src/commands.rs` AUDIT_RULES that the sheet outlines; any other rule is nil.
+    /// The two `FindingKind`s the sheet outlines; any other rule is nil.
     public init?(rule: String) {
-        switch rule {
-        case "risky-pattern": self = .risky
-        case "invisible-character": self = .invisible
-        default: return nil
+        switch FindingKind(rule: rule) {
+        case .riskyPattern: self = .risky
+        case .invisibleCharacter: self = .invisible
+        case .modified, .other: return nil
         }
     }
 }

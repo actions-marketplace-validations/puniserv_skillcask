@@ -11,6 +11,10 @@ import SwiftUI
 public struct MessageStrip: View {
     /// What the strip reports; decides the tint, the text colour of the symbol and link, and the default symbol.
     public enum Kind: Hashable, Sendable, CaseIterable {
+        /// Grey: an explanation, not a problem (Detail-States "Dependency").
+        case neutral
+        /// Green: nothing to do (Versions-States "Up to date").
+        case ok
         /// Blue: offline, details unavailable.
         case info
         /// Amber: not managed, abandoned, invisible characters.
@@ -21,6 +25,8 @@ public struct MessageStrip: View {
         /// The severity whose tint and text colour the strip draws.
         public var severity: Severity {
             switch self {
+            case .neutral: .neutral
+            case .ok: .ok
             case .info: .update
             case .warning: .warning
             case .error: .error
@@ -44,17 +50,21 @@ public struct MessageStrip: View {
         case button(String, action: () -> Void)
         /// A semibold link in the status text colour (Contents' See Security).
         case link(String, action: () -> Void)
+        /// A medium-weight Iris link (Detail-States dependency strip's "Show caveman"), whatever the strip's kind.
+        case accentLink(String, action: () -> Void)
 
         /// The control's words.
         public var title: String {
             switch self {
-            case .button(let title, _), .link(let title, _): title
+            case .button(let title, _), .link(let title, _), .accentLink(let title, _): title
             }
         }
     }
 
     /// The symbol of an info strip (Components, List-States, Detail-States offline).
     nonisolated static let infoSymbol = FailureBanner.infoSymbol
+    /// The symbol of an ok strip; the Versions-States board draws none, a strip always leads with one.
+    nonisolated static let okSymbol = "checkmark.circle"
     /// The symbol of a warning strip (Components, Overview-States not managed).
     nonisolated static let warningSymbol = FailureBanner.warningSymbol
     /// The symbol of an error strip (Components).
@@ -63,11 +73,16 @@ public struct MessageStrip: View {
     public nonisolated static let invisibleSymbol = "eye.slash"
     /// The archive box of the Detail-States abandoned strip.
     public nonisolated static let abandonedSymbol = "archivebox"
+    /// The hourglass of the Versions cooldown callout.
+    public nonisolated static let cooldownSymbol = "hourglass"
+    /// The crossed-out tag of the Versions-States tag-moved callout.
+    public nonisolated static let tagMovedSymbol = "tag.slash"
 
     private let kind: Kind
     private let title: String?
     private let text: String
     private let monoFragment: String?
+    private let emphasis: String?
     private let symbol: String
     private let density: Density
     private let trailing: Trailing?
@@ -77,17 +92,21 @@ public struct MessageStrip: View {
     ///   - title: The bold lead before `text` (`Offline.`, `12 skills on this Mac are not managed yet.`).
     ///   - text: The sentence, from `StripCopy`.
     ///   - monoFragment: The first occurrence in `text` drawn in mono (`‹U+202E›`, `acme/lint2`).
-    ///   - symbol: An SF Symbol replacing the kind's default (`invisibleSymbol`, `abandonedSymbol`).
+    ///   - emphasis: The first occurrence in `text` drawn semibold (`caveman` in the dependency strip); ignored
+    ///     when `monoFragment` is set.
+    ///   - symbol: An SF Symbol replacing the kind's default (`invisibleSymbol`, `abandonedSymbol`,
+    ///     `cooldownSymbol`, `tagMovedSymbol`); nil keeps the default.
     ///   - density: Which board's proportions.
     ///   - trailing: The one control at the trailing end; nil when the board draws none.
     public init(
-        _ kind: Kind, title: String? = nil, text: String, monoFragment: String? = nil, symbol: String? = nil,
-        density: Density = .banner, trailing: Trailing? = nil
+        _ kind: Kind, title: String? = nil, text: String, monoFragment: String? = nil, emphasis: String? = nil,
+        symbol: String? = nil, density: Density = .banner, trailing: Trailing? = nil
     ) {
         self.kind = kind
         self.title = title
         self.text = text
         self.monoFragment = monoFragment
+        self.emphasis = emphasis
         self.symbol = symbol ?? Self.symbol(for: kind)
         self.density = density
         self.trailing = trailing
@@ -96,7 +115,8 @@ public struct MessageStrip: View {
     /// The kind's default symbol, as the Components board draws it.
     nonisolated static func symbol(for kind: Kind) -> String {
         switch kind {
-        case .info: infoSymbol
+        case .neutral, .info: infoSymbol
+        case .ok: okSymbol
         case .warning: warningSymbol
         case .error: errorSymbol
         }
@@ -135,9 +155,19 @@ public struct MessageStrip: View {
     private var statusColor: Color { Color.statusText(kind.severity) }
 
     private var label: Text {
-        let sentence = FailureBanner.styled(text, fragment: monoFragment, font: bodyFont)
+        let sentence = styledSentence
         guard let title, !title.isEmpty else { return sentence }
         return Text(title).font(titleFont) + Text(" ").font(bodyFont) + sentence
+    }
+
+    /// The sentence with its mono fragment, or else its semibold emphasis.
+    private var styledSentence: Text {
+        guard monoFragment == nil, let emphasis, !emphasis.isEmpty, let range = text.range(of: emphasis) else {
+            return FailureBanner.styled(text, fragment: monoFragment, font: bodyFont)
+        }
+        return Text(text[..<range.lowerBound]).font(bodyFont)
+            + Text(text[range]).font(titleFont)
+            + Text(text[range.upperBound...]).font(bodyFont)
     }
 
     @ViewBuilder
@@ -153,6 +183,13 @@ public struct MessageStrip: View {
                 Text(title)
                     .font(Font.Token.calloutSemibold)
                     .foregroundStyle(statusColor)
+            }
+            .buttonStyle(.plain)
+        case .accentLink(let title, let action):
+            Button(action: action) {
+                Text(title)
+                    .font(Font.Token.calloutMedium)
+                    .foregroundStyle(Color.accent)
             }
             .buttonStyle(.plain)
         }

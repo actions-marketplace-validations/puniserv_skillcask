@@ -28,10 +28,13 @@ public struct SkillEntry: Identifiable, Hashable, Sendable {
     /// Relative to the scope root, from `audit`.
     public let path: String?
     public let description: String?
+    /// What the text mentions, from the same `audit` row; nil when `audit` did not list the skill (a not managed
+    /// skill on a CLI without the planned `auditNotManaged`, or no audit at all): "not audited", not "clean".
+    public let reach: Reach?
 
     public init(
         id: String, name: String, kind: Kind, source: String?, version: String?, state: SkillState, health: Health,
-        update: Update?, findings: [AuditDocument.Finding], path: String?, description: String?
+        update: Update?, findings: [AuditDocument.Finding], path: String?, description: String?, reach: Reach? = nil
     ) {
         self.id = id
         self.name = name
@@ -44,6 +47,7 @@ public struct SkillEntry: Identifiable, Hashable, Sendable {
         self.findings = findings
         self.path = path
         self.description = description
+        self.reach = reach
     }
 
     public var package: String? {

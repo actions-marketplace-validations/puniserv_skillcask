@@ -3,14 +3,23 @@ import SwiftUI
 
 /// The segmented filter above the list: one `FilterChip` per `Filter`, titles from `FilterCopy`, exactly one
 /// active. "Needs attention" counts in the error colour, "Updates" in the update colour, the rest carry no badge.
+/// A dimmed chip (List-States offline: "Updates" at 50 %) stays selectable but reads as unavailable.
 public struct FilterChipBar: View {
     public let filters: [Filter]
     public let counts: [Filter: Int]
+    public let dimmed: Set<Filter>
     @Binding public var selection: Filter
 
-    public init(filters: [Filter] = Filter.allCases, counts: [Filter: Int] = [:], selection: Binding<Filter>) {
+    /// List-States offline draws the Updates chip at `opacity: 0.5`.
+    public static let dimmedOpacity: Double = 0.5
+
+    public init(
+        filters: [Filter] = Filter.allCases, counts: [Filter: Int] = [:], dimmed: Set<Filter> = [],
+        selection: Binding<Filter>
+    ) {
         self.filters = filters
         self.counts = counts
+        self.dimmed = dimmed
         _selection = selection
     }
 
@@ -44,6 +53,7 @@ public struct FilterChipBar: View {
                     ) {
                         selection = filter
                     }
+                    .opacity(dimmed.contains(filter) ? Self.dimmedOpacity : 1)
                 }
             }
         }

@@ -5,12 +5,70 @@ import SkillcaskCore
 /// optional because updates are only known after an explicit check.
 public struct ScopeSnapshot: Hashable, Sendable {
     public struct PolicyRow: Hashable, Sendable, Identifiable {
+        /// The policy keys of `src/policy.rs`, typed; a key this app does not know survives as `.other`.
+        public enum Kind: Hashable, Sendable {
+            case allowSources
+            case minReleaseAge
+            case allowRanges
+            case other(String)
+
+            public init(key: String) {
+                switch key {
+                case "allow-sources": self = .allowSources
+                case "min-release-age": self = .minReleaseAge
+                case "allow-ranges": self = .allowRanges
+                default: self = .other(key)
+                }
+            }
+
+            /// The Overview board's row order: minimum release age, allowed sources, ranges allowed, then any other
+            /// key; ties (two unknown keys) fall back to the key's spelling.
+            public var rank: Int {
+                switch self {
+                case .minReleaseAge: 0
+                case .allowSources: 1
+                case .allowRanges: 2
+                case .other: 3
+                }
+            }
+
+            /// Whether the row of `key` comes before the row of `other` in the board's order.
+            public static func precedes(_ key: String, _ other: String) -> Bool {
+                let (left, right) = (Kind(key: key).rank, Kind(key: other).rank)
+                return left == right ? key < other : left < right
+            }
+        }
+
+        /// What the CLI prints as `from` for a key the user's config enforces (`src/policy.rs` `ENFORCED`).
+        public static let enforcedOrigin = "config.toml, enforced"
+
         public let key: String
         public let value: String
+        /// Where the value came from, as the CLI prints it: `skills.toml`, `config.toml`, `config.toml, enforced`,
+        /// `env`, `default`.
         public let from: String
 
         public var id: String {
             key
+        }
+
+        public var kind: Kind {
+            Kind(key: key)
+        }
+
+        /// The `allow-sources` list, whose value the Overview draws in mono.
+        public var isAllowedSources: Bool {
+            kind == .allowSources
+        }
+
+        /// Set by the organisation's `config.toml` and not overridable by the project (`ENFORCED` in policy.rs).
+        public var isEnforced: Bool {
+            from == Self.enforcedOrigin
+        }
+
+        /// The file or layer the value was set in, without the enforcement note: `config.toml`.
+        public var origin: String {
+            isEnforced ? String(from.prefix { $0 != "," }) : from
         }
     }
 
@@ -50,10 +108,10 @@ public struct ScopeSnapshot: Hashable, Sendable {
             return SkillEntry(
                 id: name, name: name, kind: kind, source: entry.source, version: entry.version, state: state,
                 health: HealthMapping.health(state: state, update: update, findings: findings), update: update,
-                findings: findings, path: skill?.path, description: entry.description)
+                findings: findings, path: skill?.path, description: entry.description, reach: skill.map(Reach.init))
         }
         attention = Attention(entries)
-        policy = status.policy.keys.sorted()
+        policy = status.policy.keys.sorted { PolicyRow.Kind.precedes($0, $1) }
             .map {
                 PolicyRow(key: $0, value: status.policy[$0]?.value.shown ?? "", from: status.policy[$0]?.from ?? "")
             }

@@ -70,7 +70,7 @@ private struct CardsSample: View {
         CardContainer(title: "Health", status: "2 problems", severity: .error, onTitleTap: openList) {
             HStack(spacing: Spacing.inline) {
                 Button("Repair") {}.buttonStyle(.bordered)
-                Button("Sync") {}.buttonStyle(.borderedProminent)
+                Button("Sync") {}.buttonStyle(.borderedProminent).tint(Color.accent)
             }
             .controlSize(.small)
         } content: {
@@ -192,7 +192,7 @@ private struct CardsSample: View {
 
     private func enforced(_ file: String) -> Text {
         Text(file).font(Font.Token.monoSmall) + Text(CardCopy.separator)
-            + Text("enforced").foregroundStyle(Color.statusText(.warning))
+            + Text(OverviewCopy.enforced).foregroundStyle(Color.statusText(.warning))
     }
 
     private var agents: some View {

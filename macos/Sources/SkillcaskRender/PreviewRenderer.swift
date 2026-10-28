@@ -8,6 +8,8 @@ import SwiftUI
 enum PreviewRenderer {
     /// Pixels per point of every PNG; fixed so CI and non-Retina machines produce the same files.
     static let scale: CGFloat = 2
+    /// How long the run loop turns before the bitmap is taken, so AppKit-backed containers finish their layout.
+    static let settleTime: TimeInterval = 0.3
 
     /// The two outputs of every entry, in the order they are rendered.
     enum Scheme: String, CaseIterable {
@@ -43,6 +45,18 @@ enum PreviewRenderer {
         window.contentView = host
         window.layoutIfNeeded()
         host.layoutSubtreeIfNeeded()
+        // A `NavigationSplitView` (NSSplitViewController) and a `List` (NSTableView) lay out on the next run-loop
+        // turn, not in `layoutSubtreeIfNeeded`; without this turn the columns draw unsized at the window's origin.
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: settleTime))
+        window.layoutIfNeeded()
+        host.layoutSubtreeIfNeeded()
+        // A `List` draws its selection on the accent only as first responder; the content column's table (the one
+        // with the most rows) is the one a user would be in. The sidebar keeps the inactive grey, as in the live
+        // window when the list has focus.
+        if let table = tables(in: host).max(by: { $0.numberOfRows < $1.numberOfRows }) {
+            window.makeFirstResponder(table)
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: settleTime / 3))
+        }
         let pixelsWide = Int(size.width * scale)
         let pixelsHigh = Int(size.height * scale)
         guard
@@ -54,6 +68,18 @@ enum PreviewRenderer {
         rep.size = host.bounds.size
         host.cacheDisplay(in: host.bounds, to: rep)
         return rep.representation(using: .png, properties: [:])
+    }
+
+    /// Every `NSTableView` under `view`, outermost first, in view order.
+    private static func tables(in view: NSView) -> [NSTableView] {
+        var found: [NSTableView] = []
+        if let table = view as? NSTableView {
+            found.append(table)
+        }
+        for subview in view.subviews {
+            found += tables(in: subview)
+        }
+        return found
     }
 
     /// SwiftUI's `ImageRenderer` with the colour scheme in the environment: pure drawing, no AppKit controls.

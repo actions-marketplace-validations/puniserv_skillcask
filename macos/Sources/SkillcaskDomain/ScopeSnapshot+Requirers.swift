@@ -16,6 +16,16 @@ extension ScopeSnapshot {
         return Array(Set(names)).sorted()
     }
 
+    /// The names of the skills that stand for `package` in this snapshot (its own rows, or a not managed row whose
+    /// adopt spec names it), sorted and without duplicates: how the Overview tab rewords `info`'s
+    /// `required by juliusbrussee/caveman (4.0.1)` as `caveman (4.0.1)`. Empty when no row belongs to it.
+    public func skillNames(ofPackage package: String) -> [String] {
+        let names = entries.compactMap { candidate -> String? in
+            Self.requiringPackage(of: candidate) == package ? candidate.name : nil
+        }
+        return Array(Set(names)).sorted()
+    }
+
     /// The package a row stands for: its own, or the adopt spec of a not managed row without its `scheme:`.
     private static func requiringPackage(of entry: SkillEntry) -> String? {
         if let package = entry.package {

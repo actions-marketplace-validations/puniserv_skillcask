@@ -9,11 +9,17 @@ public struct SkillText: Hashable, Sendable {
     public let frontMatter: [(key: String, value: String)]
     public let body: String
     public let truncated: Bool
+    /// The 1-based line of the file where `body` starts: 1 without front matter, else the line after the closing
+    /// `---`. An audit finding's `line` (a file line) is `bodyStartLine + n` for body line `n` (0-based).
+    public let bodyStartLine: Int
 
-    public init(frontMatter: [(key: String, value: String)], body: String, truncated: Bool) {
+    public init(
+        frontMatter: [(key: String, value: String)], body: String, truncated: Bool, bodyStartLine: Int = 1
+    ) {
         self.frontMatter = frontMatter
         self.body = body
         self.truncated = truncated
+        self.bodyStartLine = bodyStartLine
     }
 
     /// Reads and escapes; the caller runs this off the main actor.
@@ -27,6 +33,7 @@ public struct SkillText: Hashable, Sendable {
     public static func parse(_ text: String, truncated: Bool = false) -> SkillText {
         var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map { shown(String($0)) }
         var frontMatter: [(key: String, value: String)] = []
+        var bodyStartLine = 1
         if lines.first == "---", let end = lines.dropFirst().firstIndex(of: "---") {
             for line in lines[1..<end] {
                 guard let colon = line.firstIndex(of: ":") else { continue }
@@ -37,8 +44,11 @@ public struct SkillText: Hashable, Sendable {
                 }
             }
             lines.removeSubrange(0...end)
+            bodyStartLine = end + 2
         }
-        return SkillText(frontMatter: frontMatter, body: lines.joined(separator: "\n"), truncated: truncated)
+        return SkillText(
+            frontMatter: frontMatter, body: lines.joined(separator: "\n"), truncated: truncated,
+            bodyStartLine: bodyStartLine)
     }
 
     /// Control characters other than tab and newline, bidi controls, zero-width characters and Unicode tags as
@@ -78,7 +88,7 @@ public struct SkillText: Hashable, Sendable {
 
 extension SkillText {
     public static func == (lhs: SkillText, rhs: SkillText) -> Bool {
-        lhs.body == rhs.body && lhs.truncated == rhs.truncated
+        lhs.body == rhs.body && lhs.truncated == rhs.truncated && lhs.bodyStartLine == rhs.bodyStartLine
             && lhs.frontMatter.map(\.key) == rhs.frontMatter.map(\.key)
             && lhs.frontMatter.map(\.value) == rhs.frontMatter.map(\.value)
     }
@@ -86,6 +96,7 @@ extension SkillText {
     public func hash(into hasher: inout Hasher) {
         hasher.combine(body)
         hasher.combine(truncated)
+        hasher.combine(bodyStartLine)
         for (key, value) in frontMatter {
             hasher.combine(key)
             hasher.combine(value)

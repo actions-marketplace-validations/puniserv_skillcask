@@ -6,10 +6,9 @@ extension PreviewRegistry {
     /// dependency, not managed with a known and an unknown source, abandoned, up to date, and offline (pdf from
     /// the offline snapshot, where `outdated` never answered).
     ///
-    /// `project` and `notManagedUnknown` read "2 findings" / "1 finding" where the board reads "Project skill" /
-    /// "Not managed": the api and personal audit fixtures give my-notes and standup-summary findings, and
-    /// `Health` ranks findings first. `projectClean` is my-notes without findings, so the board's exact state
-    /// line renders too.
+    /// The state line states `status.state` (`DetailHeader.stateHealth`, P3-3), so `project` and
+    /// `notManagedUnknown` read "Project skill" / "Not managed" although their fixtures carry findings.
+    /// `projectClean` is my-notes without findings and renders the same line.
     static let detailHeader: [Entry] = [
         Entry(id: "P2-6", state: "update", size: CGSize(width: 600, height: 260)) {
             AnyView(DetailHeaderSample(entry: DesignFixtures.pdf))
