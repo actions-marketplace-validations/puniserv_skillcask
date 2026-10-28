@@ -49,18 +49,22 @@ pub enum Color {
     Yellow,
     Cyan,
     Dim,
+    Bold,
 }
 
 fn paint(c: Color, s: impl Display, on: bool) -> String {
     if !on {
         return s.to_string();
     }
+    // No bold with a colour: terminals that show bold in bright colours (iTerm's default) turn
+    // bright green, yellow and cyan into the greys of Solarized and similar palettes.
     let code = match c {
-        Color::Red => "1;31",
-        Color::Green => "1;32",
-        Color::Yellow => "1;33",
-        Color::Cyan => "1;36",
+        Color::Red => "31",
+        Color::Green => "32",
+        Color::Yellow => "33",
+        Color::Cyan => "36",
         Color::Dim => "2",
+        Color::Bold => "1",
     };
     format!("\x1b[{code}m{s}\x1b[0m")
 }
@@ -130,7 +134,7 @@ pub fn table<const N: usize>(rows: &[[String; N]], color: impl Fn(usize, &str) -
             .map(|(i, c)| {
                 let padded = format!("{c:w$}", w = w[i]);
                 match (n, color(i, c)) {
-                    (0, _) => out(Color::Dim, padded),
+                    (0, _) => out(Color::Bold, padded),
                     (_, Some(k)) => out(k, padded),
                     _ => padded,
                 }
@@ -138,6 +142,29 @@ pub fn table<const N: usize>(rows: &[[String; N]], color: impl Fn(usize, &str) -
             .collect();
         println!("{}", cells.join("  ").trim_end());
     }
+}
+
+/// `head` and `items` comma-separated, wrapped to the terminal width with an indent.
+pub fn wrapped(head: &str, items: &[String]) {
+    let width = ratatui::crossterm::terminal::size().map_or(80, |(w, _)| w as usize).max(40);
+    for l in wrap(head, items, width) {
+        println!("{l}");
+    }
+}
+
+fn wrap(head: &str, items: &[String], width: usize) -> Vec<String> {
+    let mut lines = vec![head.to_string()];
+    for (n, i) in items.iter().enumerate() {
+        let item = if n + 1 < items.len() { format!("{i},") } else { i.clone() };
+        let l = lines.last_mut().expect("starts with the head");
+        if l.chars().count() + 1 + item.chars().count() <= width {
+            l.push(' ');
+            l.push_str(&item);
+        } else {
+            lines.push(format!("  {item}"));
+        }
+    }
+    lines
 }
 
 #[cfg(test)]
@@ -169,8 +196,15 @@ mod tests {
         assert!(detect(false, env(&[("CLICOLOR_FORCE", "1")]), false, false).color_err);
         assert!(!detect(false, env(&[("CLICOLOR_FORCE", "0")]), false, false).color_err);
         assert!(!detect(true, env(&[("CLICOLOR_FORCE", "1")]), true, true).color_out, "agents get no colour");
-        assert_eq!(paint(Color::Red, "x", true), "\x1b[1;31mx\x1b[0m");
+        assert_eq!(paint(Color::Red, "x", true), "\x1b[31mx\x1b[0m");
         assert_eq!(paint(Color::Red, "x", false), "x");
+    }
+
+    #[test]
+    fn wraps_lists_to_the_width() {
+        let items: Vec<String> = ["alpha", "beta", "gamma", "delta"].map(String::from).to_vec();
+        assert_eq!(wrap("2 x:", &items, 20), ["2 x: alpha, beta,", "  gamma, delta"]);
+        assert_eq!(wrap("x:", &["a-very-long-name".into()], 5), ["x:", "  a-very-long-name"]);
     }
 
     #[test]

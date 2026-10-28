@@ -20,10 +20,15 @@ which echoes nothing, so a user cannot tell whether the paste arrived.
   `warning`, cyan `hint` and `note`, green verbs (`installed`, `added`…) and states (`ok`). `NO_COLOR`
   (non-empty) turns it off, `CLICOLOR_FORCE` (non-empty, not `0`) on. On Windows only inside
   Windows Terminal (`WT_SESSION`), since the legacy console prints the escape codes. Plain ANSI
-  codes, no new dependency.
+  codes, no new dependency. Colours are never bold: terminals that draw bold in bright colours
+  (iTerm's default) show bright green, yellow and cyan as the greys of Solarized-like palettes.
+  Table headers are bold without a colour; only `ok` is green, other healthy states stay plain.
 - Errors keep their message and may carry a hint, printed as its own line:
   `error: the home directory is the global scope` / `  hint: run skillcask --global install`.
-- `status` for a person: the table with coloured states and a summary line. For an agent: rows
+- `status` for a person: the table with coloured states, a dependency's requirers as a trailing
+  `via …` cell (never inside the `package` column, which would widen every row), skills that
+  skillcask does not manage as one count and a list wrapped to the terminal width instead of
+  rows, and a summary line. For an agent: rows
   with a problem only, fields separated by tabs, then one summary line.
 - `doctor` for a person: the checks that passed (`✓ links: 12 ok`), then problems (`✗`), repairs
   (`✓`) and warnings (`!`) grouped, then a summary. For an agent: problems, repairs and warnings

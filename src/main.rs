@@ -2,6 +2,7 @@
 
 mod archive;
 mod commands;
+mod config;
 mod credential;
 mod deps;
 mod diff;
@@ -17,6 +18,7 @@ mod publish;
 mod registry;
 mod scope;
 mod skill;
+mod tui;
 mod ui;
 mod version;
 
@@ -87,7 +89,8 @@ enum Cmd {
     Add {
         /// vendor/name[@constraint], github:owner/repo[/skill][@version-or-ref], or
         /// git:https://host/owner/repo.git[@version-or-ref]
-        package: String,
+        #[arg(required_unless_present = "all")]
+        package: Option<String>,
         /// Repository name from [repositories].
         #[arg(long)]
         repository: Option<String>,
@@ -95,6 +98,9 @@ enum Cmd {
         /// ~/.config/skillcask/adopted/ and install the package's in its place.
         #[arg(long)]
         adopt: bool,
+        /// With --adopt: adopt every skill not managed whose source `npx skills` recorded.
+        #[arg(long, requires = "adopt", conflicts_with_all = ["package", "repository"])]
+        all: bool,
     },
     /// Remove packages from skills.toml and skills.lock, with their files and links.
     Remove {
@@ -169,11 +175,38 @@ enum Cmd {
         #[arg(long)]
         sarif: bool,
     },
-    /// Search for skill packages.
+    /// Search for skill packages; with skills.sh on, also the GitHub skills it lists.
     Search {
-        query: String,
+        /// Optional with --remember, which then only saves the choice.
+        #[arg(required_unless_present = "remember")]
+        query: Option<String>,
         /// Print one JSON document instead of text (D32).
         #[arg(long)]
+        json: bool,
+        /// Also search skills.sh (it receives the query) for this run.
+        #[arg(long, conflicts_with = "no_skills_sh")]
+        skills_sh: bool,
+        /// Do not search skills.sh for this run.
+        #[arg(long)]
+        no_skills_sh: bool,
+        /// Save --skills-sh or --no-skills-sh as [search] skills-sh in config.toml.
+        #[arg(long)]
+        remember: bool,
+    },
+    /// Show or change settings with their origin: [policy] and [agents] targets of skills.toml, or
+    /// with --global of config.toml, which also has policy.enforce and search.skills-sh.
+    Config {
+        /// A key such as policy.min-release-age, or `edit` to open the file in $VISUAL or $EDITOR;
+        /// none lists every setting.
+        key: Option<String>,
+        /// The value to set; a list takes one argument per entry.
+        #[arg(conflicts_with = "unset")]
+        value: Vec<String>,
+        /// Remove the key from the file.
+        #[arg(long, requires = "key")]
+        unset: bool,
+        /// Print one JSON document instead of text (D32).
+        #[arg(long, conflicts_with_all = ["value", "unset"])]
         json: bool,
     },
     /// Keep a registry token in git's credential helper (Keychain, Credential Manager, libsecret).
@@ -201,6 +234,16 @@ enum Cmd {
         /// Skill directories, or directories to search for SKILL.md (default: the current one).
         paths: Vec<PathBuf>,
     },
+    /// List directories that hold skills.toml under the given ones (default: the current one),
+    /// skipping hidden directories, node_modules, vendor, target and Library.
+    Projects {
+        dirs: Vec<PathBuf>,
+        /// Print one JSON document instead of text (D32).
+        #[arg(long)]
+        json: bool,
+    },
+    /// Browse, add, update and remove skills in a terminal UI; it runs this binary for every step.
+    Ui,
     /// Any other command runs `skillcask-<command>` from PATH, like git and cargo plugins.
     #[command(external_subcommand)]
     External(Vec<OsString>),
@@ -228,7 +271,8 @@ fn run(cli: Cli) -> Result<(), Error> {
         unpacked: cli.max_unpacked.unwrap_or(d.unpacked),
         files: cli.max_files.unwrap_or(d.files),
     };
-    if cli.global && matches!(cli.cmd, Cmd::External(_) | Cmd::Publish { .. } | Cmd::Auth(_) | Cmd::Validate { .. }) {
+    if cli.global && matches!(cli.cmd, Cmd::External(_) | Cmd::Publish { .. } | Cmd::Auth(_) | Cmd::Validate { .. } | Cmd::Projects { .. })
+    {
         return Err(Error::new(MANIFEST, "--global does not apply to this command"));
     }
     if let Cmd::External(args) = &cli.cmd {
@@ -239,6 +283,12 @@ fn run(cli: Cli) -> Result<(), Error> {
     }
     if let Cmd::Validate { paths } = &cli.cmd {
         return publish::validate(paths);
+    }
+    if let Cmd::Projects { dirs, json } = &cli.cmd {
+        return commands::projects(dirs, *json);
+    }
+    if let Cmd::Ui = cli.cmd {
+        return tui::run(cli.global);
     }
     let scope = if cli.global {
         Scope::global()?
@@ -258,9 +308,12 @@ fn run(cli: Cli) -> Result<(), Error> {
     ctx.read_only = matches!(cli.cmd, Cmd::Info { .. } | Cmd::Diff { .. });
     match cli.cmd {
         Cmd::Init => commands::init(&ctx),
-        Cmd::Add { package, repository, adopt } => {
+        Cmd::Add { package, repository, adopt, .. } => {
             ctx.adopt = adopt;
-            commands::add(&ctx, &package, repository)
+            match package {
+                Some(p) => commands::add(&ctx, &p, repository),
+                None => commands::adopt_all(&ctx),
+            }
         }
         Cmd::Remove { packages } => commands::remove(&ctx, &packages),
         Cmd::Install { frozen } => commands::install(&ctx, frozen || ci()),
@@ -274,8 +327,15 @@ fn run(cli: Cli) -> Result<(), Error> {
         Cmd::Status { json } => commands::status(&ctx, json),
         Cmd::Doctor { fix, json } => commands::doctor(&ctx, fix, json),
         Cmd::Audit { json, sarif } => commands::audit(&ctx, json, sarif),
-        Cmd::Search { query, json } => commands::search(&ctx, &query, json),
-        Cmd::External(_) | Cmd::Auth(_) | Cmd::Validate { .. } => unreachable!("handled above"),
+        Cmd::Search { query, json, skills_sh, no_skills_sh, remember } => {
+            let choice = (skills_sh || no_skills_sh).then_some(skills_sh);
+            if remember && choice.is_none() {
+                return Err(Error::new(MANIFEST, "--remember needs --skills-sh or --no-skills-sh"));
+            }
+            commands::search(&ctx, query.as_deref(), json, choice, remember)
+        }
+        Cmd::Config { key, value, unset, json } => config::run(&ctx.s, key.as_deref(), &value, unset, json),
+        Cmd::External(_) | Cmd::Auth(_) | Cmd::Validate { .. } | Cmd::Projects { .. } | Cmd::Ui => unreachable!("handled above"),
         Cmd::Publish { vendor, base_url, dist_url, inline, out, paths } => {
             if vendor.is_empty() {
                 return Err(Error::new(MANIFEST, "--vendor must not be empty"));
@@ -337,7 +397,9 @@ fn main() {
         std::process::exit(if e.use_stderr() { MANIFEST.into() } else { 0 });
     });
     ui::init(cli.agent);
-    if let Err(e) = run(cli) {
+    let r = run(cli);
+    project::end_runs();
+    if let Err(e) = r {
         ui::error(&e.msg, e.hint.as_deref());
         std::process::exit(e.code.into());
     }

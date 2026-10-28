@@ -220,18 +220,15 @@ fn merge(m: &Manifest, name: &str, base: Option<&SkillReq>, asks: &[Ask]) -> Res
     let wanted_skills: Option<BTreeSet<&String>> =
         if asks.iter().any(|a| a.skill.is_none()) { None } else { Some(asks.iter().filter_map(|a| a.skill.as_ref()).collect()) };
     let skills = match (base, wanted_skills) {
-        (Some(b), want) => {
-            if let Some(sel) = &b.skills {
-                let missing = match &want {
-                    None => true,
-                    Some(w) => w.iter().any(|s| !sel.contains(s)),
-                };
-                if missing {
-                    return Err(conflict("required skills are not all in its skills = [...]"));
-                }
+        // D44: requirers widen the manifest's selection, as they do for a package without an entry.
+        (Some(b), want) => match (&b.skills, want) {
+            (Some(sel), Some(w)) => {
+                let mut all: BTreeSet<String> = sel.iter().cloned().collect();
+                all.extend(w.into_iter().cloned());
+                Some(all.into_iter().collect())
             }
-            b.skills.clone()
-        }
+            _ => None,
+        },
         (None, want) => want.map(|w| w.into_iter().cloned().collect()),
     };
     let mut req =
@@ -366,9 +363,10 @@ mod tests {
     }
 
     #[test]
-    fn a_manifest_selection_must_cover_required_skills() {
+    fn requirers_widen_a_manifest_selection() {
         let m = manifest("\"acme/a\" = \"^1\"\n\"o/r\" = { github = true, ref = \"main\", skills = [\"tdd\"] }", "github-requires = true");
-        let l = lock(&[("acme/a", "^1", "\"github:o/r/pr\" = \"main\"")]);
-        assert!(wanted(&m, &l).unwrap_err().msg.contains("skills = [...]"));
+        let skills_of = |l| wanted(&m, &l).unwrap().reqs.into_iter().find(|r| r.name == "o/r").unwrap().skills;
+        assert_eq!(skills_of(lock(&[("acme/a", "^1", "\"github:o/r/pr\" = \"main\"")])), Some(vec!["pr".to_string(), "tdd".to_string()]));
+        assert_eq!(skills_of(lock(&[("acme/a", "^1", "\"github:o/r\" = \"main\"")])), None);
     }
 }

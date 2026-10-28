@@ -155,6 +155,22 @@ fn allow_sources_applies_by_url_prefix_and_drift_fails_frozen() {
 }
 
 #[test]
+fn dot_segments_do_not_escape_an_enforced_prefix() {
+    let s = Server::start();
+    let r = repo();
+    commit(r.path(), &[("SKILL.md", &skill_md("tool"))], 300, Some("v1.0.0"));
+    served(&s, r.path());
+    let p = Project::new(&s);
+    p.config(&format!("[policy]\nallow-sources = [\"{}\"]\nenforce = [\"allow-sources\"]\n", s.url("/trusted/")));
+    manifest(&p, "", "");
+    // The request would go to /acme/skills.git, outside the prefix the string starts with.
+    let out = p.expect(&["add", &format!("git:{}", s.url("/trusted/../acme/skills.git"))], 1);
+    assert!(out.contains("not in policy.allow-sources"), "{out}");
+    assert!(s.log().is_empty(), "{:?}", s.log());
+    assert!(!p.exists("skills.lock"));
+}
+
+#[test]
 fn credentials_come_from_auth_json() {
     let s = Server::start();
     let r = repo();
@@ -168,6 +184,32 @@ fn credentials_come_from_auth_json() {
     p.write("auth.json", &json!({ "bearer": { host: "t0ken" } }).to_string());
     p.ok(&["add", &format!("git:{url}")]);
     assert!(s.requests().iter().any(|r| r.path.ends_with("/git-upload-pack")));
+}
+
+#[test]
+fn github_token_goes_to_a_git_host_only_when_the_user_names_it() {
+    let s = Server::start();
+    let r = repo();
+    commit(r.path(), &[("SKILL.md", &skill_md("tool"))], 300, Some("v1.0.0"));
+    let url = served(&s, r.path());
+    let mut p = Project::new(&s);
+    p.env.push(("GITHUB_TOKEN".into(), "ght0ken".into()));
+    // The project names the git host as its GitHub API; that does not make it trusted.
+    p.write(
+        "skills.toml",
+        &format!(
+            "[repositories]\npackagist = false\ngithub = {{ type = \"github\", url = \"{}\" }}\n\n[agents]\ntargets = [\".claude/skills\"]\n",
+            s.url("/api")
+        ),
+    );
+    p.ok(&["add", &format!("git:{url}")]);
+    assert!(!s.log().is_empty() && s.log().iter().all(|l| l.ends_with("auth=false")), "{:?}", s.log());
+
+    // The user names it (GitHub Enterprise): the token goes along.
+    std::fs::remove_file(p.path().join("skills.lock")).unwrap();
+    p.env.push(("SKILLCASK_GITHUB_API".into(), s.url("/api")));
+    p.ok(&["update"]);
+    assert!(s.log().iter().any(|l| l.ends_with("auth=true")), "{:?}", s.log());
 }
 
 #[test]

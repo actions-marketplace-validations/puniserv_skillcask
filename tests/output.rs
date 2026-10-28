@@ -92,8 +92,8 @@ fn colour_follows_clicolor_force_and_no_color() {
     let mut p = Project::new(&s);
     p.env.push(("CLICOLOR_FORCE".into(), "1".into()));
     let out = p.expect(&["status"], 1);
-    assert!(out.contains("\x1b[1;31merror\x1b[0m: skills.toml not found"), "{out:?}");
-    assert!(out.contains("\x1b[1;36mhint\x1b[0m: run skillcask init"), "{out:?}");
+    assert!(out.contains("\x1b[31merror\x1b[0m: skills.toml not found"), "{out:?}");
+    assert!(out.contains("\x1b[36mhint\x1b[0m: run skillcask init"), "{out:?}");
     p.env.push(("NO_COLOR".into(), "1".into()));
     let out = p.expect(&["status"], 1);
     assert!(!out.contains('\x1b') && out.contains("error: skills.toml not found\n  hint: run skillcask init"), "{out:?}");
@@ -107,4 +107,21 @@ fn the_home_directory_error_names_the_way_out() {
     let out = p.expect(&["install"], 1);
     assert!(out.contains("error: the home directory is the global scope, not a project"), "{out}");
     assert!(out.contains("  hint: manage personal skills with --global, e.g. skillcask --global install"), "{out}");
+}
+
+#[test]
+fn ui_refuses_to_start_without_a_terminal() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_skillcask")).arg("ui").output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("skillcask ui needs a terminal"), "{out:?}");
+}
+
+#[test]
+fn install_confirms_what_is_installed_to_a_person_only() {
+    let s = Server::start();
+    let mut p = installed(&s);
+    // Regression: with nothing to do, install printed nothing and looked hung or broken.
+    assert_eq!(p.ok(&["install"]).trim(), "✓ 1 skill(s) match skills.lock");
+    p.env.push(("SKILLCASK_AGENT".into(), "1".into()));
+    assert_eq!(p.ok(&["install"]).trim(), "");
 }

@@ -428,3 +428,24 @@ fn a_store_file_spelled_in_nfd_is_not_modified() {
     p.write(".agents/skills/one/cafe\u{301}.md", "changed");
     assert!(p.expect(&["status"], 1).contains("modified"));
 }
+
+#[test]
+fn a_finished_run_leaves_no_run_lock() {
+    let s = Server::start();
+    let p = one(&s);
+    let runs = || {
+        std::fs::read_dir(p.path().join(".agents/skills"))
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".skillcask-run-"))
+            .count()
+    };
+    // Regression: a failed install left its lock behind, and before the first success no
+    // .gitignore block hid them from git status.
+    p.write(".claude/skills/one/SKILL.md", "mine");
+    p.expect(&["install"], 1);
+    assert_eq!(runs(), 0);
+    std::fs::remove_dir_all(p.path().join(".claude/skills/one")).unwrap();
+    p.ok(&["install"]);
+    assert_eq!(runs(), 0);
+}

@@ -27,6 +27,34 @@ pub fn api() -> String {
     std::env::var("SKILLCASK_GITHUB_API").ok().filter(|v| !v.is_empty()).unwrap_or_else(set).trim_end_matches('/').to_string()
 }
 
+/// The API base the user or the CI runner chose, never a project: `SKILLCASK_GITHUB_API`, else
+/// GitHub Actions' `GITHUB_API_URL`, else `api.github.com`. Only its host gets `GITHUB_TOKEN`, and
+/// only it is `"github"` in an `allow-sources` a project cannot change (D43).
+pub fn trusted_api() -> String {
+    ["SKILLCASK_GITHUB_API", "GITHUB_API_URL"]
+        .into_iter()
+        .find_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()))
+        .map_or_else(|| API.to_string(), |v| v.trim_end_matches('/').to_string())
+}
+
+/// `url` is on the trusted API's host, keyed as `GITHUB_TOKEN` is: scheme, host and port.
+pub fn on_trusted_host(url: &url::Url) -> bool {
+    url::Url::parse(&trusted_api()).is_ok_and(|a| a.origin() == url.origin())
+}
+
+/// How to authenticate to the API in use: `GITHUB_TOKEN` reaches the trusted host only.
+pub fn token_hint() -> String {
+    let Ok(u) = url::Url::parse(&api()) else { return "GITHUB_TOKEN".into() };
+    if on_trusted_host(&u) {
+        return "GITHUB_TOKEN".into();
+    }
+    let host = u.host_str().unwrap_or_default();
+    format!(
+        "a token for {host} (`skillcask auth set {} --username oauth2`, or github-oauth in auth.json)",
+        u.origin().ascii_serialization()
+    )
+}
+
 /// A run reads one manifest, so the first one sets the API base.
 pub fn set_api(url: &str) {
     let _ = CONFIGURED.set(url.to_string());
@@ -60,7 +88,7 @@ fn get(http: &Http, name: &str, path: &str) -> Result<Value> {
     let url = format!("{}{path}", repository(name).url);
     http.get_json(&url)?.ok_or_else(|| {
         // GitHub answers 404, not 401, for a private repository read without a token.
-        let hint = if http.has_credential(&url) { "" } else { "; private repositories need GITHUB_TOKEN" };
+        let hint = if http.has_credential(&url) { String::new() } else { format!("; private repositories need {}", token_hint()) };
         Error::new(MANIFEST, format!("GitHub: {name}: {path:?} not found (no such repository, ref or tag?{hint})"))
     })
 }

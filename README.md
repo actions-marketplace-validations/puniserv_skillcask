@@ -161,6 +161,9 @@ follow `config.toml`.
 # ~/.config/skillcask/config.toml
 [agents]
 targets = ["claude", "kiro"]
+
+[search]
+skills-sh = true   # search also asks skills.sh (it receives the query); written by search --remember or skillcask -g config search.skills-sh true
 ```
 
 When a target is dropped, the next `install` removes the links skillcask made there; `doctor`
@@ -271,7 +274,7 @@ skillcask -g install --frozen    # e.g. from a dotfiles repository
 
 ### Commands
 
-Every command except `publish` and `validate` takes `-g, --global`.
+Every command except `publish`, `validate` and `projects` takes `-g, --global`.
 
 | Command | |
 |---|---|
@@ -285,18 +288,24 @@ Every command except `publish` and `validate` takes `-g, --global`.
 | `outdated [--strict]` | Newer versions, when cooled-down ones become eligible, and GitHub or git tags moved since they were locked. `--strict` exits 1 when `update` would lock a newer version. |
 | `diff [vendor/name] [--to constraint\|--from old.lock]` | Unified diff of skill files from the locked version to the one `update` would lock, or from an older lock to `skills.lock`, see below. |
 | `info <vendor/name[@constraint]\|github:owner/repo\|git:url\|skill>` | A package's skills, versions, description, license and requirements, or which package installs a skill. |
-| `status` | Exit 1 when manifest, lock or installed files disagree. |
+| `status` | Exit 1 when manifest, lock or installed files disagree. Also lists the repositories in use (name, type, URL without credentials) and whether `allow-sources` admits each. |
 | `doctor [--fix]` | Broken or committed links, stale gitignore block, modified skills; lists each check it ran. |
 | `audit [--json\|--sarif]` | What each installed skill reaches (commands, hosts, paths, env vars, scripts) and its findings: modified files, risky lines, invisible characters. Exit 1 on any finding. |
-| `search <query>` | Packagist (`type=ai-agent-skill`) and skill packages of the other repositories, GitLab included. |
+| `config [key [value…]] [--unset] [--json]` | Settings with where each comes from: `[policy]` and `[agents] targets` of `skills.toml`, or with `-g` of `config.toml` (also `policy.enforce` and `search.skills-sh`). `config policy.min-release-age 5d` sets a key, `--unset` removes it, each checked before the file is written; `config edit` opens the file in `$VISUAL`/`$EDITOR` and checks it afterwards. |
+| `search [query] [--skills-sh\|--no-skills-sh [--remember]]` | Packagist (`type=ai-agent-skill`) and skill packages of the other repositories, GitLab included; with skills.sh on, also the GitHub skills it lists, as `github:owner/repo/skill` with their install count. skills.sh is off until you turn it on, since it receives the query: the first search in a terminal asks once, `--remember` saves a flag's choice (no query needed), both in `config.toml`. |
 | `auth set\|remove <host>` | Keep a registry token in git's credential helper (Keychain, Credential Manager, libsecret). |
 | `publish --vendor v --base-url URL --out DIR [--inline] [--dist-url TPL] [paths…]` | Build a static Composer repository from a monorepo. |
 | `validate [paths…]` | Check `SKILL.md` files against the Agent Skills spec, see below. |
+| `projects [dirs…]` | Directories that hold `skills.toml` under the given ones (default: the current one), up to 6 levels down; hidden directories, `node_modules`, `vendor`, `target` and `Library` are skipped. |
+| `ui` | A terminal UI over the commands above: skills with their state and updates, `info`, SKILL.md and `audit` per skill, add, adopt (also offered when an add hits a skill skillcask does not manage), update (diff first), remove, doctor, a filter of the list, search of the registries (and skills.sh, asked once), the repositories in use (`R`, `S` turns skills.sh on or off) and a projects picker; `g` switches between the project and `--global`. |
 | `<other>` | Runs `skillcask-<other>` from `PATH`, like git and cargo plugins. |
 
-`status`, `outdated`, `info`, `search`, `doctor` and `audit` take `--json`: one JSON document on one line of
+`status`, `outdated`, `info`, `search`, `doctor`, `audit`, `projects` and `config` take `--json`: one JSON document on one line of
 stdout, with the same exit code; warnings and errors stay on stderr. Package text in it is
-escaped as in the terminal (`<U+202E>`). For example `skillcask outdated --json | jq
+escaped as in the terminal (`<U+202E>`). `status --json` has `repositories`
+(`[{"name", "type", "url", "allowed"}]`) and `skills-sh`; `search --json` results carry `source` (the repository
+name, or `skills.sh`) and `installs`, and the document has `"skills-sh": true|false|null` (`null`:
+never decided). For example `skillcask outdated --json | jq
 '.packages[] | select(.within != .locked)'`.
 
 Exit codes: 0 ok, 1 manifest/lock/status problems, 2 authentication, 3 network, 4 hash mismatch,
@@ -396,7 +405,10 @@ GitHub allows 60 anonymous API requests per hour. `add`, `update` and `outdated`
 entry; `install` from the lock uses none, it downloads the pinned archive. Set `GITHUB_TOKEN`
 (GitHub Actions has one) or Composer's `"github-oauth": {"github.com": "<token>"}` in `auth.json`
 for a higher limit and for private repositories. `SKILLCASK_GITHUB_API` points at GitHub
-Enterprise (`https://ghe.example.com/api/v3`).
+Enterprise (`https://ghe.example.com/api/v3`). `GITHUB_TOKEN` is sent only to the API the user or
+the runner names: `SKILLCASK_GITHUB_API`, else GitHub Actions' `GITHUB_API_URL`, else
+`api.github.com`; for an Enterprise URL set only in `skills.toml`, use
+`skillcask auth set ghe.example.com --username oauth2` or `github-oauth` in `auth.json`.
 
 skills.sh itself is not queried: its API is undocumented and may change without notice. Search
 on the website, then add what you picked.

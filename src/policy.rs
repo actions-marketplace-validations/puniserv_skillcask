@@ -8,9 +8,10 @@ use jiff::SignedDuration;
 use toml_edit::{DocumentMut, Item, TableLike};
 
 use crate::bail;
-use crate::error::{Error, MANIFEST, Result};
+use crate::error::{Context, Error, MANIFEST, Result};
 
 pub const CONFIG: &str = "config.toml";
+pub const SKILLS_SH: &str = "skills-sh";
 pub const REPOSITORY_AGES: &str = "repository-min-release-age";
 pub const KEYS: [&str; 6] = ["min-release-age", "allow-ranges", "packagist", "github-requires", "allow-sources", "deny-patterns"];
 
@@ -53,6 +54,8 @@ pub struct Outer {
     pub env: Layer,
     /// `[agents] targets` of `config.toml` (D29).
     pub targets: Option<Vec<String>>,
+    /// `[search] skills-sh` of `config.toml` (D42); `None`: never decided.
+    pub skills_sh: Option<bool>,
 }
 
 /// Each key that is set, its value and the layer it came from.
@@ -66,7 +69,7 @@ fn key(k: &str) -> Option<&'static str> {
 /// repository name, checked against `[repositories]` by the manifest.
 fn check_source(s: &str, names: bool) -> std::result::Result<(), String> {
     let name = !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
-    if matches!(s, "packagist" | "github") || s.starts_with("https://") && s.len() > "https://".len() || names && name {
+    if matches!(s, "packagist" | "github") || s.starts_with("https://") && url::Url::parse(s).is_ok() || names && name {
         return Ok(());
     }
     Err(if name {
@@ -174,20 +177,32 @@ pub fn outer() -> Result<Outer> {
     let Some(path) = crate::scope::config_dir().map(|d| d.join(CONFIG)) else {
         return Ok(Outer { env, ..Default::default() });
     };
-    let (config, targets, config_path) = read_config(&path)?;
-    Ok(Outer { config, config_path, env, targets })
+    Ok(Outer { env, ..read_config(&path)? })
 }
 
-fn read_config(path: &Path) -> Result<(Layer, Option<Vec<String>>, String)> {
-    let text = match std::fs::read_to_string(path) {
-        Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Layer::default(), None, String::new())),
-        Err(e) => return Err(e.into()),
-    };
+fn read_config(path: &Path) -> Result<Outer> {
     let shown = path.display().to_string();
+    match std::fs::read_to_string(path) {
+        Ok(t) => parse_config(&t, &shown),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Outer::default()),
+        Err(e) => Err(e).ctx(&shown),
+    }
+}
+
+pub fn parse_config(text: &str, shown: &str) -> Result<Outer> {
     let doc: DocumentMut = text.parse().map_err(|e| Error::new(MANIFEST, format!("{shown}: {e}")))?;
-    if let Some((k, _)) = doc.iter().find(|(k, _)| !matches!(*k, "policy" | "agents")) {
-        bail!(MANIFEST, "{shown}: only [policy] and [agents] are read here, found {k}");
+    if let Some((k, _)) = doc.iter().find(|(k, _)| !matches!(*k, "policy" | "agents" | "search")) {
+        bail!(MANIFEST, "{shown}: only [policy], [agents] and [search] are read here, found {k}");
+    }
+    let mut skills_sh = None;
+    if let Some(s) = doc.get("search") {
+        let s = s.as_table_like().ok_or_else(|| Error::new(MANIFEST, format!("{shown}: search must be a table")))?;
+        for (k, item) in s.iter() {
+            if k != SKILLS_SH {
+                bail!(MANIFEST, "{shown}: search.{k} is not read here, only search.{SKILLS_SH}");
+            }
+            skills_sh = Some(item.as_bool().ok_or_else(|| Error::new(MANIFEST, format!("{shown}: search.{k} must be true or false")))?);
+        }
     }
     let mut targets = None;
     if let Some(a) = doc.get("agents") {
@@ -201,11 +216,53 @@ fn read_config(path: &Path) -> Result<(Layer, Option<Vec<String>>, String)> {
                 Some(list.ok_or_else(|| Error::new(MANIFEST, format!("{shown}: agents.targets must be a list of agent names or paths")))?);
         }
     }
-    Ok((layer(doc.get("policy").and_then(Item::as_table_like), &shown, true)?, targets, shown))
+    let config = layer(doc.get("policy").and_then(Item::as_table_like), shown, true)?;
+    Ok(Outer { config, config_path: shown.to_string(), env: Layer::default(), targets, skills_sh })
+}
+
+/// `config.toml` in the user's config dir, which need not exist yet.
+pub fn config_path() -> Result<std::path::PathBuf> {
+    match crate::scope::config_dir() {
+        Some(d) => Ok(d.join(CONFIG)),
+        None => bail!(MANIFEST, "{CONFIG} needs HOME (or USERPROFILE) to be set"),
+    }
+}
+
+/// Applies `f` to `config.toml`, keeping the rest of the file, and writes it only if the result is
+/// valid, also as the layer under an empty project; returns its path.
+pub fn edit_config(f: impl FnOnce(&mut DocumentMut) -> Result<()>) -> Result<std::path::PathBuf> {
+    let path = config_path()?;
+    let shown = path.display().to_string();
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e).ctx(&shown),
+    };
+    let mut doc: DocumentMut = text.parse().map_err(|e| Error::new(MANIFEST, format!("{shown}: {e}")))?;
+    f(&mut doc)?;
+    let text = doc.to_string();
+    // Targets are only checked against the presets when a manifest uses them.
+    crate::manifest::parse_with("", false, &parse_config(&text, &shown)?)?;
+    crate::project::write_atomic(&path, &text)?;
+    Ok(path)
+}
+
+/// Writes `[search] skills-sh` into `config.toml`; returns its path.
+pub fn remember_skills_sh(on: bool) -> Result<std::path::PathBuf> {
+    edit_config(|doc| {
+        let search = doc.entry("search").or_insert_with(toml_edit::table);
+        let Some(search) = search.as_table_like_mut() else { bail!(MANIFEST, "search must be a table") };
+        search.insert(SKILLS_SH, toml_edit::value(on));
+        Ok(())
+    })
 }
 
 /// Set once the environment-over-`enforce` warnings are printed: a run loads the manifest more than once.
 static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Layer names `resolve` records and `fixed` matches.
+pub const ENVIRONMENT: &str = "environment";
+pub const ENFORCED: &str = "config.toml, enforced";
 
 /// Merges the layers; a manifest value that differs from an enforced one is an error.
 pub fn resolve(project: &Layer, o: &Outer) -> Result<Effective> {
@@ -230,9 +287,9 @@ pub fn resolve(project: &Layer, o: &Outer) -> Result<Effective> {
             )));
         }
         let pick = if let Some(v) = o.env.values.get(k) {
-            Some((v, "environment"))
+            Some((v, ENVIRONMENT))
         } else if let Some(v) = enforced {
-            Some((v, "config.toml, enforced"))
+            Some((v, ENFORCED))
         } else if let Some(v) = project.values.get(k) {
             Some((v, "skills.toml"))
         } else {
@@ -250,15 +307,34 @@ pub fn resolve(project: &Layer, o: &Outer) -> Result<Effective> {
     Ok(out)
 }
 
+/// Whether `k` comes from a layer the project cannot loosen: the environment or an enforced key.
+pub fn fixed(e: &Effective, k: &str) -> bool {
+    matches!(e.get(k), Some((_, ENVIRONMENT | ENFORCED)))
+}
+
 /// With `min-release-age` enforced, the shortest cooldown a project may give the repository at
 /// `url`: the longest matching prefix of `repository-min-release-age`, else the enforced value.
 pub fn repository_floor(o: &Outer, url: &str, enforced: SignedDuration) -> SignedDuration {
     o.config.repository_ages.iter().filter(|(p, _)| under(url, p)).max_by_key(|(p, _)| p.len()).map_or(enforced, |(_, a)| *a)
 }
 
-/// `url` is `prefix` or below it on a `/` (or query) boundary.
+/// `url` is `prefix` or below it on a `/` (or query) boundary, both compared as parsed URLs, as the
+/// request is made: scheme, host and port equal, `..`, `%2e%2e` and `\` already resolved. Below the
+/// prefix a `..` behind `%2F` or `%5C`, or with a path parameter (`..;v=1`), is refused too, for
+/// servers that decode or strip parameters before resolving. A prefix with a query matches only
+/// itself; a side that does not parse matches nothing.
 pub fn under(url: &str, prefix: &str) -> bool {
-    url == prefix || url.starts_with(prefix) && (prefix.ends_with('/') || url[prefix.len()..].starts_with(['/', '?']))
+    let (Ok(u), Ok(p)) = (url::Url::parse(url), url::Url::parse(prefix)) else { return false };
+    if u.origin() != p.origin() {
+        return false;
+    }
+    if p.query().is_some() {
+        return u.as_str() == p.as_str();
+    }
+    let (path, base) = (u.path(), p.path());
+    let inside = path == base || path.starts_with(base) && (base.ends_with('/') || path[base.len()..].starts_with('/'));
+    let dotdot = |s: &str| s.split(';').next() == Some("..");
+    inside && !percent_encoding::percent_decode_str(&path[base.len()..]).decode_utf8_lossy().split(['/', '\\']).any(dotdot)
 }
 
 #[cfg(test)]
@@ -300,6 +376,7 @@ mod tests {
     fn rejects_bad_config() {
         assert!(cfg("[policy]\nallow-sources = [\"acme\"]").unwrap_err().msg.contains("only accepted in skills.toml"));
         assert!(cfg("[policy]\nallow-ranges = 1").is_err());
+        assert!(cfg("[policy]\nallow-sources = [\"https://exa mple.com/\"]").is_err());
         assert!(cfg("[policy]\nmin-release-age = 3").is_err());
         assert!(cfg("[policy]\ntypo = true").unwrap_err().msg.contains("unknown key"));
         assert!(cfg("[policy]\nenforce = [\"packagist\"]").unwrap_err().msg.contains("does not set"));
@@ -315,12 +392,16 @@ mod tests {
         assert!(env_layer(|_| Some(" ".into())).unwrap().values.is_empty());
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join(CONFIG), "[repositories]\nx = 1\n").unwrap();
-        assert!(read_config(&dir.path().join(CONFIG)).unwrap_err().msg.contains("only [policy] and [agents]"));
-        assert_eq!(read_config(&dir.path().join("missing.toml")).unwrap().0, Layer::default());
+        assert!(read_config(&dir.path().join(CONFIG)).unwrap_err().msg.contains("only [policy], [agents] and [search]"));
+        assert_eq!(read_config(&dir.path().join("missing.toml")).unwrap().config, Layer::default());
         std::fs::write(dir.path().join(CONFIG), "[agents]\ntargets = [\"claude\", \"./x\"]\n").unwrap();
-        assert_eq!(read_config(&dir.path().join(CONFIG)).unwrap().1, Some(vec!["claude".into(), "./x".into()]));
+        assert_eq!(read_config(&dir.path().join(CONFIG)).unwrap().targets, Some(vec!["claude".into(), "./x".into()]));
         std::fs::write(dir.path().join(CONFIG), "[agents]\nlocal = \".skills\"\n").unwrap();
         assert!(read_config(&dir.path().join(CONFIG)).unwrap_err().msg.contains("agents.local is not read here"));
+        std::fs::write(dir.path().join(CONFIG), "[search]\nskills-sh = \"yes\"\n").unwrap();
+        assert!(read_config(&dir.path().join(CONFIG)).unwrap_err().msg.contains("search.skills-sh must be true or false"));
+        std::fs::write(dir.path().join(CONFIG), "[search]\nskills-sh = false\n").unwrap();
+        assert_eq!(read_config(&dir.path().join(CONFIG)).unwrap().skills_sh, Some(false));
     }
 
     #[test]
@@ -338,5 +419,30 @@ mod tests {
         assert!(!under("https://git.example.com.evil/a", "https://git.example.com"));
         assert!(!under("https://api.github.com/repos/acmex/r", "https://api.github.com/repos/acme"));
         assert!(under("https://api.github.com/repos/acme/r", "https://api.github.com/repos/acme"));
+        assert!(under("https://git.example.com/raw?ref=main", "https://git.example.com/raw"));
+        assert!(under("https://GIT.example.com:443/a", "https://git.example.com/"));
+        assert!(!under("https://git.example.com:8443/a", "https://git.example.com/"));
+        assert!(!under("not a url", "https://git.example.com/"));
+    }
+
+    #[test]
+    fn dot_segments_do_not_escape_a_prefix() {
+        let allowed = "https://git.example.com/api/v4/group/42/";
+        for escape in [
+            "../../projects/666/packages.json",
+            "%2e%2e/%2E%2E/projects/666/",
+            ".%2e/x",
+            "a/..\\..\\..\\x",
+            "..%2F..%2Fx",
+            "..%5cx",
+            "%2e%2e%2fx",
+            "..;/x",
+            "a/..;v=1/..;/x",
+            "%2e%2e;%2fx",
+        ] {
+            assert!(!under(&format!("{allowed}{escape}"), allowed), "{escape}");
+        }
+        assert!(under(&format!("{allowed}a/../b/packages.json"), allowed));
+        assert!(under("https://git.example.com/api/v4/projects/group%2Fproj/packages.json", "https://git.example.com/api/v4/"));
     }
 }
