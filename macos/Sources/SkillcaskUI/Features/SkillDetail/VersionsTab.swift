@@ -56,9 +56,12 @@ struct VersionsTab: View {
     }
 
     /// The tab over a `ScopeStore`: the model from the selected entry, the scope's policy and targets, and the
-    /// package's cached `info`; the allowed range from the cached package `info`, else the detail's. Every scope
-    /// offers "Reveal skills.toml": `Workspace.revealManifest` finds the personal one in the config directory.
-    init(entry: SkillEntry, store: ScopeStore, onReview: @escaping () -> Void, onEmptyClick: @escaping () -> Void) {
+    /// package's cached `info`; the allowed range from the cached package `info`, else the detail's. "Reveal
+    /// skills.toml" reveals `manifest` (`AppStore.manifest(of:)`: the personal one is in the config directory).
+    init(
+        entry: SkillEntry, store: ScopeStore, manifest: URL, onReview: @escaping () -> Void,
+        onEmptyClick: @escaping () -> Void
+    ) {
         let package = entry.package ?? entry.id
         let cached = store.packageInfo[package]
         let range = [cached, store.detail?.info].compactMap { $0 }
@@ -68,10 +71,10 @@ struct VersionsTab: View {
         self.init(
             content: VersionsContent(
                 model: model, versions: cached?.versions, agents: agents, checkedAt: store.snapshot?.checkedAt,
-                now: .now, revealsManifest: true),
+                now: .now),
             package: package, versions: cached?.versions, isLoading: store.loadingPackageInfo.contains(package),
             loadError: store.packageInfoErrors[package], load: { await store.loadPackageInfo(package) },
-            onReview: onReview, onRevealManifest: { Workspace.revealManifest(of: store.scope) },
+            onReview: onReview, onRevealManifest: { Workspace.revealManifest(manifest, root: store.scope.root) },
             onEmptyClick: onEmptyClick)
     }
 

@@ -124,6 +124,23 @@ import Testing
         #expect(app.item(for: .personal)?.isSetUp == true)
     }
 
+    /// "Reveal skills.toml" follows the environment the children get: an override in the app's policy moves the
+    /// personal manifest; a project's stays in its root.
+    @Test func theManifestFollowsTheAppEnvironment() {
+        let policy = EnvironmentPolicy(extraPaths: [], overrides: ["SKILLCASK_HOME": "/s"])
+        let app = AppStore(
+            settings: Self.settings(), client: FakeCLIClient(),
+            capabilities: Capabilities(version: Capabilities.minimum),
+            environment: policy)
+        let base = ["HOME": "/Users/me", "XDG_CONFIG_HOME": "/x"]
+        #expect(app.manifest(of: .personal, base: base).path == "/s/skills.toml")
+        #expect(app.manifest(of: .project(at: "/p/app"), base: base).path == "/p/app/skills.toml")
+        let plain = AppStore(
+            settings: Self.settings(), client: FakeCLIClient(),
+            capabilities: Capabilities(version: Capabilities.minimum))
+        #expect(plain.manifest(of: .personal, base: base).path == "/x/skillcask/skills.toml")
+    }
+
     @Test func fixtureBootShowsTheMainBoard() async {
         let stores = Boot.fixtures()
         #expect(stores.app.selectedScope == Boot.apiScope)

@@ -16,6 +16,8 @@ public struct MainWindow: View {
     @Environment(AppStore.self) private var app
     @Environment(ActionRunner.self) private var runner
     @State private var columns = NavigationSplitViewVisibility.all
+    /// The Remove alert built once per request (its plan is computed when asked for, not on every render).
+    @State private var pinnedRemoval: (id: UUID, alert: RemoveAlert)?
 
     public init() {}
 
@@ -37,7 +39,52 @@ public struct MainWindow: View {
         .focusedSceneValue(\.scopeStore, app.selectedStore)
         .focusedSceneValue(\.actionRunner, runner)
         .frame(minWidth: Size.windowMinWidth, minHeight: Self.minHeight)
+        .sheet(item: presentedSheet) { presentation in
+            if let store = app.store(for: presentation.scope) {
+                SheetHost(sheet: presentation.sheet, store: store) { app.dismiss(presentation) }
+            } else {
+                // The pinned scope has no store (the CLI went away): close rather than show an empty sheet.
+                Color.surfaceWindow.task { app.dropOrphanedPresentation() }
+            }
+        }
+        .alert(
+            removeAlert?.title ?? "", isPresented: removalShown, presenting: removeAlert,
+            actions: { alert in alert.actions(onRemove: { alert.confirm(runner: runner) }) },
+            message: { alert in alert.message }
+        )
+        .onChange(of: app.presentation) {
+            app.dropOrphanedPresentation()
+            pinnedRemoval = removeAlert.flatMap { alert in app.removal.map { ($0.id, alert) } }
+        }
+        .onChange(of: app.cli) { app.dropOrphanedPresentation() }
         .task { await app.boot() }
+    }
+
+    // MARK: - Sheets (`AppStore.Sheet`)
+
+    /// The sheet on screen, pinned to the scope it was asked for; SwiftUI's own close (Esc when allowed) clears
+    /// that presentation only.
+    private var presentedSheet: Binding<AppStore.Presentation?> {
+        Binding(
+            get: { app.presentedSheet },
+            set: { if $0 == nil, let shown = app.presentedSheet { app.dismiss(shown) } })
+    }
+
+    /// The S10 alert of a Remove request, over the scope it was asked for.
+    private var removeAlert: RemoveAlert? {
+        guard let removal = app.removal, case .remove(let skills) = removal.sheet,
+            let store = app.store(for: removal.scope)
+        else { return nil }
+        if let pinnedRemoval, pinnedRemoval.id == removal.id {
+            return pinnedRemoval.alert
+        }
+        return RemoveAlert(skills: skills, store: store)
+    }
+
+    /// Shown while a Remove request with a store is pending (an orphaned one is dropped); any button or Esc
+    /// clears it.
+    private var removalShown: Binding<Bool> {
+        Binding(get: { removeAlert != nil }, set: { if !$0, let shown = app.removal { app.dismiss(shown) } })
     }
 
     // MARK: - Derived

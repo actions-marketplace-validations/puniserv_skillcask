@@ -84,11 +84,12 @@ public struct ListState: Hashable, Sendable {
             progressTitle: runningTitle ?? (isRefreshing ? ListCopy.checking : nil), chipCounts: counts)
     }
 
-    /// The state of `store`, with the runner's action when it runs in the store's scope.
+    /// The state of `store`, with the runner's action when it runs in the store's scope from the window; a sheet's
+    /// run keeps its progress inside the sheet (S11).
     @MainActor public static func resolve(store: ScopeStore, running: ActionRunner.RunningAction?) -> ListState {
         resolve(
             snapshot: store.snapshot, filter: store.filter, query: store.query, sort: store.sort,
             isOffline: store.isOffline, isRefreshing: store.isRefreshing,
-            runningTitle: running.flatMap { $0.scope == store.scope ? $0.title : nil })
+            runningTitle: running.flatMap { $0.scope == store.scope && $0.origin == .window ? $0.title : nil })
     }
 }

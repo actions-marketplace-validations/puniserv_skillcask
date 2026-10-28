@@ -108,7 +108,8 @@ public struct ScopeSnapshot: Hashable, Sendable {
             return SkillEntry(
                 id: name, name: name, kind: kind, source: entry.source, version: entry.version, state: state,
                 health: HealthMapping.health(state: state, update: update, findings: findings), update: update,
-                findings: findings, path: skill?.path, description: entry.description, reach: skill.map(Reach.init))
+                findings: findings, path: skill?.path, description: entry.description, reach: skill.map(Reach.init),
+                via: entry.via)
         }
         attention = Attention(entries)
         policy = status.policy.keys.sorted { PolicyRow.Kind.precedes($0, $1) }

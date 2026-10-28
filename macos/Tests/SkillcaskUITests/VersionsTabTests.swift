@@ -11,14 +11,13 @@ import Testing
     static let now = Date()
 
     static func content(
-        _ entry: SkillEntry, info: InfoDocument?, snapshot: ScopeSnapshot = DesignFixtures.api, loaded: Bool = false,
-        revealsManifest: Bool = false
+        _ entry: SkillEntry, info: InfoDocument?, snapshot: ScopeSnapshot = DesignFixtures.api, loaded: Bool = false
     ) -> VersionsContent {
         let range = info.flatMap { DetailOverviewCopy.allowedRange(why: $0.why) }
         let model = VersionsModel(entry: entry, policy: snapshot.policy, allowedRange: range)
         return VersionsContent(
             model: model, versions: loaded ? info?.versions : nil, agents: ["Claude Code", "Cursor"],
-            checkedAt: now.addingTimeInterval(-240), now: now, revealsManifest: revealsManifest)
+            checkedAt: now.addingTimeInterval(-240), now: now)
     }
 
     static func row(_ content: VersionsContent, _ label: String) -> VersionsContent.Row? {
@@ -48,13 +47,12 @@ import Testing
         #expect(Self.row(content, "Installed")?.detail == "Release date unknown · in skills.lock")
         #expect(Self.row(content, "Installed")?.trailing == .quiet("Linked into Claude Code, Cursor"))
         #expect(Self.row(content, "Allowed range")?.detail == "From skills.toml · up to the next major")
-        #expect(Self.row(content, "Allowed range")?.trailing == nil)
+        #expect(Self.row(content, "Allowed range")?.trailing == .reveal("Reveal skills.toml"))
         #expect(Self.row(content, "Newest overall")?.detail == "Same as above; no major release outside the range")
     }
 
-    @Test func theAllowedRangeRevealsTheManifestWhenTheScopeHasOne() {
-        let content = Self.content(
-            DesignFixtures.jiraCommunication, info: DesignFixtures.jiraPackageInfo, revealsManifest: true)
+    @Test func theAllowedRangeRevealsTheManifest() {
+        let content = Self.content(DesignFixtures.jiraCommunication, info: DesignFixtures.jiraPackageInfo)
         #expect(Self.row(content, "Allowed range")?.trailing == .reveal("Reveal skills.toml"))
         #expect(content.rows.filter { $0.trailing == .reveal(ShellCopy.revealManifest) }.count == 1)
     }
@@ -97,7 +95,7 @@ import Testing
         #expect(callout.mono == "^2.0")
         #expect(callout.text.hasPrefix("Your range ^2.0 in skills.toml stops at the next major."))
         #expect(callout.link == nil)
-        #expect(content.rows.allSatisfy { $0.trailing == nil || $0.label == "Installed" })
+        #expect(content.rows.allSatisfy { $0.trailing == nil || ["Installed", "Allowed range"].contains($0.label) })
         #expect(Self.row(content, "Available in range")?.detail == "Nothing newer below 3.0")
         let newest = try #require(Self.row(content, "Newest overall"))
         #expect(newest.detail == "Released 15 Oct 2026 · outside ^2.0")

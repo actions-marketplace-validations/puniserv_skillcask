@@ -233,7 +233,7 @@ import Testing
         await runner.sync(in: store)
         #expect(await client.commands.filter { $0 == .status }.count == 2)
         if case .banner(let message, _) = runner.outcome {
-            #expect(message.title == OutcomeCopy.couldNot(ActionCopy.syncing))
+            #expect(message.title == "Couldn’t sync.")
             #expect(message.remedy == .signIn)
         } else {
             Issue.record("a failed sync did not end with a banner")

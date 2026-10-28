@@ -12,6 +12,19 @@ public enum ActionCopy {
     /// The transcript line of a command that could not be built, where the Activity drawer shows the command.
     public static let unbuilt = "(not run)"
 
+    // MARK: - Failure titles (Running board: "Couldn’t sync sql-review.")
+
+    /// `Couldn’t sync.`: the banner title of a failed Sync (the scope is the window's own).
+    public static let couldNotSync = OutcomeCopy.couldNot("sync")
+    /// `Couldn’t check.`
+    public static let couldNotCheck = OutcomeCopy.couldNot("check")
+    /// `Couldn’t repair.`
+    public static let couldNotRepair = OutcomeCopy.couldNot("repair")
+    /// `Couldn’t set up.`
+    public static let couldNotSetUp = OutcomeCopy.couldNot("set up")
+    /// `Couldn’t restore from the lock.` Invented, as `restoring`.
+    public static let couldNotRestore = OutcomeCopy.couldNot("restore from the lock")
+
     // MARK: - Outcomes (Activity board: "Checked api")
 
     /// `Synced api`.

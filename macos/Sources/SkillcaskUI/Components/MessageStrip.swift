@@ -42,7 +42,12 @@ public struct MessageStrip: View {
         case strip
         /// List-States offline: 6/8 padding, radius 6, 12 pt symbol, 11 pt sentence.
         case compact
+        /// Adopt-States sheet strip: 8/10 padding, radius 8, 14 pt symbol, 8 pt gap, 12 pt sentence.
+        case sheet
     }
+
+    /// The Adopt-States strip's symbol (`svg width="14"`); no 14 pt icon token exists.
+    nonisolated static let sheetIconSize: CGFloat = 14
 
     /// The one control a strip may end with.
     public enum Trailing {
@@ -205,7 +210,7 @@ public struct MessageStrip: View {
     private var titleFont: Font {
         switch density {
         case .banner: Font.Token.bodyEmphasis
-        case .strip: Font.Token.calloutSemibold
+        case .strip, .sheet: Font.Token.calloutSemibold
         case .compact: Font.Token.captionSemibold
         }
     }
@@ -216,23 +221,28 @@ public struct MessageStrip: View {
         case .banner: Size.iconSidebar
         case .strip: Size.iconToolbar
         case .compact: Size.iconInline
+        case .sheet: Self.sheetIconSize
         }
     }
 
     private var gap: CGFloat {
-        density == .compact ? Spacing.s : Spacing.rowGap
+        density == .compact || density == .sheet ? Spacing.s : Spacing.rowGap
     }
 
     private var verticalPadding: CGFloat {
         switch density {
         case .banner: Spacing.cardGap
-        case .strip: Spacing.s
+        case .strip, .sheet: Spacing.s
         case .compact: Spacing.inline
         }
     }
 
     private var horizontalPadding: CGFloat {
-        density == .compact ? Spacing.s : Spacing.m
+        switch density {
+        case .compact: Spacing.s
+        case .sheet: Spacing.cardGap
+        case .banner, .strip: Spacing.m
+        }
     }
 
     private var radius: CGFloat {

@@ -37,29 +37,66 @@ import SkillcaskDomain
         }
     }
 
-    /// The sheets the toolbar and menus ask for. Nothing presents them yet: the Add Skill (P3-5), Review Update
-    /// (P3-6), Adopt and Remove (P3-8) tasks add `.sheet(item:)` over `MainWindow`; until then the request is
-    /// recorded here and cleared by the next one.
+    /// What the toolbar, menus, rows and detail ask the window to present over the selected scope, through
+    /// `request(_:)`. `MainWindow` shows every case but `.remove` as a sheet through `SheetHost` (`presentedSheet`);
+    /// `.remove` is the system alert of S10 (`removal`). Each case carries what its destination needs to open:
+    /// Review Update (S7, P3-8), Add Skill (S8, P3-9), Adopt and Remove (S9, S10, P3-10).
     public enum Sheet: Identifiable, Hashable, Sendable {
-        case addSkill
+        /// Review one package's update. `target` is the version the row or strip offered; nil lets `diff` choose
+        /// the newest inside the range. `reviewOnly` is set when the tag moved (Q3): the sheet then never makes
+        /// Update its default button.
+        case update(package: String, target: String?, reviewOnly: Bool)
+        /// Review every package with an update inside its range.
         case updateAll
-        case update(package: String)
+        /// Search and add; `query` pre-fills the field ("Find “…” in sources").
+        case addSkill(query: String?)
+        /// Adopt not-managed skills: one from a row or the detail, several from the Not managed filter.
+        case adopt(skills: [String])
+        /// Remove skills: a system alert, not a sheet.
         case remove(skills: [String])
-        case adopt(skill: String)
 
         public var id: String {
             switch self {
-            case .addSkill: "add"
+            case .update(let package, let target, _): "update-\(package)-\(target ?? "")"
             case .updateAll: "update-all"
-            case .update(let package): "update-\(package)"
+            case .addSkill(let query): "add-\(query ?? "")"
+            case .adopt(let skills): "adopt-\(skills.joined(separator: ","))"
             case .remove(let skills): "remove-\(skills.joined(separator: ","))"
-            case .adopt(let skill): "adopt-\(skill)"
             }
         }
+
+        /// Presented as an alert rather than a sheet.
+        public var isAlert: Bool {
+            if case .remove = self { true } else { false }
+        }
+
+        /// Update… for `entry`: its package (the skill id for a package-less row), the version it offers, and
+        /// review-only when its tag moved (`DetailActions.isTagMoved`).
+        public static func update(for entry: SkillEntry) -> Sheet {
+            .update(
+                package: entry.package ?? entry.id, target: DetailActions.updateTarget(of: entry),
+                reviewOnly: DetailActions.isTagMoved(entry))
+        }
+
+        /// Review one package from a place that knows no entry (Overview's Updates card): `diff` chooses.
+        public static func update(package: String) -> Sheet {
+            .update(package: package, target: nil, reviewOnly: false)
+        }
+    }
+
+    /// A request on screen: the sheet or alert, the scope it was asked for (pinned, so switching the sidebar or
+    /// Open Recent never rebinds it), and an identity so a close clears only its own presentation.
+    public struct Presentation: Identifiable, Hashable, Sendable {
+        public let id: UUID
+        public let sheet: Sheet
+        public let scope: Scope
     }
 
     /// The settings the sidebar (recents) and the boot (binary path, open-at-launch) read.
     public let settings: SettingsStore
+    /// The environment every child gets: the live client is built with it, and `manifest(of:)` resolves the
+    /// personal skills.toml through it, so a Settings override reaches both.
+    public let environment: EnvironmentPolicy
     /// The one mutation queue of the app, shared with `ActionRunner`.
     public let queue: MutationQueue
     private let locator: Locator
@@ -84,8 +121,54 @@ import SkillcaskDomain
     public var selectedScope: Scope? {
         didSet { settings.lastScope = selectedScope }
     }
-    /// The sheet the toolbar or a menu asked for; see `Sheet`.
-    public var sheet: Sheet?
+    /// The sheet or alert on screen; see `request(_:)` and `dismiss(_:)`.
+    public private(set) var presentation: Presentation?
+
+    /// A sheet or the Remove alert is up: every other request is refused and the commands that make one are
+    /// disabled.
+    public var isPresenting: Bool {
+        presentation != nil
+    }
+
+    /// The presentation when it is a sheet, for `.sheet(item:)`.
+    public var presentedSheet: Presentation? {
+        presentation.flatMap { $0.sheet.isAlert ? nil : $0 }
+    }
+
+    /// The presentation when it is the Remove alert.
+    public var removal: Presentation? {
+        presentation.flatMap { $0.sheet.isAlert ? $0 : nil }
+    }
+
+    /// The one entry point for a sheet or the alert, over the selected scope. Refused (false) while another is up,
+    /// so a menu shortcut can never replace a running sheet or pop the alert over it, and without a scope or its
+    /// store (the CLI not ready).
+    @discardableResult public func request(_ sheet: Sheet) -> Bool {
+        guard presentation == nil, let scope = selectedScope, store(for: scope) != nil else { return false }
+        presentation = Presentation(id: UUID(), sheet: sheet, scope: scope)
+        return true
+    }
+
+    /// Closes the sheet or alert whose pinned scope has no store any more (the CLI went away), so `isPresenting`
+    /// cannot stick behind an empty sheet or an alert that never shows. `MainWindow` calls it whenever the
+    /// presentation or the CLI state changes.
+    public func dropOrphanedPresentation() {
+        if let orphan = Self.orphan(presentation, hasStore: { store(for: $0) != nil }) {
+            dismiss(orphan)
+        }
+    }
+
+    /// `presentation` when its scope has no store; nil otherwise.
+    nonisolated static func orphan(_ presentation: Presentation?, hasStore: (Scope) -> Bool) -> Presentation? {
+        presentation.flatMap { hasStore($0.scope) ? nil : $0 }
+    }
+
+    /// Closes `presentation` if it is still the one on screen; a stale close (a late `onSuccess`) does nothing.
+    public func dismiss(_ presentation: Presentation) {
+        if self.presentation?.id == presentation.id {
+            self.presentation = nil
+        }
+    }
     /// Where the located binary is, for Settings › General.
     public private(set) var binary: Locator.Choice?
     @ObservationIgnored private var client: (any CLIClient)?
@@ -94,14 +177,15 @@ import SkillcaskDomain
     /// The live app: locates the binary on `boot()` and talks to it through `makeClient`.
     public init(
         settings: SettingsStore, queue: MutationQueue = MutationQueue(), locator: Locator = Locator(),
-        makeClient: @escaping @Sendable (URL) -> any CLIClient = { ProcessRunner(executable: $0) },
+        environment: EnvironmentPolicy = .default, makeClient: (@Sendable (URL) -> any CLIClient)? = nil,
         textReader: @escaping ScopeStore.TextReader = ScopeStore.readText,
         manifestExists: @escaping @Sendable (URL) -> Bool = AppStore.manifestOnDisk
     ) {
         self.settings = settings
         self.queue = queue
         self.locator = locator
-        self.makeClient = makeClient
+        self.environment = environment
+        self.makeClient = makeClient ?? { ProcessRunner(executable: $0, policy: environment) }
         self.textReader = textReader
         self.manifestExists = manifestExists
     }
@@ -109,11 +193,13 @@ import SkillcaskDomain
     /// A ready app over a known client: tests and the fixture boot skip the location and the version gate.
     public init(
         settings: SettingsStore, queue: MutationQueue = MutationQueue(), client: any CLIClient,
-        capabilities: Capabilities, textReader: @escaping ScopeStore.TextReader = ScopeStore.readText,
+        capabilities: Capabilities, environment: EnvironmentPolicy = .default,
+        textReader: @escaping ScopeStore.TextReader = ScopeStore.readText,
         manifestExists: @escaping @Sendable (URL) -> Bool = AppStore.manifestOnDisk
     ) {
         self.settings = settings
         self.queue = queue
+        self.environment = environment
         locator = Locator()
         makeClient = { _ in client }
         self.textReader = textReader
@@ -170,6 +256,11 @@ import SkillcaskDomain
     /// The store of `scope` only when the scope was visited: the sidebar badge reads this.
     public func visitedStore(for scope: Scope) -> ScopeStore? {
         stores[scope]
+    }
+
+    /// The skills.toml the CLI reads for `scope`, resolved in the children's environment (`environment`).
+    public func manifest(of scope: Scope, base: [String: String] = ProcessInfo.processInfo.environment) -> URL {
+        scope.manifest(environment: environment.environment(from: base))
     }
 
     /// The sidebar row of `scope`; nil when the scope is not listed.

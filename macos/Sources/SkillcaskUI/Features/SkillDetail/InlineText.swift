@@ -32,8 +32,12 @@ struct InlineText: NSViewRepresentable {
         update(view)
     }
 
+    func makeCoordinator() -> FittingCache {
+        FittingCache()
+    }
+
     func sizeThatFits(_ proposal: ProposedViewSize, nsView view: InlineTextView, context: Context) -> CGSize? {
-        Self.fittingSize(text, style: style, width: proposal.width)
+        context.coordinator.size(of: text, style: style, width: proposal.width)
     }
 
     /// The live view: a non-editable, selectable text view over a `ChipLayoutManager` whose container follows the
@@ -88,6 +92,34 @@ struct InlineText: NSViewRepresentable {
         if !storage.isEqual(to: text) {
             storage.setAttributedString(text)
         }
+    }
+}
+
+/// The sizes one `InlineText` measured, per proposed width, for its current text and style: SwiftUI asks
+/// `sizeThatFits` several times per layout pass, and each miss lays the text out afresh. A different text (by
+/// identity, then by content) or style empties it.
+@MainActor final class FittingCache {
+    private var text: NSAttributedString?
+    private var style: MarkdownInline.Style?
+    private var sizes: [CGFloat: CGSize] = [:]
+    /// How many sizes were measured rather than found, for the tests.
+    private(set) var misses = 0
+
+    /// The size `InlineText.fittingSize` gives, from the cache when this text, style and width were measured.
+    func size(of text: NSAttributedString, style: MarkdownInline.Style, width: CGFloat?) -> CGSize {
+        if style != self.style || !(text === self.text || self.text?.isEqual(to: text) == true) {
+            self.text = text
+            self.style = style
+            sizes.removeAll()
+        }
+        let key = width.flatMap { $0.isFinite ? max($0, 1) : nil } ?? -1
+        if let size = sizes[key] {
+            return size
+        }
+        misses += 1
+        let size = InlineText.fittingSize(text, style: style, width: width)
+        sizes[key] = size
+        return size
     }
 }
 

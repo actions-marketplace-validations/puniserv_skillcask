@@ -162,6 +162,9 @@ public struct TokensPreview: View {
                 SizeCell(name: metric.name, value: "\(Int(metric.value))")
             }
             SizeCell(name: "reviewSheet", value: "\(Int(Size.reviewSheet.width)) × \(Int(Size.reviewSheet.height))")
+            SizeCell(
+                name: "addSkillSheet", value: "\(Int(Size.addSkillSheet.width)) × \(Int(Size.addSkillSheet.height))")
+            SizeCell(name: "adoptSheet", value: "\(Int(Size.adoptSheet.width)) × \(Int(Size.adoptSheet.height))")
         }
     }
 }

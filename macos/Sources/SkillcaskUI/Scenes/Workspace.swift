@@ -4,15 +4,12 @@ import SkillcaskCore
 /// The few things the shell asks Finder, Terminal and the open panel for (toolbar ⋯ menu, File and Skill menus).
 /// AppKit stays here so views and stores never import it for these.
 @MainActor enum Workspace {
-    /// `Reveal skills.toml`: selects the manifest of `scope` in Finder, the personal one in the config directory;
-    /// its folder when the file is missing, the scope's root when that is missing too. The environment is the one
-    /// `ProcessRunner` gives the CLI (`EnvironmentPolicy.default`), so `SKILLCASK_HOME` and `XDG_CONFIG_HOME`
-    /// resolve as the CLI resolves them.
-    static func revealManifest(of scope: Scope) {
-        let manifest = scope.manifest(environment: EnvironmentPolicy.default.environment())
+    /// `Reveal skills.toml`: selects `manifest` in Finder (from `AppStore.manifest(of:)`, so the personal one is in
+    /// the config directory the CLI uses); its folder when the file is missing, `root` when that is missing too.
+    static func revealManifest(_ manifest: URL, root: URL) {
         let target =
             [manifest, manifest.deletingLastPathComponent()]
-            .first { FileManager.default.fileExists(atPath: $0.path) } ?? scope.root
+            .first { FileManager.default.fileExists(atPath: $0.path) } ?? root
         NSWorkspace.shared.activateFileViewerSelecting([target])
     }
 

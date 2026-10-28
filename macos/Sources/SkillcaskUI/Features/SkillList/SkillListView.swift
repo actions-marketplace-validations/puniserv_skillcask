@@ -121,7 +121,7 @@ struct SkillListView: View {
         case .empty:
             EmptyState(
                 icon: "shippingbox", title: EmptyCopy.noSkillsTitle, body: EmptyCopy.noSkillsBody,
-                actions: [.primary(EmptyCopy.addSkill) { app.sheet = .addSkill }])
+                actions: [.primary(EmptyCopy.addSkill) { app.request(.addSkill(query: nil)) }])
         case .noMatches(let noMatches):
             noMatchesState(noMatches)
         case .rows(let rows):
@@ -142,9 +142,10 @@ struct SkillListView: View {
         let title =
             noMatches.query.isEmpty
             ? ListCopy.nothingIn(noMatches.filter) : EmptyCopy.noMatchesTitle(query: noMatches.query)
+        let query = noMatches.query
         let link: EmptyState.Action? =
             noMatches.showsClearSearch
-            ? .secondary(EmptyCopy.findInSources(query: noMatches.query)) { app.sheet = .addSkill } : nil
+            ? .secondary(EmptyCopy.findInSources(query: query)) { app.request(.addSkill(query: query)) } : nil
         return EmptyState(
             icon: nil, title: title,
             body: noMatches.body,
@@ -193,6 +194,6 @@ struct SkillListView: View {
     /// ⌫ in the list: Remove… for a row that can be removed (the Skill menu's rule).
     private func removeSelected() {
         guard let entry = store.selectedEntry, DetailActions.resolve(entry, offline: false).showsRemove else { return }
-        app.sheet = .remove(skills: [entry.id])
+        app.request(.remove(skills: [entry.id]))
     }
 }

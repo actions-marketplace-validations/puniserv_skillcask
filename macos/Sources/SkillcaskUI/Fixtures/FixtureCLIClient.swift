@@ -59,8 +59,10 @@ public struct FixtureCLIClient: CLIClient {
             return answer(invocation, fixture: fixture)
         case .search:
             return answer(invocation, fixture: "search.jira")
-        case .diff:
-            return answer(invocation, text: DesignFixtures.text("diff.pdf", "txt"))
+        case .diff(let package):
+            // Update All (no package) reviews pdf and review-pr, as ReviewUpdate-States draws it.
+            let review = package == nil ? DesignFixtures.text("diff.review-pr", "txt") : ""
+            return answer(invocation, text: DesignFixtures.text("diff.pdf", "txt") + review)
         case .install, .doctor(fix: true), .update, .add, .remove, .initialize:
             for line in DesignFixtures.Transcripts.sync {
                 onLine(.stdout(line))

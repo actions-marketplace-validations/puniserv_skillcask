@@ -72,10 +72,15 @@ public enum Size {
     public static let listMinWidth: CGFloat = 300
     /// Detail column minimum width.
     public static let detailMinWidth: CGFloat = 400
-    /// The Review Update sheet.
+    /// The Review Update sheet, Update All too (ReviewUpdate board: `width: 960px; height: 700px`). The 592×352
+    /// `.sheet` frames on ReviewUpdate-States and AddSkill-States are presentation-only state cards, not sizes.
     public static let reviewSheet = CGSize(width: 960, height: 700)
+    /// The Add Skill sheet (AddSkill board: `width: 900px; height: 660px`).
+    public static let addSkillSheet = CGSize(width: 900, height: 660)
+    /// The Adopt sheet, single and batch (Adopt-States board: `.sheet { width: 592px; height: 340px }`).
+    public static let adoptSheet = CGSize(width: 592, height: 340)
 
-    /// Every scalar size in the order above, for the token sheet and the tests (`reviewSheet` is listed apart).
+    /// Every scalar size in the order above, for the token sheet and the tests (the sheet sizes are listed apart).
     public static let catalog: [(name: String, value: CGFloat)] = [
         ("row", row), ("sidebarRow", sidebarRow), ("sidebarRowSubtitle", sidebarRowSubtitle), ("toolbar", toolbar),
         ("columnPadding", columnPadding), ("cardPaddingV", cardPaddingV), ("cardPaddingH", cardPaddingH),

@@ -30,8 +30,9 @@ struct OverviewContent: Hashable {
         case mono(String)
         /// An accent link that opens `url` (Repository).
         case link(String, url: URL)
-        /// The package's skills: the selected one as the accent pill, the others plain.
-        case skills(installed: String, others: [String])
+        /// The package's skills: the selected one, then every other skill of the package the scope has installed
+        /// (`installedSiblings`), as accent pills; the rest plain.
+        case skills(installed: [String], others: [String])
         /// A secondary mono path and the "Open folder" link.
         case folder(String, url: URL)
         /// The audit line: a dot, the text and, when `link`, "See Security".
@@ -161,14 +162,27 @@ struct OverviewContent: Hashable {
 
     // MARK: - Rows
 
+    /// The other skills of `entry`'s package that the scope has installed: a row of the same package whose state
+    /// is `ok` (installed and matching the lock), in `siblings`' order.
+    static func installedSiblings(_ siblings: [String], of entry: SkillEntry, in snapshot: ScopeSnapshot?) -> [String] {
+        guard let package = entry.package, let snapshot else { return [] }
+        return siblings.filter { name in
+            snapshot.entries.contains { $0.name == name && $0.package == package && $0.state == .ok }
+        }
+    }
+
     private static func row(
         _ field: Field, entry: SkillEntry, info: InfoDocument?, snapshot: ScopeSnapshot?, scope: Scope, offline: Bool
     ) -> Row? {
         switch field {
         case .skills:
             guard let info, info.skills.count > 1 else { return nil }
-            let others = info.skills.map(\.name).filter { $0 != entry.name }
-            return Row(label: DetailOverviewCopy.skillsInPackage, value: .skills(installed: entry.name, others: others))
+            let siblings = info.skills.map(\.name).filter { $0 != entry.name }
+            let installed = installedSiblings(siblings, of: entry, in: snapshot)
+            return Row(
+                label: DetailOverviewCopy.skillsInPackage,
+                value: .skills(installed: [entry.name] + installed, others: siblings.filter { !installed.contains($0) })
+            )
         case .license:
             guard let info, !info.license.isEmpty else { return nil }
             return Row(label: DetailOverviewCopy.license, value: .text(info.license.joined(separator: ", "), mono: nil))

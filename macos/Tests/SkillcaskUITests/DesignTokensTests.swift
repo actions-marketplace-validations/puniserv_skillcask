@@ -219,6 +219,8 @@ import Testing
         }
         #expect(Size.catalog.map(\.value) == sizes.map(\.1))
         #expect(Size.reviewSheet == CGSize(width: 960, height: 700))
+        #expect(Size.addSkillSheet == CGSize(width: 900, height: 660))
+        #expect(Size.adoptSheet == CGSize(width: 592, height: 340))
         #expect(Size.sidebarMinWidth + Size.listMinWidth + Size.detailMinWidth <= Size.windowMinWidth)
     }
 }

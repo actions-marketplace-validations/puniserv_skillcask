@@ -4,8 +4,7 @@ import SwiftUI
 /// The unified toolbar (Main board, designer's note): Add Skill… primary, Update All with its count badge, Sync,
 /// Check, and the ⋯ menu with Show Activity, Reveal skills.toml and Open in Terminal. Enablement is
 /// `ToolbarRules`; every action also lives in the menu bar (`SkillcaskCommands`, SUI-11), which carries the
-/// shortcuts. Add Skill… and Update All record their sheet on `AppStore.sheet`; the sheets arrive with P3-5 and
-/// P3-6.
+/// shortcuts. Add Skill… and Update All set `AppStore.sheet`, which `MainWindow` presents through `SheetHost`.
 struct ScopeToolbar: ToolbarContent {
     let app: AppStore
     let runner: ActionRunner
@@ -22,7 +21,7 @@ struct ScopeToolbar: ToolbarContent {
     var body: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
             Button {
-                app.sheet = .addSkill
+                app.request(.addSkill(query: nil))
             } label: {
                 Label(ShellCopy.addSkill, systemImage: "plus")
                     .fontWeight(.semibold)
@@ -30,9 +29,9 @@ struct ScopeToolbar: ToolbarContent {
             }
             .buttonStyle(.borderedProminent)
             .tint(Color.accent)
-            .disabled(!app.isReady || store == nil || !ToolbarRules.isLoaded(snapshot))
+            .disabled(!app.isReady || store == nil || !ToolbarRules.isLoaded(snapshot) || app.isPresenting)
             Button {
-                app.sheet = .updateAll
+                app.request(.updateAll)
             } label: {
                 HStack(spacing: Spacing.xs) {
                     Label(ShellCopy.updateAll, systemImage: "arrow.down.circle").labelStyle(.titleOnly)
@@ -40,7 +39,7 @@ struct ScopeToolbar: ToolbarContent {
                 }
             }
             .help(ShellCopy.updateAllHelp)
-            .disabled(!isIdle || !ToolbarRules.canUpdateAll(snapshot))
+            .disabled(!isIdle || !ToolbarRules.canUpdateAll(snapshot) || app.isPresenting)
             Button {
                 if let store {
                     runner.start(.sync, in: store)
@@ -67,7 +66,7 @@ struct ScopeToolbar: ToolbarContent {
                 Divider()
                 Button(ShellCopy.revealManifest) {
                     if let store {
-                        Workspace.revealManifest(of: store.scope)
+                        Workspace.revealManifest(app.manifest(of: store.scope), root: store.scope.root)
                     }
                 }
                 Button(ShellCopy.openInTerminal) {

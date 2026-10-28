@@ -4,8 +4,8 @@ import SwiftUI
 
 /// One row of the skills list: a `SkillRow` told whether it is selected, with the board's hover (Components board
 /// "hover with actions"): `surfaceHover` behind an unselected row, and the trailing slot swapped for Update… and
-/// the ⋯ menu (`SkillRowActions`). The actions only record the request on `AppStore.sheet` until the sheets land
-/// (P3-6, P3-8); Reveal in Finder selects the row's folder.
+/// the ⋯ menu (`SkillRowActions`). Update…, Remove… and Adopt… set `AppStore.sheet`, which `MainWindow`
+/// presents; Reveal in Finder selects the row's folder.
 struct SkillListRow: View {
     let entry: SkillEntry
     let scope: Scope
@@ -58,8 +58,8 @@ struct SkillListRow: View {
     /// `display: inline-flex; gap: 4px`: two small bordered controls.
     private var controls: some View {
         HStack(spacing: Spacing.xs) {
-            if let package = actions.updatePackage {
-                Button(ListCopy.update) { app.sheet = .update(package: package) }
+            if actions.updatePackage != nil {
+                Button(ListCopy.update) { app.request(.update(for: entry)) }
             }
             if !actions.menu.isEmpty {
                 Menu {
@@ -85,8 +85,8 @@ struct SkillListRow: View {
 
     private func perform(_ item: SkillRowActions.MenuItem) {
         switch item {
-        case .remove: app.sheet = .remove(skills: [entry.id])
-        case .adopt: app.sheet = .adopt(skill: entry.id)
+        case .remove: app.request(.remove(skills: [entry.id]))
+        case .adopt: app.request(.adopt(skills: [entry.id]))
         case .revealInFinder:
             if let path = entry.path {
                 Workspace.reveal(scope.root.appending(path: path))

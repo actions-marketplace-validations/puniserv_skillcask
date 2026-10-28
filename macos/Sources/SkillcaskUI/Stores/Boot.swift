@@ -8,6 +8,9 @@ import SkillcaskDomain
 public enum Boot {
     /// The environment variable that switches `swift run` to the fixture stores.
     public static let fixturesVariable = "SKILLCASK_UI_FIXTURES"
+    /// With fixtures on, the sheet or alert to open at launch over the api scope (`sheet(from:)` reads it), e.g.
+    /// `SKILLCASK_UI_FIXTURES=1 SKILLCASK_UI_SHEET=update:pdf@1.4.0 swift run Skillcask`.
+    public static let sheetVariable = "SKILLCASK_UI_SHEET"
 
     /// The three stores a scene injects with `skillcaskEnvironment`, and the client behind them.
     @MainActor public struct Stores {
@@ -32,7 +35,28 @@ public enum Boot {
 
     /// Fixture stores when the variable asks for them, the live stores otherwise.
     @MainActor public static func current() -> Stores {
-        usesFixtures ? fixtures() : live()
+        usesFixtures ? fixtures(sheet: sheet(from: ProcessInfo.processInfo.environment[sheetVariable])) : live()
+    }
+
+    /// The `SKILLCASK_UI_SHEET` value as a request: `update:<package>[@<version>]`, `update-all`,
+    /// `add[:<query>]`, `adopt:<skill>[,<skill>…]`, `remove:<skill>[,<skill>…]`; nil for anything else.
+    static func sheet(from argument: String?) -> AppStore.Sheet? {
+        guard let argument, !argument.isEmpty else { return nil }
+        let (verb, rest) =
+            argument.firstIndex(of: ":")
+            .map { (String(argument[..<$0]), String(argument[argument.index(after: $0)...])) }
+            ?? (argument, "")
+        let list = rest.split(separator: ",").map(String.init)
+        switch verb {
+        case "update" where !rest.isEmpty:
+            let parts = rest.split(separator: "@", maxSplits: 1).map(String.init)
+            return .update(package: parts[0], target: parts.count > 1 ? parts[1] : nil, reviewOnly: false)
+        case "update-all" where rest.isEmpty: return .updateAll
+        case "add": return .addSkill(query: rest.isEmpty ? nil : rest)
+        case "adopt" where !list.isEmpty: return .adopt(skills: list)
+        case "remove" where !list.isEmpty: return .remove(skills: list)
+        default: return nil
+        }
     }
 
     /// The real app: `UserDefaults.standard`, the located binary through `ProcessRunner`, one `MutationQueue`.
@@ -46,10 +70,10 @@ public enum Boot {
 
     /// The window as the Main board shows it: the api scope open with pdf selected, website, the not-set-up
     /// infra-playbooks and My Skills in the sidebar with their badges, every document from `DesignFixtures`
-    /// through a `FixtureCLIClient`. Settings
+    /// through a `FixtureCLIClient`; `sheet` opens over it. Settings
     /// live in their own defaults suite, reset on every boot, so demo runs never touch the user's settings.
     @MainActor public static func fixtures(
-        selecting scope: Scope? = apiScope, selection: SkillEntry.ID? = "pdf"
+        selecting scope: Scope? = apiScope, selection: SkillEntry.ID? = "pdf", sheet: AppStore.Sheet? = nil
     ) -> Stores {
         let suite = "skillcask.ui.fixtures"
         let defaults = UserDefaults(suiteName: suite) ?? .standard
@@ -69,6 +93,9 @@ public enum Boot {
         app.store(for: websiteScope)?.preload(snapshot: DesignFixtures.website)
         app.store(for: .personal)?.preload(snapshot: DesignFixtures.personal)
         app.selectedScope = scope
+        if let sheet {
+            app.request(sheet)
+        }
         return Stores(app: app, runner: ActionRunner(queue: queue), settings: settings, client: client)
     }
 

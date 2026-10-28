@@ -201,6 +201,24 @@ import Testing
                 && narrow.height.truncatingRemainder(dividingBy: 20) == 0)
     }
 
+    /// A width measured once for the same text and style is answered from the cache; new text or style empties it.
+    @Test func fittingSizesAreCachedPerWidthUntilTheTextOrStyleChanges() {
+        let cache = FittingCache()
+        let text = MarkdownInline.block("Cached text", style: .body)
+        let first = cache.size(of: text, style: .body, width: 300)
+        #expect(cache.size(of: text, style: .body, width: 300) == first && cache.misses == 1)
+        _ = cache.size(of: NSAttributedString(attributedString: text), style: .body, width: 300)
+        #expect(cache.misses == 1, "equal content is a hit")
+        _ = cache.size(of: text, style: .body, width: 120)
+        #expect(cache.misses == 2)
+        _ = cache.size(of: text, style: .quote, width: 300)
+        #expect(cache.misses == 3)
+        _ = cache.size(of: MarkdownInline.block("Other", style: .body), style: .body, width: 300)
+        #expect(cache.misses == 4)
+        _ = cache.size(of: text, style: .body, width: 120)
+        #expect(cache.misses == 5, "a change empties every width")
+    }
+
     /// Measuring at a probe width leaves the live view's container at the view's own width.
     @Test func probingDoesNotTouchTheLiveContainer() throws {
         let view = InlineText.makeTextView()
@@ -245,29 +263,32 @@ import Testing
 
     // MARK: - File line
 
-    /// Details reads as Foundation's sentences and the path from home, not as an `NSError` dump.
-    @Test func readErrorIsASentenceAndAShortPath() {
+    /// Details is Foundation's one sentence for a Cocoa file error: no restated reason, no path line, no dump.
+    @Test func readErrorIsOneSentenceWithoutThePath() {
         let error = NSError(
             domain: NSCocoaErrorDomain, code: NSFileReadNoSuchFileError,
             userInfo: [NSFilePathErrorKey: "/Users/me/work/api/.agents/skills/pdf/SKILL.md"])
         let text = ContentsCopy.readError(error, home: "/Users/me")
-        let lines = text.split(separator: "\n").map(String.init)
-        #expect(lines.count == 2)
-        #expect(lines[0].hasPrefix(error.localizedDescription))
+        #expect(text == error.localizedDescription)
+        #expect(!text.contains("\n") && !text.contains("/Users/me") && !text.contains("Domain="))
         if let reason = error.localizedFailureReason {
-            #expect(lines[0].contains(reason))
+            #expect(!text.hasSuffix(reason))
         }
-        #expect(lines[1] == "~/work/api/.agents/skills/pdf/SKILL.md")
-        #expect(!text.contains("/Users/me") && !text.contains("Domain="))
     }
 
-    /// A path outside home stays absolute; an error with no path is the sentence alone; a bare `home` is untouched.
-    @Test func readErrorKeepsOtherPathsAndOmitsAMissingOne() {
-        let outside = NSError(
-            domain: NSCocoaErrorDomain, code: NSFileReadNoPermissionError, userInfo: [NSFilePathErrorKey: "/srv/x"])
-        #expect(ContentsCopy.readError(outside, home: "/Users/me").hasSuffix("\n/srv/x"))
-        let bare = NSError(domain: NSPOSIXErrorDomain, code: Int(EIO))
-        #expect(!ContentsCopy.readError(bare, home: "/Users/me").contains("\n"))
+    /// Another domain's reason is added once, never twice; a home path in the text reads `~`.
+    @Test func readErrorAddsANewReasonOnlyAndShortensHome() {
+        func error(_ description: String, _ reason: String?) -> NSError {
+            var info: [String: Any] = [NSLocalizedDescriptionKey: description]
+            info[NSLocalizedFailureReasonErrorKey] = reason
+            return NSError(domain: "test", code: 1, userInfo: info)
+        }
+        #expect(
+            ContentsCopy.readError(error("Read failed.", "Disk is gone."), home: "/h") == "Read failed. Disk is gone.")
+        #expect(
+            ContentsCopy.readError(error("Read failed. Disk is gone.", "Disk is gone."), home: "/h")
+                == "Read failed. Disk is gone.")
+        #expect(ContentsCopy.readError(error("No /Users/me/x here.", nil), home: "/Users/me") == "No ~/x here.")
         #expect(
             ContentsCopy.abbreviatingHome("/Users/meg/x and /Users/me/y", home: "/Users/me/") == "/Users/meg/x and ~/y")
     }

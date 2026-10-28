@@ -3,9 +3,12 @@ import SwiftUI
 
 /// The menu bar (designer's note): File, Skill, Scope, View and Help, with the shortcuts, reaching the focused
 /// window's stores through `FocusedValues` (SUI-11). View is SwiftUI's own menu with the filters, the sort order
-/// and Activity inserted after its sidebar items. Items whose sheet is not built yet record the request on
-/// `AppStore.sheet` (Add Skill…, Update…, Update All, Remove…, Adopt…); Activity waits for its drawer.
+/// and Activity inserted after its sidebar items. Add Skill…, Update…, Update All, Remove… and Adopt… set
+/// `AppStore.sheet`, which `MainWindow` presents (Remove as an alert); Activity waits for its drawer.
 public struct SkillcaskCommands: Commands {
+    /// Remove…: ⌘⌫ (Remove board, "⌘⌫ from the list"); a plain ⌫ would fire while typing in a field.
+    static let removeShortcut = KeyboardShortcut(.delete, modifiers: .command)
+
     @FocusedValue(\.appStore) private var app
     @FocusedValue(\.scopeStore) private var store
     @FocusedValue(\.actionRunner) private var runner
@@ -14,6 +17,8 @@ public struct SkillcaskCommands: Commands {
     public init() {}
 
     private var selected: SkillEntry? { store?.selectedEntry }
+    /// A sheet or the Remove alert is up: the items that would present another are disabled.
+    private var isPresenting: Bool { app?.isPresenting == true }
 
     public var body: some Commands {
         CommandGroup(replacing: .newItem) {
@@ -42,31 +47,37 @@ public struct SkillcaskCommands: Commands {
                 .disabled(focusSearch == nil)
         }
         CommandMenu(ShellCopy.skillMenu) {
-            Button(ShellCopy.addSkill) { app?.sheet = .addSkill }
+            Button(ShellCopy.addSkill) { app?.request(.addSkill(query: nil)) }
                 .keyboardShortcut("n")
-                .disabled(store == nil)
+                .disabled(store == nil || isPresenting)
             Button(ShellCopy.update) {
-                if let package = selected?.package {
-                    app?.sheet = .update(package: package)
+                if let selected, selected.package != nil {
+                    app?.request(.update(for: selected))
                 }
             }
-            .disabled(selected.map { DetailActions.updateTarget(of: $0) == nil } ?? true)
-            Button(ShellCopy.updateAll) { app?.sheet = .updateAll }
-                .disabled(!ToolbarRules.canUpdateAll(store?.snapshot))
+            .disabled(isPresenting || selected.map { DetailActions.updateTarget(of: $0) == nil } ?? true)
+            Button(ShellCopy.updateAll) { app?.request(.updateAll) }
+                .disabled(isPresenting || !ToolbarRules.canUpdateAll(store?.snapshot))
             Divider()
             Button(ShellCopy.remove) {
                 if let selected {
-                    app?.sheet = .remove(skills: [selected.id])
+                    app?.request(.remove(skills: [selected.id]))
                 }
             }
-            .keyboardShortcut(.delete, modifiers: [])
-            .disabled(selected.map { !DetailActions.resolve($0, offline: false).showsRemove } ?? true)
+            .keyboardShortcut(Self.removeShortcut)
+            .disabled(isPresenting || selected.map { !DetailActions.resolve($0, offline: false).showsRemove } ?? true)
             Button(ShellCopy.adopt) {
                 if let selected {
-                    app?.sheet = .adopt(skill: selected.id)
+                    app?.request(.adopt(skills: [selected.id]))
                 }
             }
-            .disabled(selected?.isNotManaged != true)
+            .disabled(isPresenting || selected?.isNotManaged != true)
+            Button(AdoptCopy.adoptAllMenu) {
+                if let skills = AdoptPlan.batchSkills(store?.snapshot?.entries ?? []) {
+                    app?.request(.adopt(skills: skills))
+                }
+            }
+            .disabled(isPresenting || AdoptPlan.batchSkills(store?.snapshot?.entries ?? []) == nil)
             Divider()
             Button(ShellCopy.revealInFinder) {
                 if let store, let path = selected?.path {
@@ -77,11 +88,11 @@ public struct SkillcaskCommands: Commands {
         }
         CommandMenu(ShellCopy.scopeMenu) {
             Button(ShellCopy.sync) { start(.sync) }
-                .disabled(!ToolbarRules.canSync(store?.snapshot) || isBusy)
+                .disabled(!ToolbarRules.canSync(store?.snapshot) || isBusy || isPresenting)
             Button(ShellCopy.check) { start(.check) }
-                .disabled(store?.snapshot == nil || isBusy)
+                .disabled(store?.snapshot == nil || isBusy || isPresenting)
             Button(ShellCopy.repair) { start(.repair) }
-                .disabled(store?.snapshot == nil || isBusy)
+                .disabled(store?.snapshot == nil || isBusy || isPresenting)
             Divider()
             Button(ShellCopy.refresh) {
                 if let store {

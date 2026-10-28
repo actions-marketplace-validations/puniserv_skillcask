@@ -143,7 +143,7 @@ struct OverviewTab: View {
             link(text) { openURL(url) }
         case .skills(let installed, let others):
             FlowLayout(spacing: Spacing.inline) {
-                Pill(DetailOverviewCopy.installedSkill(installed), style: .accent)
+                ForEach(installed, id: \.self) { Pill(DetailOverviewCopy.installedSkill($0), style: .accent) }
                 ForEach(others, id: \.self) { Pill($0) }
                 Text(DetailOverviewCopy.addOthers)
                     .font(Font.Token.caption)

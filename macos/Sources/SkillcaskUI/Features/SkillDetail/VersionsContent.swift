@@ -65,14 +65,10 @@ struct VersionsContent: Hashable {
     ///   - versions: `info.versions` when known (the session cache), for "skipped 1.3.0".
     ///   - agents: The scope's agent names for the Installed row's "Linked into …".
     ///   - checkedAt: When `outdated` answered, for the up-to-date callout.
-    ///   - revealsManifest: Whether the scope has a skills.toml to reveal, for the Allowed range row's link.
-    init(
-        model: VersionsModel, versions: [String]?, agents: [String], checkedAt: Date?, now: Date,
-        revealsManifest: Bool = false
-    ) {
+    init(model: VersionsModel, versions: [String]?, agents: [String], checkedAt: Date?, now: Date) {
         self.model = model
         callout = Self.callout(model, checkedAt: checkedAt, now: now)
-        rows = Self.rows(model, versions: versions ?? [], agents: agents, revealsManifest: revealsManifest)
+        rows = Self.rows(model, versions: versions ?? [], agents: agents)
         switch model.status {
         case .available: footnote = VersionsCopy.reviewFootnote
         case .tagMoved: footnote = VersionsCopy.tagMovedFootnote
@@ -114,7 +110,7 @@ struct VersionsContent: Hashable {
     // MARK: - Rows
 
     private static func rows(
-        _ model: VersionsModel, versions: [String], agents: [String], revealsManifest: Bool
+        _ model: VersionsModel, versions: [String], agents: [String]
     ) -> [Row] {
         var rows: [Row] = []
         if let installed = model.installed {
@@ -129,7 +125,7 @@ struct VersionsContent: Hashable {
                 Row(
                     label: VersionsCopy.allowedRange, version: range, tone: .primary,
                     detail: VersionsCopy.rangeDetail(range), monos: [],
-                    trailing: revealsManifest ? .reveal(ShellCopy.revealManifest) : nil))
+                    trailing: .reveal(ShellCopy.revealManifest)))
         }
         if model.showsInRangeRow, let row = inRangeRow(model, versions: versions) {
             rows.append(row)

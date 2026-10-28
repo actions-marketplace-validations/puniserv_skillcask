@@ -62,8 +62,7 @@ private struct VersionsSample: View {
                 entry: entry, selectedTab: $tab, requiredBy: snapshot.requirerSkills(of: entry), allowedRange: range)
             VersionsTab(
                 content: VersionsContent(
-                    model: model, versions: versions, agents: agents, checkedAt: snapshot.checkedAt, now: .now,
-                    revealsManifest: true),
+                    model: model, versions: versions, agents: agents, checkedAt: snapshot.checkedAt, now: .now),
                 package: entry.package ?? entry.id, versions: versions, isLoading: isLoading, loadError: loadError,
                 initiallyExpanded: expanded)
         }

@@ -283,7 +283,7 @@ struct ScopeOverviewView: View {
     private func updates(_ snapshot: ScopeSnapshot) -> some View {
         UpdatesCard(
             snapshot: snapshot, onTitleTap: { show(Self.filter(for: .updates)) },
-            onReviewAll: { app.sheet = .updateAll }, onReview: { app.sheet = .update(package: $0) })
+            onReviewAll: { app.request(.updateAll) }, onReview: { app.request(.update(package: $0)) })
     }
 
     private func security(_ snapshot: ScopeSnapshot) -> some View {

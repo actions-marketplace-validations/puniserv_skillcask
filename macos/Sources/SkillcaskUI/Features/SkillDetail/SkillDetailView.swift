@@ -26,10 +26,10 @@ struct SkillDetailView: View {
                         entry: entry, isOffline: store.isOffline, selectedTab: tabBinding(for: entry),
                         requiredBy: store.requirerSkills(for: entry),
                         allowedRange: store.detail?.info.flatMap { DetailOverviewCopy.allowedRange(why: $0.why) },
-                        onUpdate: { request(.update(package: entry.package ?? entry.id)) },
-                        onAdopt: { request(.adopt(skill: entry.id)) },
+                        onUpdate: { request(.update(for: entry)) },
+                        onAdopt: { request(.adopt(skills: [entry.id])) },
                         onRemove: { request(.remove(skills: [entry.id])) },
-                        onReviewChanges: { request(.update(package: entry.package ?? entry.id)) })
+                        onReviewChanges: { request(.update(for: entry)) })
                     tabBody(for: entry)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
@@ -64,7 +64,7 @@ struct SkillDetailView: View {
                     isOffline: store.isOffline),
                 checkedAt: store.snapshot?.checkedAt,
                 onShowSkill: { store.selection = $0 },
-                onAddReplacement: { request(.addSkill) },
+                onAddReplacement: { request(.addSkill(query: nil)) },
                 onRetry: { Task { await store.loadDetail() } },
                 onSeeSecurity: { tab = .security },
                 onEmptyClick: { store.clearSelection() })
@@ -87,12 +87,13 @@ struct SkillDetailView: View {
                 onEmptyClick: { store.clearSelection() })
         case .versions:
             VersionsTab(
-                entry: entry, store: store, onReview: { request(.update(package: entry.package ?? entry.id)) },
+                entry: entry, store: store, manifest: app.manifest(of: store.scope),
+                onReview: { request(.update(for: entry)) },
                 onEmptyClick: { store.clearSelection() })
         }
     }
 
     private func request(_ sheet: AppStore.Sheet) {
-        app.sheet = sheet
+        app.request(sheet)
     }
 }

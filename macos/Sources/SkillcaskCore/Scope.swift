@@ -34,7 +34,8 @@ public enum Scope: Hashable, Sendable {
 
     /// The CLI's config directory, as `config_dir_of` in `src/scope.rs` resolves it: `$SKILLCASK_HOME`, else
     /// `$XDG_CONFIG_HOME/skillcask`, else `$HOME/.config/skillcask`. Empty values count as unset; `home` stands in
-    /// when the environment has no `HOME`.
+    /// when the environment has no `HOME`. Differs from `home()` in `src/scope.rs:33-35`, where `HOME=""` means no
+    /// home (`-g` fails) and `USERPROFILE` is the Windows fallback; neither applies to the macOS app.
     public static func configDirectory(environment: [String: String], home: URL) -> URL {
         func set(_ key: String) -> URL? {
             environment[key].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0, isDirectory: true) }

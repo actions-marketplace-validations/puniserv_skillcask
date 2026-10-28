@@ -31,10 +31,14 @@ public struct SkillEntry: Identifiable, Hashable, Sendable {
     /// What the text mentions, from the same `audit` row; nil when `audit` did not list the skill (a not managed
     /// skill on a CLI without the planned `auditNotManaged`, or no audit at all): "not audited", not "clean".
     public let reach: Reach?
+    /// `status`'s `via` list as printed, kept for every kind: a package-only row of a drifted dependency carries it
+    /// here, since its `Kind` has no room for it (`src/commands.rs` status labels `name (via a, b)`).
+    public let via: [String]
 
     public init(
         id: String, name: String, kind: Kind, source: String?, version: String?, state: SkillState, health: Health,
-        update: Update?, findings: [AuditDocument.Finding], path: String?, description: String?, reach: Reach? = nil
+        update: Update?, findings: [AuditDocument.Finding], path: String?, description: String?, reach: Reach? = nil,
+        via: [String] = []
     ) {
         self.id = id
         self.name = name
@@ -48,6 +52,7 @@ public struct SkillEntry: Identifiable, Hashable, Sendable {
         self.path = path
         self.description = description
         self.reach = reach
+        self.via = via
     }
 
     public var package: String? {

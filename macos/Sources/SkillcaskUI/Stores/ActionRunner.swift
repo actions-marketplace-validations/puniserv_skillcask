@@ -9,9 +9,24 @@ import SkillcaskDomain
 /// banner (S11), and the scope's store runs its targeted refresh.
 ///
 /// Wired here: `sync` (`install`), `check` (`doctor`), `repair` (`doctor --fix`), `restoreFromLock`
-/// (`install --frozen`). Add, update, remove and adopt arrive with their sheets (P3-5, P3-6, P3-8): they will call
-/// `run(_:title:in:)` with their `Invocation.Command` and the same bookkeeping applies.
+/// (`install --frozen`). Add, update, remove and adopt run from their sheets through `SheetRun`, which calls
+/// `run(_:title:outcome:in:from:)` with `.sheet`: the same bookkeeping applies, but the progress and a failure stay
+/// in the sheet (S11) instead of the list header and banner.
 @MainActor @Observable public final class ActionRunner {
+    /// Where a run was started, which decides where its progress and failure show (S11): the list header and the
+    /// banner for the toolbar, menus and Overview; inside the sheet for a sheet's run.
+    public enum Origin: Hashable, Sendable {
+        case window
+        case sheet
+    }
+
+    /// How a run ended, for the one that started it (`SheetRun`).
+    public enum RunEnd: Hashable, Sendable {
+        case succeeded
+        /// The failure as the banner would word it, `Cancelled.` included.
+        case failed(UserMessage)
+    }
+
     /// A command in flight: what the list header and the Activity drawer show.
     public struct RunningAction: Identifiable {
         public let id: UUID
@@ -21,8 +36,10 @@ import SkillcaskDomain
         /// `skillcask install`, for the Activity drawer.
         public let command: String
         public let startedAt: Date
+        /// `.sheet`: the list header leaves the progress to the sheet.
+        public let origin: Origin
         public fileprivate(set) var lines: [OutputLine] = []
-        fileprivate let task: Task<Void, Never>?
+        fileprivate let task: Task<RunEnd, Never>?
 
         /// Terminates the child (SIGTERM, then SIGKILL after the grace period); the outcome reads `Cancelled.`
         public func cancel() {
@@ -69,7 +86,11 @@ import SkillcaskDomain
     private struct FailedRun {
         let command: Invocation.Command
         let title: String
-        let outcome: @Sendable (String) -> String
+        let failure: String?
+        /// The toast text, from the scope name and the transcript (`run`'s `report`, else its `outcome`).
+        let report: @Sendable (String, [OutputLine]) -> String
+        /// Whether the first run toasted; Retry ends the same way.
+        let announce: Bool
         weak var store: ScopeStore?
         /// Set when the run ended in an integrity failure: `retry()` refuses it.
         var isIntegrity = false
@@ -109,20 +130,24 @@ import SkillcaskDomain
 
     /// Re-runs the last action that failed (same command, title and outcome, in the same scope) and clears its
     /// banner. Only the user's Retry calls it: nothing is retried automatically, and the banner offers Retry for
-    /// network failures alone (`FailureBanner.showsRetry`). An integrity failure is refused, not even from a stray
-    /// call: its run is kept but marked, and `retry()` returns nil for it. Also nil when no run has failed since
-    /// the last success, when the scope's store is gone, or while another run is in flight. Returns the new run's
-    /// task.
+    /// network failures alone (`FailureBanner.showsRetry`). An integrity failure is never re-run, even if
+    /// something calls this anyway: the failed run stays recorded but marked, and the call returns nil. It also
+    /// returns nil when nothing has failed since the last success, when the scope's store is gone, or while another
+    /// run is in flight; otherwise it returns the new run's task.
     @discardableResult public func retry() -> Task<Void, Never>? {
         guard let failedRun, !failedRun.isIntegrity, let store = failedRun.store, current == nil else { return nil }
         outcome = nil
-        return Task { await run(failedRun.command, title: failedRun.title, outcome: failedRun.outcome, in: store) }
+        return Task {
+            await run(
+                failedRun.command, title: failedRun.title, failure: failedRun.failure, outcome: { _ in "" },
+                report: failedRun.report, in: store, announce: failedRun.announce)
+        }
     }
 
     /// Previews: shows `title` as a run in flight in `scope`, with no child process behind it.
-    func preloadRunning(title: String, in scope: Scope) {
+    func preloadRunning(title: String, in scope: Scope, from origin: Origin = .window) {
         current = RunningAction(
-            id: UUID(), title: title, scope: scope, command: "", startedAt: Date(), task: nil)
+            id: UUID(), title: title, scope: scope, command: "", startedAt: Date(), origin: origin, task: nil)
     }
 
     // MARK: - Derived
@@ -168,53 +193,80 @@ import SkillcaskDomain
 
     /// Sync = `install`: installs exactly what skills.lock pins (brief §6).
     public func sync(in store: ScopeStore) async {
-        await run(.install(frozen: false), title: ActionCopy.syncing, outcome: ActionCopy.synced, in: store)
+        await run(
+            .install(frozen: false), title: ActionCopy.syncing, failure: ActionCopy.couldNotSync,
+            outcome: ActionCopy.synced,
+            in: store)
     }
 
     /// Check = `doctor` without `--fix`: reports, changes nothing.
     public func check(in store: ScopeStore) async {
-        await run(.doctor(fix: false), title: ActionCopy.checking, outcome: ActionCopy.checked, in: store)
+        await run(
+            .doctor(fix: false), title: ActionCopy.checking, failure: ActionCopy.couldNotCheck,
+            outcome: ActionCopy.checked,
+            in: store)
     }
 
     /// Repair = `doctor --fix`: links, the git index and the gitignore block; downloads nothing.
     public func repair(in store: ScopeStore) async {
-        await run(.doctor(fix: true), title: ActionCopy.repairing, outcome: ActionCopy.repaired, in: store)
+        await run(
+            .doctor(fix: true), title: ActionCopy.repairing, failure: ActionCopy.couldNotRepair,
+            outcome: ActionCopy.repaired,
+            in: store)
     }
 
     /// Set Up = `init`: writes skills.toml in the scope's folder; downloads nothing.
     public func setUp(in store: ScopeStore) async {
-        await run(.initialize, title: ActionCopy.settingUp, outcome: ActionCopy.setUp, in: store)
+        await run(
+            .initialize, title: ActionCopy.settingUp, failure: ActionCopy.couldNotSetUp, outcome: ActionCopy.setUp,
+            in: store)
     }
 
     /// Reinstall from lock = `install --frozen`: puts back the locked files of every skill whose folder differs
     /// from skills.lock or is missing; fails, changing nothing, when the lock is out of date with skills.toml.
     public func restoreFromLock(in store: ScopeStore) async {
-        await run(.install(frozen: true), title: ActionCopy.restoring, outcome: ActionCopy.restored, in: store)
+        await run(
+            .install(frozen: true), title: ActionCopy.restoring, failure: ActionCopy.couldNotRestore,
+            outcome: ActionCopy.restored,
+            in: store)
     }
 
     /// Runs `command` in `store`'s scope with a live transcript, records it, shows its outcome and asks the store
     /// for its targeted refresh. One run at a time in the whole app: a second call while `current` is set does
-    /// nothing, because the toolbar is disabled meanwhile.
-    public func run(
-        _ command: Invocation.Command, title: String, outcome outcomeText: @escaping @Sendable (String) -> String,
-        in store: ScopeStore
-    ) async {
-        guard current == nil else { return }
-        failedRun = FailedRun(command: command, title: title, outcome: outcomeText, store: store)
+    /// nothing and returns nil, because the toolbar is disabled meanwhile. Success is a toast unless `announce` is
+    /// false (a batch item: the batch shows one summary through `announce(_:)`); a failure is the banner for
+    /// `.window` and only the returned `.failed` for `.sheet`, which shows it in place. A sheet's run never touches
+    /// the window's banner or its Retry. Cancelling the calling task cancels the run. `failure` is the failure's
+    /// title as Copy words it ("Couldn’t sync."); nil falls back to `OutcomeCopy.couldNot(title)` for callers not
+    /// yet migrated (that reads "Couldn’t Syncing…." for a progressive title, so every caller should pass one).
+    @discardableResult public func run(
+        _ command: Invocation.Command, title: String, failure: String? = nil,
+        outcome outcomeText: @escaping @Sendable (String) -> String,
+        report: (@Sendable (_ scope: String, _ transcript: [OutputLine]) -> String)? = nil, in store: ScopeStore,
+        from origin: Origin = .window,
+        announce: Bool = true
+    ) async -> RunEnd? {
+        guard current == nil else { return nil }
+        let failureTitle = failure ?? OutcomeCopy.couldNot(title)
+        let report: @Sendable (String, [OutputLine]) -> String = report ?? { scope, _ in outcomeText(scope) }
+        if origin == .window {
+            failedRun = FailedRun(
+                command: command, title: title, failure: failure, report: report, announce: announce, store: store)
+        }
         let invocation: Invocation
         do {
             invocation = try Invocation(command, in: store.scope, capabilities: store.capabilities)
         } catch {
-            finish(
-                id: UUID(), title: title, command: ActionCopy.unbuilt, startedAt: Date(), duration: .zero,
-                status: nil, error: error, transcript: [], outcomeText: outcomeText, store: store)
-            return
+            return finish(
+                id: UUID(), title: title, failure: failureTitle, command: ActionCopy.unbuilt, startedAt: Date(),
+                duration: .zero, status: nil, error: error, transcript: [], outcomeText: report, origin: origin,
+                announce: announce, store: store)
         }
         let id = UUID()
         let startedAt = Date()
         let client = store.client
         let queue = queue
-        let task = Task { [weak self] in
+        let task = Task { [weak self] () -> RunEnd in
             let onLine: @Sendable (OutputLine) -> Void = { [weak self] line in
                 guard let self else { return }
                 Task { @MainActor in self.append(line, to: id) }
@@ -236,15 +288,27 @@ import SkillcaskDomain
             } catch {
                 result = .failure(.launchFailed(String(describing: error)))
             }
-            await self?
-                .complete(
-                    id: id, title: title, invocation: invocation, result: result, outcomeText: outcomeText, store: store
-                )
+            guard let self else {
+                return .failed(ErrorCopy.message(for: .cancelled, title: failureTitle))
+            }
+            return await complete(
+                id: id, title: title, failure: failureTitle, invocation: invocation, result: result,
+                outcomeText: report, origin: origin,
+                announce: announce, store: store)
         }
         current = RunningAction(
             id: id, title: title, scope: store.scope, command: invocation.displayCommand, startedAt: startedAt,
-            task: task)
-        await task.value
+            origin: origin, task: task)
+        return await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    /// The one toast of a batch (Adopt All: "Adopted 9 skills"), after its items ran with `announce: false`.
+    public func announce(_ text: String) {
+        outcome = .toast(ToastMessage(id: UUID(), text: text))
     }
 
     /// Cancels the running command, if any.
@@ -260,10 +324,13 @@ import SkillcaskDomain
     }
 
     private func complete(
-        id: UUID, title: String, invocation: Invocation, result: Result<RunResult, CLIError>,
-        outcomeText: @escaping @Sendable (String) -> String, store: ScopeStore
-    ) async {
-        guard let running = current, running.id == id else { return }
+        id: UUID, title: String, failure: String, invocation: Invocation, result: Result<RunResult, CLIError>,
+        outcomeText: @escaping @Sendable (String, [OutputLine]) -> String, origin: Origin, announce: Bool,
+        store: ScopeStore
+    ) async -> RunEnd {
+        guard let running = current, running.id == id else {
+            return .failed(ErrorCopy.message(for: .cancelled, title: failure))
+        }
         let duration = Duration.seconds(Date().timeIntervalSince(running.startedAt))
         let verdict: CLIError?
         let status: ExitStatus?
@@ -275,30 +342,48 @@ import SkillcaskDomain
             status = nil
             verdict = error
         }
-        finish(
-            id: id, title: title, command: running.command, startedAt: running.startedAt, duration: duration,
-            status: status, error: verdict, transcript: running.lines, outcomeText: outcomeText, store: store)
-        // Always refresh afterwards (ADR §9 #4): a cancelled or failed run may have changed files.
-        await store.refreshAfterMutation()
+        let end = finish(
+            id: id, title: title, failure: failure, command: running.command, startedAt: running.startedAt,
+            duration: duration,
+            status: status, error: verdict, transcript: running.lines, outcomeText: outcomeText, origin: origin,
+            announce: announce, store: store)
+        // Always refresh afterwards (ADR §9 #4): a cancelled or failed run may have changed files. In a task of its
+        // own, which does not inherit this one's cancellation: after Cancel the reads must still run.
+        await Task { await store.refreshAfterMutation() }.value
+        return end
     }
 
     private func finish(
-        id: UUID, title: String, command: String, startedAt: Date, duration: Duration, status: ExitStatus?,
-        error: CLIError?, transcript: [OutputLine], outcomeText: (String) -> String, store: ScopeStore
-    ) {
+        id: UUID, title: String, failure: String, command: String, startedAt: Date, duration: Duration,
+        status: ExitStatus?,
+        error: CLIError?, transcript: [OutputLine], outcomeText: (String, [OutputLine]) -> String, origin: Origin,
+        announce: Bool,
+        store: ScopeStore
+    ) -> RunEnd {
         current = nil
         activity.insert(
             ActivityEntry(
                 id: id, title: title, command: command, startedAt: startedAt, duration: duration, status: status,
                 error: error, transcript: transcript), at: 0)
         if let error {
-            let message = ErrorCopy.message(for: error, title: OutcomeCopy.couldNot(title))
-            failedRun?.isIntegrity = message.isIntegrity
-            outcome = .banner(message, id: id)
-        } else {
-            failedRun = nil
-            outcome = .toast(ToastMessage(id: id, text: outcomeText(ShellCopy.name(of: store.scope))))
+            let message = ErrorCopy.message(for: error, title: failure)
+            switch origin {
+            case .window:
+                failedRun?.isIntegrity = message.isIntegrity
+                outcome = .banner(message, id: id)
+            case .sheet:
+                // The sheet shows the message and offers its own retry; the window's banner and Retry stay as they were.
+                break
+            }
+            return .failed(message)
         }
+        if origin == .window {
+            failedRun = nil
+        }
+        if announce {
+            outcome = .toast(ToastMessage(id: id, text: outcomeText(ShellCopy.name(of: store.scope), transcript)))
+        }
+        return .succeeded
     }
 
     /// The one decoding rule (ADR §4): a command that prints a document succeeded when stdout holds one, whatever

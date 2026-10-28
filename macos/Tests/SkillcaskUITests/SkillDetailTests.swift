@@ -77,6 +77,24 @@ import Testing
         #expect(value(DetailOverviewCopy.availableTo, in: content.place) == .text("Claude Code, Cursor", mono: nil))
     }
 
+    @Test func installedSiblingsOfThePackageAreMarkedInstalled() {
+        let pdf = overview(DesignFixtures.pdf, info: DesignFixtures.pdfInfo)
+        guard case .skills(let installed, let others) = value(DetailOverviewCopy.skillsInPackage, in: pdf.facts) else {
+            Issue.record("pdf has no skills row")
+            return
+        }
+        #expect(installed == ["pdf"], "no other skill of anthropics/skills is installed in api")
+        #expect(others == DesignFixtures.pdfInfo.skills.map(\.name).filter { $0 != "pdf" }, "unchanged otherwise")
+        let after = AddSkillSamples.afterAdd
+        let syntax = DesignFixtures.entry("jira-syntax", in: after)
+        let siblings = OverviewContent.installedSiblings(["jira-communication", "other"], of: syntax, in: after)
+        #expect(siblings == ["jira-communication"])
+        #expect(
+            OverviewContent.installedSiblings(
+                ["jira-syntax"], of: DesignFixtures.jiraCommunication, in: DesignFixtures.api) == [],
+            "jira-syntax is not installed in the api fixture")
+    }
+
     @Test func projectSkillShowsItsKindAndNoPackageCard() {
         let content = overview(DesignFixtures.myNotes, info: DesignFixtures.myNotesInfo)
         #expect(content.banners.isEmpty)

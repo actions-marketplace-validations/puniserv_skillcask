@@ -21,7 +21,13 @@ public struct MiniProgressBar: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var appeared = Date()
 
-    public init() {}
+    /// The height this bar draws at; `height` unless a board asks for another (the Review sheet's 4 pt).
+    private let barHeight: CGFloat
+
+    /// - Parameter height: The track's height; the default is the list header's `Size.miniProgress`.
+    public init(height: CGFloat = MiniProgressBar.height) {
+        barHeight = height
+    }
 
     /// The segment's leading edge as a fraction of the track width after `elapsed` seconds: starts at
     /// `restingOffset`, moves right at a constant speed, leaves the track at `1` and re-enters at
@@ -49,7 +55,7 @@ public struct MiniProgressBar: View {
             .background(RoundedRectangle(cornerRadius: Radius.miniProgress).fill(Color.separator))
             .clipShape(RoundedRectangle(cornerRadius: Radius.miniProgress))
         }
-        .frame(height: MiniProgressBar.height)
+        .frame(height: barHeight)
         .accessibilityHidden(true)
     }
 }

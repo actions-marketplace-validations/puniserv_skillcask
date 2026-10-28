@@ -28,6 +28,7 @@ public enum PreviewRegistry {
     /// Every registered entry, in registration order.
     public static var all: [Entry] {
         probe + tokens + progress + statusDot + chips + badges + detailHeader + rows + cards + diff + outcomes + strips
-            + emptyStates + shell + list + detail + overview + contents + security + versions
+            + emptyStates + shell + list + detail + overview + contents + security + versions + reviewUpdate
+            + adopt + addSkill
     }
 }

@@ -120,16 +120,21 @@ import SkillcaskDomain
     }
 
     /// `status`, `audit` and `doctor` in parallel, then one snapshot. `outdated` is kept from the last check.
+    /// `isRefreshing` ends with this refresh however it returns (cancelled included), unless a newer one started.
     public func refresh() async {
         generation += 1
         let mine = generation
         isRefreshing = true
+        defer {
+            if mine == generation {
+                isRefreshing = false
+            }
+        }
         async let status = result(StatusDocument.self, .status)
         async let audit = result(AuditDocument.self, .audit)
         async let doctor = result(DoctorDocument.self, .doctor(fix: false))
         let (statusResult, auditResult, doctorResult) = await (status, audit, doctor)
         guard mine == generation, !Task.isCancelled else { return }
-        isRefreshing = false
         switch statusResult {
         case .success(let document):
             documents.status = document
@@ -154,9 +159,13 @@ import SkillcaskDomain
         checkGeneration += 1
         let mine = checkGeneration
         isCheckingUpdates = true
+        defer {
+            if mine == checkGeneration {
+                isCheckingUpdates = false
+            }
+        }
         let outcome = await result(OutdatedDocument.self, .outdated)
         guard mine == checkGeneration, !Task.isCancelled else { return }
-        isCheckingUpdates = false
         switch outcome {
         case .success(let document):
             documents.outdated = document

@@ -58,21 +58,19 @@ public enum ContentsCopy {
     /// The same link once the reason shows (no board source).
     public static let hideDetails = "Hide details"
 
-    /// What Details discloses when SKILL.md cannot be read: the error's description, its failure reason when that
-    /// is not already part of it, and the file's path on its own line; the home directory reads `~` throughout.
-    /// No board source: Foundation's own sentences, e.g. `The file “SKILL.md” doesn’t exist. The file doesn’t
-    /// exist.` then `~/work/api/.agents/skills/pdf/SKILL.md`.
+    /// What Details discloses when SKILL.md cannot be read: the error's description, home as `~`. No path line:
+    /// the empty state shows the file's path right above. A Cocoa error's description already folds in its failure
+    /// reason (`The file “SKILL.md” couldn’t be opened because there is no such file.`), so the reason is added only
+    /// for other domains, and only when the description does not already contain it. No board source.
     public static func readError(_ error: any Error, home: String = NSHomeDirectory()) -> String {
         let error = error as NSError
-        var sentence = error.localizedDescription
-        if let reason = error.localizedFailureReason, !reason.isEmpty, !sentence.contains(reason) {
-            sentence += " " + reason
+        var text = error.localizedDescription
+        if error.domain != NSCocoaErrorDomain, let reason = error.localizedFailureReason, !reason.isEmpty,
+            !text.contains(reason)
+        {
+            text += " " + reason
         }
-        let path =
-            (error.userInfo[NSFilePathErrorKey] as? String)
-            ?? (error.userInfo[NSURLErrorKey] as? URL).map(\.path)
-        let lines = [sentence] + [path].compactMap { $0 }.filter { !sentence.contains($0) }
-        return lines.map { abbreviatingHome($0, home: home) }.joined(separator: "\n")
+        return abbreviatingHome(text, home: home)
     }
 
     /// `text` with every occurrence of the home directory written `~`.
