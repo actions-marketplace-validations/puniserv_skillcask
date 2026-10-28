@@ -2381,31 +2381,60 @@ pub fn search(ctx: &Ctx, query: Option<&str>, json: bool, skills_sh: Option<bool
     if json {
         let mut list: Vec<Value> = results
             .iter()
-            .map(
-                |(n, d, r)| json!({ "name": skill::shown(n), "description": skill::shown(d), "source": skill::shown(r), "installs": null }),
-            )
+            .map(|h| {
+                let requires: serde_json::Map<String, Value> =
+                    h.requires.iter().map(|(k, v)| (skill::shown(k), Value::String(skill::shown(v)))).collect();
+                json!({ "name": skill::shown(&h.name), "description": skill::shown(&h.description), "source": skill::shown(&h.source),
+                    "installs": null, "skills": h.skills, "requires": requires })
+            })
             .collect();
-        list.extend(found.iter().map(|(n, i)| json!({ "name": n, "description": null, "source": "skills.sh", "installs": i })));
+        list.extend(
+            found.iter().map(
+                |(n, i)| json!({ "name": n, "description": null, "source": "skills.sh", "installs": i, "skills": null, "requires": {} }),
+            ),
+        );
         print_json(&json!({ "results": list, "skills-sh": setting }));
         return Ok(());
     }
     if results.is_empty() && found.is_empty() {
         println!("no skill packages match {query:?}");
     }
-    let mut rows: Vec<(String, String)> = results.iter().map(|(n, d, _)| (ui::printable(n), ui::printable(d))).collect();
+    let agent = ui::agent();
+    let mut rows: Vec<(String, String)> = results
+        .iter()
+        .map(|h| {
+            let mut marks = Vec::new();
+            if let Some(n) = h.skills.filter(|n| *n > 1) {
+                marks.push(format!("[{n} skills]"));
+            }
+            if !h.requires.is_empty() {
+                marks.push(format!("[+{} packages]", h.requires.len()));
+            }
+            // An agent picks a skill by its "Use when…", a person scans a list.
+            let d = if agent { h.description.clone() } else { first_sentence(&h.description) };
+            (ui::printable(&h.name), ui::printable(&marks.into_iter().chain([d]).filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ")))
+        })
+        .collect();
     rows.extend(found.iter().map(|(n, i)| {
         let installs = i.map_or(String::new(), |i| format!("{i} installs, "));
         (n.clone(), format!("{installs}from skills.sh"))
     }));
     let width = rows.iter().map(|(n, _)| n.chars().count()).max().unwrap_or(0);
     for (n, d) in rows {
-        if ui::agent() {
+        if agent {
             println!("{n}\t{d}");
         } else {
             println!("{n:width$}  {}", ui::out(ui::Color::Dim, d));
         }
     }
     Ok(())
+}
+
+/// Up to the first ". " not ending an abbreviation such as "e.g.", at most 100 characters.
+fn first_sentence(d: &str) -> String {
+    let end = d.match_indices(". ").map(|(i, _)| i).find(|&i| !d[..i].rsplit(' ').next().unwrap_or("").contains('.'));
+    let d = end.map_or(d.trim().to_string(), |i| d[..=i].to_string());
+    if d.chars().count() > 100 { format!("{}…", d.chars().take(99).collect::<String>()) } else { d }
 }
 
 /// `package`: one locked package, else every manifest entry `update` would move. `to`: the newest
@@ -2789,6 +2818,13 @@ fn healthy(state: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn first_sentence_skips_abbreviations_and_caps_length() {
+        assert_eq!(first_sentence("Upgrade React (e.g. 18 to 19). Then more."), "Upgrade React (e.g. 18 to 19).");
+        assert_eq!(first_sentence("No period"), "No period");
+        assert_eq!(first_sentence(&"x".repeat(150)).chars().count(), 100);
+    }
 
     #[test]
     fn suggestion_and_answers() {

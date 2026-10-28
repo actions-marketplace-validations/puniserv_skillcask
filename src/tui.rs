@@ -591,7 +591,11 @@ fn perform(app: &mut App, job: Job) {
                         let name = r["name"].as_str()?;
                         let installs = r["installs"].as_u64().map_or(String::new(), |i| format!(" {i} installs"));
                         let source = r["source"].as_str().unwrap_or("");
-                        Some((name.to_string(), format!("{name}  [{source}{installs}]  {}", r["description"].as_str().unwrap_or(""))))
+                        let skills = r["skills"].as_u64().filter(|n| *n > 1).map_or(String::new(), |n| format!(" {n} skills"));
+                        let req = r["requires"].as_object().map_or(0, |m| m.len());
+                        let req = if req > 0 { format!(" +{req} packages") } else { String::new() };
+                        let d = r["description"].as_str().unwrap_or("");
+                        Some((name.to_string(), format!("{name}  [{source}{installs}{skills}{req}]  {d}")))
                     });
                     if items.is_empty() {
                         let sh = if d["skills-sh"] == true { ", skills.sh" } else { "" };

@@ -92,6 +92,6 @@ fn search_escapes_package_text() {
     let out = doc(&p, &["search", "beta", "--json"], 0);
     assert_eq!(
         out,
-        json!({ "results": [{ "name": "acme/beta", "description": "beta <U+202E>txt", "source": "gl", "installs": null }], "skills-sh": null })
+        json!({ "results": [{ "name": "acme/beta", "description": "beta <U+202E>txt", "source": "gl", "installs": null, "skills": 1, "requires": {} }], "skills-sh": null })
     );
 }
