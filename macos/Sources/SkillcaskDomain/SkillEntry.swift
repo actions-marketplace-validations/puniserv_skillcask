@@ -1,0 +1,64 @@
+import SkillcaskCore
+
+/// One row of the skill list: a `status` entry joined with what `outdated` and `audit` say about it, reduced to
+/// one `Health`. The id is stable across refreshes (the skill name, else the package name), so selection survives.
+public struct SkillEntry: Identifiable, Hashable, Sendable {
+    public enum Kind: Hashable, Sendable {
+        /// A skill installed from a package named in skills.toml.
+        case package(String)
+        /// A skill of a package pulled in by others.
+        case dependency(String, via: [String])
+        /// A row about a package rather than a skill: drift, not in the manifest, …
+        case packageOnly(String)
+        case project
+        case handWritten
+        case notManaged(adopt: String?)
+    }
+
+    public let id: String
+    public let name: String
+    public let kind: Kind
+    public let version: String?
+    public let state: SkillState
+    public let health: Health
+    public let update: Update?
+    public let findings: [AuditDocument.Finding]
+    /// Relative to the scope root, from `audit`.
+    public let path: String?
+    public let description: String?
+
+    public init(
+        id: String, name: String, kind: Kind, version: String?, state: SkillState, health: Health, update: Update?,
+        findings: [AuditDocument.Finding], path: String?, description: String?
+    ) {
+        self.id = id
+        self.name = name
+        self.kind = kind
+        self.version = version
+        self.state = state
+        self.health = health
+        self.update = update
+        self.findings = findings
+        self.path = path
+        self.description = description
+    }
+
+    public var package: String? {
+        switch kind {
+        case .package(let name), .dependency(let name, _), .packageOnly(let name): name
+        case .project, .handWritten, .notManaged: nil
+        }
+    }
+
+    public var isProjectSkill: Bool {
+        kind == .project
+    }
+
+    public var isNotManaged: Bool {
+        if case .notManaged = kind { true } else { false }
+    }
+
+    public var hasUpdate: Bool {
+        if case .updateAvailable = health { true } else { update?.available != nil }
+    }
+}
