@@ -138,7 +138,7 @@ impl Auth {
 }
 
 /// `host`, or `host:port` for a port other than the scheme's default.
-fn auth_key(url: &Url) -> Option<String> {
+pub fn auth_key(url: &Url) -> Option<String> {
     let host = url.host_str()?;
     Some(url.port().map_or_else(|| host.to_string(), |p| format!("{host}:{p}")))
 }
