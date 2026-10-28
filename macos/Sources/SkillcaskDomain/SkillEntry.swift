@@ -18,6 +18,8 @@ public struct SkillEntry: Identifiable, Hashable, Sendable {
     public let id: String
     public let name: String
     public let kind: Kind
+    /// The repository name or `git`, from the planned `status.source` key; nil until the CLI prints it.
+    public let source: String?
     public let version: String?
     public let state: SkillState
     public let health: Health
@@ -28,12 +30,13 @@ public struct SkillEntry: Identifiable, Hashable, Sendable {
     public let description: String?
 
     public init(
-        id: String, name: String, kind: Kind, version: String?, state: SkillState, health: Health, update: Update?,
-        findings: [AuditDocument.Finding], path: String?, description: String?
+        id: String, name: String, kind: Kind, source: String?, version: String?, state: SkillState, health: Health,
+        update: Update?, findings: [AuditDocument.Finding], path: String?, description: String?
     ) {
         self.id = id
         self.name = name
         self.kind = kind
+        self.source = source
         self.version = version
         self.state = state
         self.health = health

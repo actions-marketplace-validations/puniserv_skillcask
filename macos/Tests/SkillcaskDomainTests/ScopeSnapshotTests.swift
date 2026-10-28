@@ -75,6 +75,17 @@ enum Sample {
                 && snapshot.entry(id: nil) == nil)
     }
 
+    @Test func requirerSkillsNameTheSkillsOfTheViaPackages() throws {
+        let snapshot = Sample.snapshot()
+        let byId = Dictionary(uniqueKeysWithValues: snapshot.entries.map { ($0.id, $0) })
+        let dependency = try #require(byId["d"])
+        #expect(snapshot.requirerSkills(of: dependency) == ["jira-communication", "jira-syntax"])
+        let package = try #require(byId["jira-syntax"])
+        #expect(snapshot.requirerSkills(of: package) == [])
+        let project = try #require(byId["notes"])
+        #expect(snapshot.requirerSkills(of: project) == [])
+    }
+
     @Test func withoutOutdatedAndAuditNothingIsGuessed() {
         let snapshot = Sample.snapshot(outdated: false, audit: false)
         #expect(!snapshot.updatesChecked && snapshot.availableUpdates.isEmpty)

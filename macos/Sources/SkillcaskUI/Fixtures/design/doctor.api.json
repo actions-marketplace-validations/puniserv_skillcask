@@ -1,0 +1,15 @@
+{
+  "ok": false,
+  "passed": [
+    "links: 26 ok",
+    "targets: no links left in former target directories",
+    "git index: no managed paths committed"
+  ],
+  "problems": [
+    ".cursor/skills/pdf: link wrong",
+    ".skillcask/skills/jira-syntax: not installed (netresearch/agent-jira-skill); run `skillcask install`",
+    ".gitignore: stale managed block"
+  ],
+  "fixed": [],
+  "warnings": []
+}

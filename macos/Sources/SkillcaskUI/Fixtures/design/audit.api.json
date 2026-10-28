@@ -1,0 +1,272 @@
+{
+  "ok": false,
+  "skills": [
+    {
+      "skill": "pdf",
+      "kind": "package",
+      "path": ".skillcask/skills/pdf",
+      "package": "anthropics/skills",
+      "version": "1.2.0",
+      "findings": [],
+      "commands": [
+        "pdftotext",
+        "qpdf",
+        "python3"
+      ],
+      "network": [
+        "pypi.org"
+      ],
+      "paths": [
+        "./scripts/",
+        "~/.cache/skillcask"
+      ],
+      "env": [],
+      "scripts": [
+        "scripts/ocr.py",
+        "scripts/fields.py",
+        "scripts/fill_form.py"
+      ]
+    },
+    {
+      "skill": "jira-syntax",
+      "kind": "package",
+      "path": ".skillcask/skills/jira-syntax",
+      "package": "netresearch/agent-jira-skill",
+      "version": "4.2.0",
+      "findings": [],
+      "commands": [
+        "curl",
+        "uv"
+      ],
+      "network": [
+        "github.com",
+        "jira.atlassian.com"
+      ],
+      "paths": [],
+      "env": [
+        "JIRA_PERSONAL_TOKEN",
+        "JIRA_URL"
+      ],
+      "scripts": [
+        "scripts/validate-jira-syntax.sh"
+      ]
+    },
+    {
+      "skill": "jira-communication",
+      "kind": "package",
+      "path": ".skillcask/skills/jira-communication",
+      "package": "netresearch/agent-jira-skill",
+      "version": "4.2.0",
+      "findings": [],
+      "commands": [
+        "curl",
+        "jq",
+        "uv"
+      ],
+      "network": [
+        "company.atlassian.net",
+        "id.atlassian.com"
+      ],
+      "paths": [
+        "~/.jira/profiles.json",
+        "~/.netrc"
+      ],
+      "env": [
+        "JIRA_PERSONAL_TOKEN",
+        "JIRA_URL"
+      ],
+      "scripts": [
+        "scripts/core/jira-issue.py",
+        "scripts/core/jira-search.py"
+      ]
+    },
+    {
+      "skill": "deploy-checklist",
+      "kind": "hand-written",
+      "path": ".claude/skills/deploy-checklist",
+      "package": null,
+      "version": null,
+      "findings": [
+        {
+          "rule": "modified",
+          "path": ".claude/skills/deploy-checklist",
+          "line": null,
+          "message": "modified after skillcask installed it; run `skillcask install` to restore"
+        }
+      ],
+      "commands": [
+        "kubectl",
+        "helm",
+        "ssh",
+        "curl"
+      ],
+      "network": [
+        "deploy.acme.example",
+        "hooks.slack.com"
+      ],
+      "paths": [],
+      "env": [
+        "KUBECONFIG",
+        "SLACK_WEBHOOK"
+      ],
+      "scripts": [
+        "scripts/deploy.sh",
+        "scripts/notify.sh"
+      ]
+    },
+    {
+      "skill": "sql-review",
+      "kind": "package",
+      "path": ".skillcask/skills/sql-review",
+      "package": "acme/sql-review",
+      "version": "0.9.2",
+      "findings": [],
+      "commands": [],
+      "network": [],
+      "paths": [],
+      "env": [],
+      "scripts": []
+    },
+    {
+      "skill": "my-notes",
+      "kind": "project",
+      "path": ".skills/my-notes",
+      "package": null,
+      "version": null,
+      "findings": [
+        {
+          "rule": "risky-pattern",
+          "path": ".skills/my-notes/SKILL.md",
+          "line": 12,
+          "message": "downloads code into a shell"
+        },
+        {
+          "rule": "invisible-character",
+          "path": ".skills/my-notes/SKILL.md",
+          "line": 3,
+          "message": "U+202E RIGHT-TO-LEFT OVERRIDE"
+        }
+      ],
+      "commands": [
+        "git log",
+        "curl",
+        "sh"
+      ],
+      "network": [
+        "notes.example"
+      ],
+      "paths": [
+        "docs/notes/",
+        "docs/decisions/"
+      ],
+      "env": [],
+      "scripts": [
+        "https://notes.example/t.sh"
+      ]
+    },
+    {
+      "skill": "caveman",
+      "kind": "not managed",
+      "path": ".claude/skills/caveman",
+      "package": null,
+      "version": null,
+      "findings": [],
+      "commands": [],
+      "network": [],
+      "paths": [],
+      "env": [],
+      "scripts": []
+    },
+    {
+      "skill": "safe-refactor",
+      "kind": "package",
+      "path": ".skillcask/skills/safe-refactor",
+      "package": "juliusbrussee/safe-refactor",
+      "version": "4.0.1",
+      "findings": [],
+      "commands": [],
+      "network": [],
+      "paths": [],
+      "env": [],
+      "scripts": []
+    },
+    {
+      "skill": "legacy-lint",
+      "kind": "package",
+      "path": ".skillcask/skills/legacy-lint",
+      "package": "acme/lint",
+      "version": "2.3.1",
+      "findings": [],
+      "commands": [],
+      "network": [],
+      "paths": [],
+      "env": [],
+      "scripts": []
+    },
+    {
+      "skill": "test-writer",
+      "kind": "package",
+      "path": ".skillcask/skills/test-writer",
+      "package": "anthropics/skills",
+      "version": "1.0.3",
+      "findings": [],
+      "commands": [],
+      "network": [],
+      "paths": [],
+      "env": [],
+      "scripts": []
+    },
+    {
+      "skill": "review-pr",
+      "kind": "package",
+      "path": ".skillcask/skills/review-pr",
+      "package": "acme/review-pr",
+      "version": "2.1.0",
+      "findings": [],
+      "commands": [],
+      "network": [],
+      "paths": [],
+      "env": [],
+      "scripts": []
+    },
+    {
+      "skill": "commit-message",
+      "kind": "package",
+      "path": ".skillcask/skills/commit-message",
+      "package": "acme/commit",
+      "version": "3.1.0",
+      "findings": [],
+      "commands": [],
+      "network": [],
+      "paths": [],
+      "env": [],
+      "scripts": []
+    },
+    {
+      "skill": "api-docs",
+      "kind": "package",
+      "path": ".skillcask/skills/api-docs",
+      "package": "acme/api-docs",
+      "version": "1.8.0",
+      "findings": [],
+      "commands": [],
+      "network": [],
+      "paths": [],
+      "env": [],
+      "scripts": []
+    },
+    {
+      "skill": "changelog",
+      "kind": "package",
+      "path": ".skillcask/skills/changelog",
+      "package": "acme/changelog",
+      "version": "0.4.0",
+      "findings": [],
+      "commands": [],
+      "network": [],
+      "paths": [],
+      "env": [],
+      "scripts": []
+    }
+  ]
+}

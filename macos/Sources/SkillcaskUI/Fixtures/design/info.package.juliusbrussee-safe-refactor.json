@@ -1,0 +1,23 @@
+{
+  "package": "juliusbrussee/safe-refactor",
+  "source": "github",
+  "repository": "https://github.com/juliusbrussee/caveman",
+  "version": "4.0.1",
+  "locked": true,
+  "description": null,
+  "license": [],
+  "abandoned": null,
+  "versions": [
+    "4.0.1"
+  ],
+  "requires": {},
+  "skills": [
+    {
+      "name": "safe-refactor",
+      "description": "Refactors in small, verified steps and never touches behaviour."
+    }
+  ],
+  "why": [
+    "juliusbrussee/safe-refactor: required by juliusbrussee/caveman (4.0.1)"
+  ]
+}

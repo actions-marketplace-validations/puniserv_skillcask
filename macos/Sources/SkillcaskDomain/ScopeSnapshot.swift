@@ -48,7 +48,7 @@ public struct ScopeSnapshot: Hashable, Sendable {
             let findings = skill?.findings ?? []
             let update = entry.package.flatMap { updates?[$0] }
             return SkillEntry(
-                id: name, name: name, kind: kind, version: entry.version, state: state,
+                id: name, name: name, kind: kind, source: entry.source, version: entry.version, state: state,
                 health: HealthMapping.health(state: state, update: update, findings: findings), update: update,
                 findings: findings, path: skill?.path, description: entry.description)
         }

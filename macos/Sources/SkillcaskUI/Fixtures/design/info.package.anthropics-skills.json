@@ -1,0 +1,41 @@
+{
+  "package": "anthropics/skills",
+  "source": "github",
+  "repository": "https://github.com/anthropics/skills",
+  "version": "1.4.0",
+  "locked": true,
+  "description": null,
+  "license": [
+    "Apache-2.0"
+  ],
+  "abandoned": null,
+  "versions": [
+    "1.4.0",
+    "1.3.0",
+    "1.2.0",
+    "1.1.0",
+    "1.0.0"
+  ],
+  "requires": {},
+  "skills": [
+    {
+      "name": "pdf",
+      "description": "Reads, fills and creates PDF files: extracts text and tables, merges and splits documents, fills forms and runs OCR on scans."
+    },
+    {
+      "name": "docx",
+      "description": null
+    },
+    {
+      "name": "xlsx",
+      "description": null
+    },
+    {
+      "name": "pptx",
+      "description": null
+    }
+  ],
+  "why": [
+    "anthropics/skills: in skills.toml as \"^1.2\""
+  ]
+}

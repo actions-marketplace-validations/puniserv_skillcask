@@ -1,0 +1,44 @@
+{
+  "ok": true,
+  "skills": [
+    {
+      "skill": "commit-message",
+      "kind": "package",
+      "path": ".skillcask/skills/commit-message",
+      "package": "acme/commit",
+      "version": "3.1.0",
+      "findings": [],
+      "commands": [],
+      "network": [],
+      "paths": [],
+      "env": [],
+      "scripts": []
+    },
+    {
+      "skill": "changelog",
+      "kind": "package",
+      "path": ".skillcask/skills/changelog",
+      "package": "acme/changelog",
+      "version": "0.4.0",
+      "findings": [],
+      "commands": [],
+      "network": [],
+      "paths": [],
+      "env": [],
+      "scripts": []
+    },
+    {
+      "skill": "german-technical-writing",
+      "kind": "package",
+      "path": ".skillcask/skills/german-technical-writing",
+      "package": "netresearch/german-technical-writing-skill",
+      "version": "1.0.0",
+      "findings": [],
+      "commands": [],
+      "network": [],
+      "paths": [],
+      "env": [],
+      "scripts": []
+    }
+  ]
+}

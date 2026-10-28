@@ -14,8 +14,16 @@ let package = Package(
         // What the interface thinks in: entries with one health each, snapshots, filters, reports. Pure functions.
         .target(name: "SkillcaskDomain", dependencies: ["SkillcaskCore"], swiftSettings: settings),
         // Stores and views. The executable holds only `@main`, so this library is what the tests import.
-        .target(name: "SkillcaskUI", dependencies: ["SkillcaskCore", "SkillcaskDomain"], swiftSettings: settings),
+        // `Fixtures/design/` holds the board sample data `DesignFixtures` decodes for previews and the render tool.
+        .target(
+            name: "SkillcaskUI",
+            dependencies: ["SkillcaskCore", "SkillcaskDomain"],
+            resources: [.copy("Fixtures/design")],
+            swiftSettings: settings
+        ),
         .executableTarget(name: "Skillcask", dependencies: ["SkillcaskUI"], swiftSettings: settings),
+        // Renders the preview registry to PNG for the design gate; never bundled (`bundle.sh` copies `Skillcask` only).
+        .executableTarget(name: "SkillcaskRender", dependencies: ["SkillcaskUI"], swiftSettings: settings),
         .testTarget(
             name: "SkillcaskCoreTests",
             dependencies: ["SkillcaskCore"],
@@ -23,5 +31,6 @@ let package = Package(
             swiftSettings: settings
         ),
         .testTarget(name: "SkillcaskDomainTests", dependencies: ["SkillcaskDomain"], swiftSettings: settings),
+        .testTarget(name: "SkillcaskUITests", dependencies: ["SkillcaskUI"], swiftSettings: settings),
     ]
 )

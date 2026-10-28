@@ -1,8 +1,12 @@
 import Foundation
+import os
 
-/// Spawns the CLI. Both pipes are drained concurrently (a full pipe would block the child), the exit is awaited in
-/// the same detached task after the pipes close, and a cancelled caller terminates the child with SIGTERM, then
-/// SIGKILL after a grace period. One `Process` per call; the actor only owns the table of running children.
+/// Spawns the CLI. Both pipes are drained concurrently (a full pipe would block the child) through
+/// `readabilityHandler`, the exit comes through `terminationHandler`, and a cancelled caller terminates the child
+/// with SIGTERM, then SIGKILL after a grace period. Nothing here blocks a thread of the cooperative pool: the pool
+/// is one thread per core and stops dead once that many are blocked, and `Process.waitUntilExit()` on top of that
+/// can miss its wake-up when the child exits around the call and then never returns. One `Process` per call; the
+/// actor only owns the table of running children.
 public actor ProcessRunner: CLIClient {
     public struct Limits: Hashable, Sendable {
         /// Bytes of stdout kept; a document larger than this is a bug upstream, not something to render.
@@ -48,6 +52,10 @@ public actor ProcessRunner: CLIClient {
             stdin = Pipe()
             process.standardInput = stdin
         }
+        // Installed before `run()`: Foundation calls it exactly once, on a queue of its own, however early the
+        // child exits. Only this handler ends the stream; nothing else looks at `isRunning` to decide the exit.
+        let (exited, exit) = AsyncStream<Void>.makeStream()
+        process.terminationHandler = { _ in exit.finish() }
         do {
             try process.run()
         } catch {
@@ -65,7 +73,7 @@ public actor ProcessRunner: CLIClient {
             async let out = Self.drain(stdout.fileHandleForReading, limit: limits.stdoutBytes) { onLine(.stdout($0)) }
             async let err = Self.drain(stderr.fileHandleForReading, limit: limits.stderrBytes) { onLine(.stderr($0)) }
             let collected = (await out, await err)
-            process.waitUntilExit()
+            for await _ in exited {}
             return collected
         }
         let (out, err) = await withTaskCancellationHandler {
@@ -110,35 +118,58 @@ public actor ProcessRunner: CLIClient {
         var truncated = false
     }
 
-    /// Reads to EOF on a thread of its own (the file handle API blocks); lines go to `onLine` as they complete.
+    /// What one pipe has produced so far. Mutated only from the handle's handler, which Foundation serializes; the
+    /// lock is what lets the handler capture it.
+    private struct Draining: Sendable {
+        var drained = Drained()
+        var pending = Data()
+        var total = 0
+
+        /// Keeps up to `limit` bytes and returns the lines `chunk` completed.
+        mutating func append(_ chunk: Data, limit: Int) -> [String] {
+            total += chunk.count
+            if drained.data.count < limit {
+                drained.data.append(chunk.prefix(limit - drained.data.count))
+            }
+            drained.truncated = total > limit
+            pending.append(chunk)
+            var lines: [String] = []
+            while let newline = pending.firstIndex(of: UInt8(ascii: "\n")) {
+                lines.append(String(decoding: pending[pending.startIndex..<newline], as: UTF8.self))
+                pending.removeSubrange(pending.startIndex...newline)
+            }
+            return lines
+        }
+
+        /// The result, and the unterminated last line if there is one.
+        mutating func finish() -> (Drained, String?) {
+            (drained, pending.isEmpty ? nil : String(decoding: pending, as: UTF8.self))
+        }
+    }
+
+    /// Reads to EOF through `readabilityHandler`, which Foundation calls as data arrives, one call at a time per
+    /// handle, so lines reach `onLine` in order and no thread waits on the pipe. EOF is an empty `availableData`;
+    /// the handler then unhooks itself, which is also what guarantees a single resume.
     private nonisolated static func drain(
         _ handle: FileHandle, limit: Int, onLine: @escaping @Sendable (String) -> Void
     ) async -> Drained {
-        await Task.detached {
-            var drained = Drained()
-            var pending = Data()
-            var total = 0
-            while true {
+        let state = OSAllocatedUnfairLock(initialState: Draining())
+        return await withCheckedContinuation { continuation in
+            handle.readabilityHandler = { handle in
                 let chunk = handle.availableData
-                if chunk.isEmpty {
-                    break
+                guard chunk.isEmpty else {
+                    for line in state.withLock({ $0.append(chunk, limit: limit) }) {
+                        onLine(line)
+                    }
+                    return
                 }
-                total += chunk.count
-                if drained.data.count < limit {
-                    drained.data.append(chunk.prefix(limit - drained.data.count))
+                handle.readabilityHandler = nil
+                let (drained, tail) = state.withLock { $0.finish() }
+                if let tail {
+                    onLine(tail)
                 }
-                drained.truncated = total > limit
-                pending.append(chunk)
-                while let newline = pending.firstIndex(of: UInt8(ascii: "\n")) {
-                    onLine(String(decoding: pending[pending.startIndex..<newline], as: UTF8.self))
-                    pending.removeSubrange(pending.startIndex...newline)
-                }
+                continuation.resume(returning: drained)
             }
-            if !pending.isEmpty {
-                onLine(String(decoding: pending, as: UTF8.self))
-            }
-            return drained
         }
-        .value
     }
 }

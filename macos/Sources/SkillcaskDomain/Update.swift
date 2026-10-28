@@ -10,6 +10,8 @@ public struct Update: Hashable, Sendable {
     public let latest: String?
     /// When the cooldown on a newer version ends, from the planned `eligible` key or the `note` text.
     public let eligible: Date?
+    /// When `latest` was published, from the planned `released` key; nil until the CLI prints it.
+    public let released: Date?
     public let note: String?
 
     public init(_ row: OutdatedDocument.Package) {
@@ -19,6 +21,7 @@ public struct Update: Hashable, Sendable {
         latest = row.latest
         note = row.note
         eligible = row.eligible.flatMap(Self.date) ?? row.note.flatMap(Self.eligibleDate)
+        released = row.released.flatMap(Self.date)
     }
 
     /// A newer version inside the constraint; nil when the lock is current or the package is not locked yet.

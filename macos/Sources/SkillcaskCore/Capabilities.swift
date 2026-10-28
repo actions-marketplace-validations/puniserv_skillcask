@@ -11,6 +11,16 @@ public struct Capabilities: Hashable, Sendable {
         case statusDescription
         /// `outdated --json` packages carry `eligible` (RFC 3339) instead of a free-text `note`.
         case outdatedEligible
+        /// `status --json` entries carry `source`: the repository name (`packagist`, `github`, a custom name) or
+        /// `git` for a git URL. Planned, not shipped: the list row's second line and the detail pill need it.
+        case statusSource
+        /// `outdated --json` packages carry `released` (RFC 3339): when `latest` was published. Planned, not
+        /// shipped: the Versions tab's release dates need it.
+        case outdatedReleased
+        /// Planned: `audit --json` also lists not-managed skills with `kind: "not managed"`. At 0.9.1 `audit`
+        /// builds its rows from the lock, the hand-written and the project skills only, so a not-managed skill
+        /// has no findings and no reach until this ships.
+        case auditNotManaged
         /// `info --json <skill>` carries `description`.
         case infoSkillDescription
         /// `add --rename old=new`.

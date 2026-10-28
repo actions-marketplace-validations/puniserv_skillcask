@@ -11,6 +11,8 @@ public struct OutdatedDocument: Decodable, Hashable, Sendable {
         public let note: String?
         /// Planned (`outdatedEligible`): the RFC 3339 instant the cooldown ends.
         public let eligible: String?
+        /// Planned (`outdatedReleased`): the RFC 3339 instant `latest` was published.
+        public let released: String?
     }
 
     public let packages: [Package]

@@ -17,6 +17,10 @@ public struct StatusDocument: Decodable, Hashable, Sendable {
         public let adopt: String?
         /// Planned (`statusDescription`): the skill's front-matter description.
         public let description: String?
+        /// Planned (`statusSource`): the repository the package came from (`packagist`, `github`, a custom
+        /// repository name) or `git` for a git URL; nil for project and hand-written skills. A not managed skill
+        /// carries the source `adopt` was recorded from when known, nil otherwise.
+        public let source: String?
 
         enum CodingKeys: String, CodingKey {
             case package
@@ -27,6 +31,7 @@ public struct StatusDocument: Decodable, Hashable, Sendable {
             case ok
             case adopt
             case description
+            case source
         }
 
         public init(from decoder: any Decoder) throws {
@@ -41,6 +46,7 @@ public struct StatusDocument: Decodable, Hashable, Sendable {
             ok = try c.decode(Bool.self, forKey: .ok)
             adopt = try c.decodeIfPresent(String.self, forKey: .adopt)
             description = try c.decodeIfPresent(String.self, forKey: .description)
+            source = try c.decodeIfPresent(String.self, forKey: .source)
         }
 
         /// `acme/dep (via acme/one, acme/two)` → (`acme/dep`, [`acme/one`, `acme/two`]).

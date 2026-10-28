@@ -51,6 +51,14 @@ import Testing
         #expect(entry.via == ["acme/one"] && entry.description == "Does d.")
     }
 
+    @Test func plannedSourceKeyIsOptional() throws {
+        let synthetic = #"""
+            {"entries":[{"ok":true,"package":"acme/one","skill":"a","state":"ok","version":"1.0.0","source":"packagist"},{"ok":true,"package":"acme/two","skill":"b","state":"ok","version":"1.0.0"}],"ok":true}
+            """#
+        let doc = try JSONDecoder().decode(StatusDocument.self, from: Data(synthetic.utf8))
+        #expect(doc.entries.map(\.source) == ["packagist", nil])
+    }
+
     @Test func notManagedEntryCarriesTheAdoptSource() throws {
         let synthetic = #"""
             {"entries":[{"adopt":"github:JuliusBrussee/caveman/cavecrew","ok":true,"package":null,"skill":"cavecrew","state":"not managed","version":null},{"adopt":null,"ok":true,"package":null,"skill":"mine","state":"not managed","version":null}],"ok":true}
@@ -95,6 +103,14 @@ import Testing
         #expect(doc.behind == ["netresearch/agent-jira-skill"])
         #expect(doc.packages[0].note?.hasPrefix("v4.3.0 eligible ") == true)
         #expect(doc.packages[1].locked == nil && doc.packages[1].within == nil)
+    }
+
+    @Test func plannedReleasedKeyIsOptional() throws {
+        let synthetic = #"""
+            {"behind":[],"packages":[{"latest":"1.4.0","locked":"1.2.0","note":null,"package":"acme/one","within":"1.4.0","released":"2026-10-24T00:00:00Z"},{"latest":"1.0.0","locked":"1.0.0","note":null,"package":"acme/two","within":"1.0.0"}]}
+            """#
+        let doc = try JSONDecoder().decode(OutdatedDocument.self, from: Data(synthetic.utf8))
+        #expect(doc.packages.map(\.released) == ["2026-10-24T00:00:00Z", nil])
     }
 }
 

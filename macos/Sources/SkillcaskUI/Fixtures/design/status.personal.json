@@ -1,0 +1,254 @@
+{
+  "ok": true,
+  "entries": [
+    {
+      "adopt": "github:juliusbrussee/caveman",
+      "ok": true,
+      "package": null,
+      "skill": "caveman",
+      "state": "not managed",
+      "version": "4.0.1",
+      "source": "github",
+      "description": "Terse, low-token answers for routine coding tasks."
+    },
+    {
+      "adopt": "github:anthropics/skills/pdf",
+      "ok": true,
+      "package": null,
+      "skill": "pdf",
+      "state": "not managed",
+      "version": "1.4.0",
+      "source": "github",
+      "description": "Reads, fills and creates PDF files: extracts text and tables, merges and splits documents, fills forms and runs OCR on scans."
+    },
+    {
+      "adopt": null,
+      "ok": true,
+      "package": null,
+      "skill": "standup-summary",
+      "state": "not managed",
+      "version": null,
+      "source": null,
+      "description": "Turns a day’s commits and tickets into a three-line standup note."
+    },
+    {
+      "adopt": "github:anthropics/skills/frontend-design",
+      "ok": true,
+      "package": null,
+      "skill": "frontend-design",
+      "state": "not managed",
+      "version": "0.6.0",
+      "source": "github"
+    },
+    {
+      "adopt": "acme/commit",
+      "ok": true,
+      "package": null,
+      "skill": "commit-message",
+      "state": "not managed",
+      "version": "3.1.0",
+      "source": "packagist"
+    },
+    {
+      "adopt": "git:https://git.acme.example/sql-review.git",
+      "ok": true,
+      "package": null,
+      "skill": "sql-review",
+      "state": "not managed",
+      "version": "0.9.2",
+      "source": "git"
+    },
+    {
+      "adopt": "acme/changelog",
+      "ok": true,
+      "package": null,
+      "skill": "changelog",
+      "state": "not managed",
+      "version": "0.4.0",
+      "source": "packagist"
+    },
+    {
+      "adopt": null,
+      "ok": true,
+      "package": null,
+      "skill": "meeting-prep",
+      "state": "not managed",
+      "version": null,
+      "source": null
+    },
+    {
+      "adopt": "github:anthropics/skills/docx",
+      "ok": true,
+      "package": null,
+      "skill": "docx",
+      "state": "not managed",
+      "version": "1.4.0",
+      "source": "github"
+    },
+    {
+      "adopt": "github:anthropics/skills/xlsx",
+      "ok": true,
+      "package": null,
+      "skill": "xlsx",
+      "state": "not managed",
+      "version": "1.4.0",
+      "source": "github"
+    },
+    {
+      "adopt": "github:anthropics/skills/pptx",
+      "ok": true,
+      "package": null,
+      "skill": "pptx",
+      "state": "not managed",
+      "version": "1.4.0",
+      "source": "github"
+    },
+    {
+      "adopt": null,
+      "ok": true,
+      "package": null,
+      "skill": "retro-notes",
+      "state": "not managed",
+      "version": null,
+      "source": null
+    },
+    {
+      "adopt": null,
+      "ok": true,
+      "package": "acme/review-pr",
+      "skill": "review-pr",
+      "state": "ok",
+      "version": "2.1.0",
+      "source": "acme"
+    },
+    {
+      "adopt": null,
+      "ok": true,
+      "package": "acme/api-docs",
+      "skill": "api-docs",
+      "state": "ok",
+      "version": "1.8.0",
+      "source": "acme"
+    },
+    {
+      "adopt": null,
+      "ok": true,
+      "package": "anthropics/skills",
+      "skill": "test-writer",
+      "state": "ok",
+      "version": "1.0.3",
+      "source": "github"
+    },
+    {
+      "adopt": null,
+      "ok": true,
+      "package": "netresearch/agent-jira-skill",
+      "skill": "jira-syntax",
+      "state": "ok",
+      "version": "4.2.0",
+      "source": "packagist"
+    },
+    {
+      "adopt": null,
+      "ok": true,
+      "package": "netresearch/agent-jira-skill",
+      "skill": "jira-communication",
+      "state": "ok",
+      "version": "4.2.0",
+      "source": "packagist"
+    },
+    {
+      "adopt": null,
+      "ok": true,
+      "package": "atlassian/jira-cli-skill",
+      "skill": "jira-cli",
+      "state": "ok",
+      "version": "1.3.0",
+      "source": "packagist"
+    },
+    {
+      "adopt": null,
+      "ok": true,
+      "package": "kolya/jira-to-md",
+      "skill": "jira-to-md",
+      "state": "ok",
+      "version": "1.2.0",
+      "source": "packagist"
+    },
+    {
+      "adopt": null,
+      "ok": true,
+      "package": "acme/jira-triage",
+      "skill": "jira-triage",
+      "state": "ok",
+      "version": "0.5.0",
+      "source": "acme"
+    },
+    {
+      "adopt": null,
+      "ok": true,
+      "package": "kolya/pdf-tools",
+      "skill": "kolya-pdf",
+      "state": "ok",
+      "version": "2.0.0",
+      "source": "packagist"
+    },
+    {
+      "adopt": null,
+      "ok": true,
+      "package": "netresearch/german-technical-writing-skill",
+      "skill": "german-technical-writing",
+      "state": "ok",
+      "version": "1.0.0",
+      "source": "packagist"
+    },
+    {
+      "adopt": null,
+      "ok": true,
+      "package": "acme/sql-style",
+      "skill": "sql-style",
+      "state": "ok",
+      "version": "1.1.0",
+      "source": "acme"
+    }
+  ],
+  "policy": {
+    "min-release-age": {
+      "value": "0h",
+      "from": "default"
+    },
+    "allow-sources": {
+      "value": null,
+      "from": "default"
+    },
+    "allow-ranges": {
+      "value": true,
+      "from": "default"
+    }
+  },
+  "targets": {
+    "entries": [
+      "claude",
+      "codex"
+    ],
+    "dirs": [
+      ".claude/skills",
+      ".codex/skills"
+    ],
+    "from": "config.toml"
+  },
+  "repositories": [
+    {
+      "allowed": true,
+      "name": "packagist",
+      "type": "composer",
+      "url": "https://repo.packagist.org/"
+    },
+    {
+      "allowed": true,
+      "name": "github",
+      "type": "github",
+      "url": "https://api.github.com/"
+    }
+  ]
+}
