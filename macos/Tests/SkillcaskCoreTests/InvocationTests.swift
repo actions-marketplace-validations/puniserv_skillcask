@@ -196,8 +196,8 @@ import Testing
         }
     }
 
-    /// `config` (D48, 0.9.4): the read prints `{"value", "from"}`; the write is a plain line. Both need the
-    /// feature, and a personal key goes through `-g` (the CLI refuses it in a project).
+    /// `config` (D48): the read prints `{"value", "from"}`; the write is a plain line. Every supported CLI has it,
+    /// and a personal key goes through `-g` (the CLI refuses it in a project).
     @Test func configCommands() throws {
         #expect(
             try argv(.config(key: "search.skills-sh"), in: .personal, capabilities: all)
@@ -205,9 +205,9 @@ import Testing
         #expect(
             try argv(.configSet(key: "search.skills-sh", values: ["false"]), in: .personal, capabilities: all)
                 == ["-g", "config", "--", "search.skills-sh", "false"])
-        #expect(throws: CLIError.unsupported(feature: "config")) {
-            try Invocation(.config(key: "search.skills-sh"), in: .personal, capabilities: caps)
-        }
+        #expect(
+            try argv(.config(key: "search.skills-sh"), in: .personal, capabilities: caps)
+                == ["-g", "config", "--json", "--", "search.skills-sh"])
         #expect(throws: CLIError.self) {
             try Invocation(.configSet(key: "search.skills-sh", values: [""]), in: .personal, capabilities: all)
         }
@@ -216,7 +216,7 @@ import Testing
     }
 
     /// Settings › Global: the whole list with `--json`; a list key gets one argument per entry after `--`, so an
-    /// entry starting with `-` stays a value; `--unset` goes before `--`. All need `config` (0.9.4).
+    /// entry starting with `-` stays a value; `--unset` goes before `--`. The minimum CLI runs them all.
     @Test func globalConfigCommands() throws {
         #expect(try argv(.configList, in: .personal, capabilities: all) == ["-g", "config", "--json"])
         #expect(
@@ -226,9 +226,7 @@ import Testing
             try argv(.configUnset(key: "policy.enforce"), in: .personal, capabilities: all)
                 == ["-g", "config", "--unset", "--", "policy.enforce"])
         for command in [Invocation.Command.configList, .configUnset(key: "k"), .configSet(key: "k", values: ["v"])] {
-            #expect(throws: CLIError.unsupported(feature: "config")) {
-                try Invocation(command, in: .personal, capabilities: caps)
-            }
+            #expect(throws: Never.self) { try Invocation(command, in: .personal, capabilities: caps) }
         }
         for command in [Invocation.Command.configSet(key: "k", values: []), .configUnset(key: "")] {
             #expect(throws: CLIError.self) { try Invocation(command, in: .personal, capabilities: all) }

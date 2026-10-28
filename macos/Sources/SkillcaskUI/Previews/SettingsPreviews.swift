@@ -13,7 +13,7 @@ extension PreviewRegistry {
     /// `advancedEmpty`; Global (no board, every state invented): `globalList` (config.toml sets the agents, the
     /// minimum release age and skills.sh), `globalEditing` (the agents list being edited), `globalEnforced` (an
     /// enforced key, one the environment sets and `allow-sources` with a URL, both read-only), `globalRefusal` (the
-    /// CLI refusing an agent name it does not know) and `globalTooOld` (a 0.9.3 CLI). Declared: the environment table is the native `Table` (system header chrome, not the
+    /// CLI refusing an agent name it does not know). Declared: the environment table is the native `Table` (system header chrome, not the
     /// board's `--win` header) with a 200 pt Name column where the board draws 220; credentialed values show
     /// masked until edited.
     static let settings: [Entry] = [
@@ -65,9 +65,6 @@ extension PreviewRegistry {
         entry("globalRefusal", height: 800) {
             SettingsSample(tab: .global, global: .init(GlobalSample.enforced, refusal: GlobalSample.refusal))
         },
-        entry("globalTooOld", height: 100) {
-            SettingsSample(tab: .global, global: .init(nil, version: Version(0, 9, 3)))
-        },
     ]
 
     private static func entry(
@@ -85,17 +82,15 @@ extension PreviewRegistry {
         var editing: String?
         var draft = ""
         var refusal: CLISettingsStore.SettingRefusal?
-        var version = Version(0, 9, 4)
 
         init(
             _ document: ConfigListDocument?, editing: String? = nil, draft: String = "",
-            refusal: CLISettingsStore.SettingRefusal? = nil, version: Version = Version(0, 9, 4)
+            refusal: CLISettingsStore.SettingRefusal? = nil
         ) {
             self.document = document
             self.editing = editing
             self.draft = draft
             self.refusal = refusal
-            self.version = version
         }
     }
 
@@ -180,9 +175,7 @@ private struct SettingsSample: View {
         case .updates: UpdatesPane(token: token)
         case .advanced: AdvancedPane(adoptedOverride: DesignFixtures.settings.adoptedSummary)
         case .global:
-            GlobalPane(
-                editing: global?.editing, draft: global?.draft ?? "",
-                capabilitiesOverride: Capabilities(version: global?.version ?? Version(0, 9, 4)))
+            GlobalPane(editing: global?.editing, draft: global?.draft ?? "")
         }
     }
 }

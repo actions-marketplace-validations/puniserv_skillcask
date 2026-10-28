@@ -284,18 +284,13 @@ public struct Invocation: Hashable, Sendable {
             try require(!host.isEmpty, "auth remove needs a host")
             try require(username?.isEmpty != true, "auth remove --username needs a name")
         case .config(let key):
-            try feature(.config, capabilities, "config")
             try require(!key.isEmpty, "config needs a key")
-        case .configList:
-            try feature(.config, capabilities, "config")
         case .configSet(let key, let values):
-            try feature(.config, capabilities, "config")
             try require(
                 !key.isEmpty && !values.isEmpty && values.allSatisfy { !$0.isEmpty }, "config needs a key and a value")
         case .configUnset(let key):
-            try feature(.config, capabilities, "config")
             try require(!key.isEmpty, "config --unset needs a key")
-        case .version, .status, .audit, .outdated, .doctor, .initialize, .install:
+        case .version, .status, .audit, .outdated, .doctor, .initialize, .install, .configList:
             break
         }
     }

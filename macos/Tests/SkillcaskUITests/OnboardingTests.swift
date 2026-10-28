@@ -26,7 +26,7 @@ import Testing
     /// An app whose boot finds nothing, with one client per Locate… candidate.
     static func missingApp(settings: SettingsStore = AppStoreTests.settings()) async -> AppStore {
         let clients: [String: FakeCLIClient] = [
-            good.path: await versionClient("skillcask 0.9.1 (abc)\n"),
+            good.path: await versionClient("skillcask 0.9.4 (abc)\n"),
             old.path: await versionClient("skillcask 0.8.0 (abc)\n"),
             noise.path: await versionClient("usage: something else\n"),
         ]
@@ -41,10 +41,10 @@ import Testing
         let binary = Locator.Choice.onPath(Self.old)
         #expect(OnboardingState.resolve(.missing(searched: ["/a"]), binary: nil) == .missing)
         #expect(
-            OnboardingState.resolve(.tooOld(found: Version(0, 7, 2), needs: Version(0, 9, 1)), binary: binary)
-                == .tooOld(found: Version(0, 7, 2), needs: Version(0, 9, 1), path: "/old/skillcask"))
+            OnboardingState.resolve(.tooOld(found: Version(0, 7, 2), needs: Version(0, 9, 4)), binary: binary)
+                == .tooOld(found: Version(0, 7, 2), needs: Version(0, 9, 4), path: "/old/skillcask"))
         #expect(OnboardingState.resolve(.locating, binary: binary) == nil)
-        #expect(OnboardingState.resolve(.ready(Capabilities(version: Version(0, 9, 1))), binary: binary) == nil)
+        #expect(OnboardingState.resolve(.ready(Capabilities(version: Version(0, 9, 4))), binary: binary) == nil)
     }
 
     @Test func missingBinaryShowsTheOnboardingSheet() async {
@@ -64,7 +64,7 @@ import Testing
     }
 
     @Test func aReadyBinaryShowsNoSheet() async {
-        let client = await Self.versionClient("skillcask 0.9.1 (abc)\n")
+        let client = await Self.versionClient("skillcask 0.9.4 (abc)\n")
         let app = AppStore(settings: AppStoreTests.settings(), locator: AppStoreTests.found) { _ in client }
         await app.boot()
         #expect(!app.isOnboarding)
@@ -74,12 +74,12 @@ import Testing
     // MARK: - Try Again
 
     @Test func tryAgainDetectsAgainAndClosesTheSheetWhenReady() async {
-        let client = await Self.versionClient("skillcask 0.8.0 (abc)\n", "skillcask 0.9.1 (abc)\n")
+        let client = await Self.versionClient("skillcask 0.8.0 (abc)\n", "skillcask 0.9.4 (abc)\n")
         let app = AppStore(settings: AppStoreTests.settings(), locator: AppStoreTests.found) { _ in client }
         await app.boot()
         #expect(app.isOnboarding)
         await app.boot()
-        #expect(app.cli == .ready(Capabilities(version: Version(0, 9, 1))))
+        #expect(app.cli == .ready(Capabilities(version: Version(0, 9, 4))))
         #expect(!app.isOnboarding)
         #expect(app.selectedScope == .personal)
         #expect(await client.commands == [.version, .version])
@@ -99,7 +99,7 @@ import Testing
         let client = FakeCLIClient()
         await client.script(.version, in: .personal, .result(stdout: "skillcask 0.8.0 (abc)\n", exit: 0, lines: []))
         await client.script(
-            .version, in: .personal, .result(stdout: "skillcask 0.9.1 (abc)\n", exit: 0, lines: []), gate: gate)
+            .version, in: .personal, .result(stdout: "skillcask 0.9.4 (abc)\n", exit: 0, lines: []), gate: gate)
         let app = AppStore(settings: AppStoreTests.settings(), locator: AppStoreTests.found) { _ in client }
         await app.boot()
         let first = Task { await app.tryAgain() }
@@ -125,7 +125,7 @@ import Testing
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: target.path)
         let link = folder.appending(path: "skillcask")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
-        let client = await Self.versionClient("skillcask 0.9.1 (abc)\n")
+        let client = await Self.versionClient("skillcask 0.9.4 (abc)\n")
         let settings = AppStoreTests.settings()
         let app = AppStore(settings: settings, locator: Locator(bundled: nil)) { _ in client }
         let error = await app.locate(executable: link)
@@ -158,7 +158,7 @@ import Testing
     @Test func locateRefusesTheAppItselfWithItsOwnReason() async {
         let settings = AppStoreTests.settings()
         let good = Self.good
-        let probed = await Self.versionClient("skillcask 0.9.1 (abc)\n")
+        let probed = await Self.versionClient("skillcask 0.9.4 (abc)\n")
         let locator = Locator(bundled: nil, isExecutable: { _ in true }, isSelf: { $0.path == good.path })
         let app = AppStore(settings: settings, locator: locator) { _ in probed }
         let error = await app.locate(executable: good)
@@ -177,7 +177,7 @@ import Testing
         #expect(settings.binaryPath == nil)
         #expect(app.isOnboarding)
         #expect(
-            error.map(OnboardingCopy.locateFailure) == "That copy is 0.8.0; Skillcask needs 0.9.1 or newer.")
+            error.map(OnboardingCopy.locateFailure) == "That copy is 0.8.0; Skillcask needs 0.9.4 or newer.")
     }
 
     @Test func locateWritesThePathOnlyWhenItValidates() async {
@@ -232,7 +232,7 @@ import Testing
             OnboardingCopy.foundValue(Version(0, 7, 2), at: "/opt/homebrew/bin/skillcask")
                 == "0.7.2 at /opt/homebrew/bin/skillcask")
         #expect(OnboardingCopy.foundValue(Version(0, 7, 2), at: nil) == "0.7.2")
-        #expect(OnboardingCopy.neededValue(Capabilities.minimum) == "0.9.1 or newer")
+        #expect(OnboardingCopy.neededValue(Capabilities.minimum) == "0.9.4 or newer")
     }
 
     @Test func learnMoreOpensThePublicReadme() {

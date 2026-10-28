@@ -6,8 +6,8 @@ import SwiftUI
 extension PreviewRegistry {
     /// The Add Skill sheet (S8) at its board size over the api scope, in the states of the AddSkill and
     /// AddSkill-States boards. `preview` is the AddSkill board ("jira", consent card, the selected package's
-    /// preview); `name-clash` is the 0.9.1 path (the CLI's error after Add); `capable-name-clash` and
-    /// `capable-skills` run against a CLI with the planned `add --rename` and `add --skill` (not shipped at 0.9.1).
+    /// preview); `name-clash` is the 0.9.4 path (the CLI's error after Add); `capable-name-clash` and
+    /// `capable-skills` run against a CLI with the planned `add --rename` and `add --skill` (not shipped at 0.9.4).
     /// `success` is the window after the sheet closed: the toast in the list column, the first new skill selected.
     /// `rule-branch` and `rule-latest` show Flow-F2's Branch and Latest rules on the rule button.
     static let addSkill: [Entry] = [
@@ -220,7 +220,7 @@ enum AddSkillSamples {
         DesignFixtures.policyFailure.error, spec: PackageSpec.parse(DesignFixtures.blockedQuery))
     static let unreachable = ErrorCopy.message(for: DesignFixtures.unreachableFailure.error)
 
-    /// The CLI's refusal of a clash at 0.9.1 (`hint` in `src/commands.rs`): the message, then how to rename in
+    /// The CLI's refusal of a clash at 0.9.4 (`hint` in `src/commands.rs`): the message, then how to rename in
     /// skills.toml, since `add --rename` does not exist yet.
     static let clashFailure = ErrorCopy.message(
         for: .failed(

@@ -4,26 +4,23 @@ import Testing
 
 @testable import SkillcaskUI
 
-/// Settings › Global through `skillcask -g config` (D48, 0.9.4): the list is read with `--json`, each change is one
-/// `config` run followed by a read, a refusal stays under its key with `allow-sources` values masked, and a CLI
-/// without `config` runs nothing.
+/// Settings › Global through `skillcask -g config` (D48): the list is read with `--json`, each change is one
+/// `config` run followed by a read, and a refusal stays under its key with `allow-sources` values masked.
 @Suite @MainActor struct GlobalSettingsTests {
     let client = FakeCLIClient()
-    let capabilities = Capabilities(version: Version(0, 9, 4))
+    let capabilities = Capabilities(version: Capabilities.minimum)
     static let list = #"""
         {"file":"/Users/me/.config/skillcask/config.toml","settings":{"agents.targets":{"from":"config.toml",\#
         "value":["claude"]},"policy.min-release-age":{"from":"default","value":"72h"},\#
         "search.skills-sh":{"from":null,"value":null}}}
         """#
 
-    func context(_ capabilities: Capabilities? = nil) -> CLISettingsStore.Context {
-        CLISettingsStore.Context(
-            client: client, capabilities: capabilities ?? self.capabilities,
-            configFile: URL(fileURLWithPath: "/c/config.toml"))
+    func context() -> CLISettingsStore.Context {
+        CLISettingsStore.Context(client: client, capabilities: capabilities)
     }
 
     func store() -> CLISettingsStore {
-        CLISettingsStore(read: { _ in nil })
+        CLISettingsStore()
     }
 
     @Test func loadReadsTheWholeList() async throws {
@@ -33,13 +30,6 @@ import Testing
         #expect(store.globalSettings?.orderedKeys == ["policy.min-release-age", "agents.targets", "search.skills-sh"])
         #expect(store.globalSettingsFailure == nil)
         #expect(await client.invocations.map(\.argv) == [["-g", "config", "--json"]])
-    }
-
-    @Test func aCLIWithoutConfigRunsNothing() async {
-        let store = store()
-        await store.loadGlobalSettings(in: context(Capabilities(version: Version(0, 9, 3))))
-        #expect(store.globalSettings == nil && store.globalSettingsFailure == nil)
-        #expect(await client.invocations.isEmpty)
     }
 
     /// A broken config.toml: `config --json` exits 1 without a document.
@@ -86,7 +76,7 @@ import Testing
         #expect(store.skillsSh == .on)
     }
 
-    /// The CLI quotes a rejected `allow-sources` entry as typed (`Fixtures/config-0.9.4/config.refused-source.stderr`):
+    /// The CLI quotes a rejected `allow-sources` entry as typed (`Fixtures/0.9.4/config.refused-source.stderr`):
     /// the refusal kept under the key shows it as the CLI prints URLs elsewhere.
     @Test func aRefusalStaysUnderItsKeyMasked() async throws {
         let typed = "http://user:tok@bad.example"
@@ -174,7 +164,7 @@ import Testing
     }
 
     /// Unset only where config.toml sets the key and does not enforce it: the CLI refuses `--unset` of a key
-    /// `policy.enforce` lists (`Fixtures/config-0.9.4/config.refused-unset-enforced.stderr`).
+    /// `policy.enforce` lists (`Fixtures/0.9.4/config.refused-unset-enforced.stderr`).
     @Test func unsetIsOfferedOnlyWhereTheCLITakesIt() {
         let offered = [ConfigLayer.configFile, .enforced, .builtIn, .environment].filter { GlobalPane.canUnset($0) }
         #expect(offered == [ConfigLayer.configFile])

@@ -28,7 +28,7 @@ import Testing
         let folder = FileManager.default.temporaryDirectory.appending(path: "SettingsTests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let script = folder.appending(path: "skillcask")
-        let text = "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo \"skillcask 0.9.1 (fake)\"; else env; fi\n"
+        let text = "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo \"skillcask 0.9.4 (fake)\"; else env; fi\n"
         try text.write(to: script, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
         return script
@@ -99,86 +99,8 @@ import Testing
         #expect(app.environment.overrides == ["KEEP": "1", "HTTPS_PROXY": "http://p:3128"])
     }
 
-    // MARK: - skills.sh
-
-    /// A reader whose answer the test changes, standing in for config.toml.
-    final class Config: @unchecked Sendable {
-        private let lock = NSLock()
-        private var stored: String?
-
-        init(_ text: String?) {
-            stored = text
-        }
-
-        var text: String? {
-            get { lock.withLock { stored } }
-            set { lock.withLock { stored = newValue } }
-        }
-
-        var reader: CLISettingsStore.Reader {
-            { _ in self.text }
-        }
-    }
-
     static func context(_ client: FakeCLIClient) -> CLISettingsStore.Context {
-        CLISettingsStore.Context(
-            client: client, capabilities: capabilities, configFile: URL(fileURLWithPath: "/c/config.toml"))
-    }
-
-    @Test(arguments: [
-        ("", CLISettingsStore.SkillsSh.notSet), ("[search]\nskills-sh = true\n", .on),
-        ("[search]\nskills-sh = false\n", .off),
-    ])
-    func loadReadsTheFile(text: String, expected: CLISettingsStore.SkillsSh) async {
-        let store = CLISettingsStore(read: Config(text).reader)
-        #expect(store.skillsSh == .unknown)
-        await store.loadSkillsSh(from: URL(fileURLWithPath: "/c/config.toml"))
-        #expect(store.skillsSh == expected)
-    }
-
-    /// The switch writes through `-g search --skills-sh --remember`, then trusts the file.
-    @Test func switchWritesThroughSearchRemember() async throws {
-        let config = Config(nil)
-        let client = FakeCLIClient()
-        let command = Invocation.Command.search(
-            query: CLISettingsStore.rememberQuery, skillsSh: .include, remember: true)
-        await client.json(command, in: .personal, #"{"results": [], "skills-sh": true}"#)
-        let store = CLISettingsStore(read: config.reader)
-        config.text = "[search]\nskills-sh = true\n"
-        await store.setSkillsSh(true, in: Self.context(client))
-        let invocation = try #require(await client.invocations.first)
-        #expect(invocation.argv == ["-g", "search", "--json", "--skills-sh", "--remember", "--", "skillcask"])
-        #expect(store.skillsSh == .on && store.skillsShFailure == nil && store.pendingSkillsSh == nil)
-    }
-
-    /// Off writes `--no-skills-sh`; a run that failed before the CLI saved leaves the file's value and says why.
-    @Test func switchFailureKeepsTheFileValue() async throws {
-        let config = Config("[search]\nskills-sh = true\n")
-        let client = FakeCLIClient()
-        let command = Invocation.Command.search(
-            query: CLISettingsStore.rememberQuery, skillsSh: .exclude, remember: true)
-        await client.script(
-            command, in: .personal,
-            .error(.failed(code: .problem, message: "config.toml: search must be a table", hint: nil, stderr: "")))
-        let store = CLISettingsStore(read: config.reader)
-        await store.setSkillsSh(false, in: Self.context(client))
-        #expect(await client.invocations.first?.argv.contains("--no-skills-sh") == true)
-        #expect(store.skillsSh == .on)
-        #expect(store.skillsShFailure?.title == SettingsCopy.couldNotSaveSkillsSh)
-    }
-
-    /// A network failure after the CLI saved still counts: the file decides.
-    @Test func offlineSearchAfterTheSaveStillCounts() async {
-        let config = Config(nil)
-        let client = FakeCLIClient()
-        let command = Invocation.Command.search(
-            query: CLISettingsStore.rememberQuery, skillsSh: .exclude, remember: true)
-        await client.script(
-            command, in: .personal, .error(.failed(code: .network, message: "offline", hint: nil, stderr: "")))
-        let store = CLISettingsStore(read: config.reader)
-        config.text = "[search]\nskills-sh = false\n"
-        await store.setSkillsSh(false, in: Self.context(client))
-        #expect(store.skillsSh == .off && store.skillsShFailure == nil)
+        CLISettingsStore.Context(client: client, capabilities: capabilities)
     }
 
     // MARK: - GitHub token
@@ -191,7 +113,7 @@ import Testing
     @Test func signInPassesTheTokenOnlyThroughStdin() async throws {
         let client = FakeCLIClient()
         await client.lines(Self.authSet, in: .personal, [])
-        let store = CLISettingsStore(read: Config(nil).reader)
+        let store = CLISettingsStore()
         let stored = await store.signIn(token: "  \(Self.secret)\n", in: Self.context(client))
         #expect(stored && store.gitHub == .signedIn && store.gitHubFailure == nil && !store.isChangingToken)
         let invocation = try #require(await client.invocations.first)
@@ -216,7 +138,7 @@ import Testing
                 .failed(
                     code: .signIn, message: "helper refused \(Self.secret)", hint: "check \(Self.secret)",
                     stderr: "error: \(Self.secret)")))
-        let store = CLISettingsStore(read: Config(nil).reader)
+        let store = CLISettingsStore()
         let stored = await store.signIn(token: Self.secret, in: Self.context(client))
         #expect(!stored && store.gitHub == .unknown)
         let failure = store.gitHubFailure
@@ -231,7 +153,7 @@ import Testing
     /// An empty or blank token runs nothing.
     @Test func blankTokenRunsNothing() async {
         let client = FakeCLIClient()
-        let store = CLISettingsStore(read: Config(nil).reader)
+        let store = CLISettingsStore()
         #expect(await !store.signIn(token: " \n", in: Self.context(client)))
         #expect(await client.invocations.isEmpty)
     }
@@ -242,7 +164,7 @@ import Testing
         let remove = Invocation.Command.authRemove(
             host: CLISettingsStore.gitHubHost, username: CLISettingsStore.gitHubUsername)
         await client.lines(remove, in: .personal, [])
-        let store = CLISettingsStore(read: Config(nil).reader)
+        let store = CLISettingsStore()
         await store.signOut(in: Self.context(client))
         #expect(store.gitHub == .signedOut)
         #expect(
@@ -259,7 +181,7 @@ import Testing
     func signInReportsWhereTheTokenWent(stdout: String, keychain: Bool) async {
         let client = FakeCLIClient()
         await client.script(Self.authSet, in: .personal, .result(stdout: stdout, exit: 0, lines: []))
-        let store = CLISettingsStore(read: Config(nil).reader)
+        let store = CLISettingsStore()
         await store.signIn(token: Self.secret, in: Self.context(client))
         #expect(store.tokenStorage == (keychain ? .keychain : .otherHelper))
         #expect(store.gitHub == .signedIn)
@@ -390,9 +312,9 @@ import Testing
     /// Choose… (and Locate…) rebuild the scope stores: a visited scope's next command runs on the chosen tool.
     @Test func chosenToolServesVisitedScopes() async throws {
         let first = FakeCLIClient()
-        await first.script(.version, in: .personal, .result(stdout: "skillcask 0.9.1 (a)\n", exit: 0, lines: []))
+        await first.script(.version, in: .personal, .result(stdout: "skillcask 0.9.4 (a)\n", exit: 0, lines: []))
         let chosen = FakeCLIClient()
-        await chosen.script(.version, in: .personal, .result(stdout: "skillcask 0.9.2 (b)\n", exit: 0, lines: []))
+        await chosen.script(.version, in: .personal, .result(stdout: "skillcask 0.9.5 (b)\n", exit: 0, lines: []))
         let chosenURL = URL(fileURLWithPath: "/chosen/skillcask")
         let app = AppStore(
             settings: Self.settings(), locator: Locator(bundled: URL(fileURLWithPath: "/fake/skillcask")) { _ in true }
@@ -415,7 +337,7 @@ import Testing
         let gate = Gate()
         let client = FakeCLIClient()
         await client.script(
-            .version, in: .personal, .result(stdout: "skillcask 0.9.1 (a)\n", exit: 0, lines: []), gate: gate)
+            .version, in: .personal, .result(stdout: "skillcask 0.9.4 (a)\n", exit: 0, lines: []), gate: gate)
         let settings = Self.settings()
         settings.binaryPath = "/chosen/skillcask"
         let app = AppStore(settings: settings, locator: Locator(bundled: nil) { _ in true }) { _ in client }

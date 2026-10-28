@@ -16,7 +16,7 @@ open macos/.build/Skillcask.app
 Without a bundle, `swift run Skillcask` from `macos/` starts the app against the CLI it finds: the
 path set in Settings, else `PATH`, `/opt/homebrew/bin`, `/usr/local/bin` and `~/.cargo/bin`.
 `SKILLCASK_UI_FIXTURES=1 swift run Skillcask` starts it on the built-in sample data and runs no CLI.
-Settings › Global changes config.toml through `skillcask -g config` and needs a 0.9.4 or newer CLI.
+The app needs skillcask 0.9.4 or newer and asks to upgrade an older one.
 
 ## Build the app
 

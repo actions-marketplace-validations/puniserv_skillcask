@@ -4,7 +4,7 @@ import SwiftUI
 
 extension PreviewRegistry {
     /// The whole window over the fixture boot. `cli` comes first: the Main board's window over api exactly as
-    /// the 0.9.1 CLI prints it (`DesignFixtures.apiCLI`). `main` is the Main board (api, pdf selected), `overview`
+    /// the 0.9.4 CLI prints it (`DesignFixtures.apiCLI`). `main` is the Main board (api, pdf selected), `overview`
     /// the Overview board (api, nothing selected), `narrow` the 960 × 600 minimum where the Overview grid is one
     /// column: these three draw api's planned shape (`source`/`description` keys, a not managed row in a project).
     /// `personal` is My Skills. The unified toolbar is window chrome: it draws in the live app, not in an

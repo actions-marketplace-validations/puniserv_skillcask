@@ -157,7 +157,7 @@ public struct MainWindow: View {
     }
 }
 
-// The default preview is the api scope as the 0.9.1 CLI prints it; the dark one keeps the boards' planned shape.
+// The default preview is the api scope as the 0.9.4 CLI prints it; the dark one keeps the boards' planned shape.
 #Preview("MainWindow, light") {
     let stores = Boot.fixtures(api: DesignFixtures.apiCLI)
     MainWindow()

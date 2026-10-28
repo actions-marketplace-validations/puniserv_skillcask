@@ -73,7 +73,8 @@
     {
       "adopt": null,
       "ok": true,
-      "package": "juliusbrussee/safe-refactor (via juliusbrussee/caveman)",
+      "package": "juliusbrussee/safe-refactor",
+      "via": ["juliusbrussee/caveman"],
       "skill": "safe-refactor",
       "state": "ok",
       "version": "4.0.1",

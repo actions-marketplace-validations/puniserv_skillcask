@@ -113,12 +113,13 @@ import Testing
 
     /// A small scope for the reachability cases: a, k and p in skills.toml, d a dependency of a.
     func graphSnapshot() throws -> ScopeSnapshot {
-        func row(_ skill: String, _ package: String) -> String {
-            #"{"package":"\#(package)","skill":"\#(skill)","version":"1.0.0","state":"ok","ok":true}"#
+        func row(_ skill: String, _ package: String, via: String = "null") -> String {
+            #"{"package":"\#(package)","skill":"\#(skill)","version":"1.0.0","state":"ok","ok":true,"via":\#(via)}"#
         }
         let status =
             #"{"ok":true,"entries":["#
-            + [row("a", "x/a"), row("k", "x/k"), row("p", "x/p"), row("d", "x/d (via x/a)")].joined(separator: ",")
+            + [row("a", "x/a"), row("k", "x/k"), row("p", "x/p"), row("d", "x/d", via: #"["x/a"]"#)]
+            .joined(separator: ",")
             + "]}"
         let document = try JSONDecoder().decode(StatusDocument.self, from: Data(status.utf8))
         return ScopeSnapshot(status: document, audit: nil, doctor: nil, outdated: nil)
@@ -154,11 +155,11 @@ import Testing
         #expect(drifted.kept == [.init(package: "x/p", skills: ["p"], requirers: ["x/r"])])
         let lockOnly = RemovePlan(skills: ["p"], snapshot: try snapshot("not in skills.toml"), why: why)
         #expect(lockOnly.kept.isEmpty && lockOnly.removedSkills == ["p"])
-        // A drifted dependency D (`x/d (via x/a)`, no skill) requiring p keeps nothing once its requirer a goes.
+        // A drifted dependency D (`x/d` via x/a, no skill) requiring p keeps nothing once its requirer a goes.
         let status =
             #"{"ok":false,"entries":[{"package":"x/p","skill":"p","version":"1.0.0","state":"ok","ok":true},"#
             + #"{"package":"x/a","skill":"a","version":"1.0.0","state":"ok","ok":true},"#
-            + #"{"package":"x/d (via x/a)","skill":null,"version":"1.0.0","#
+            + #"{"package":"x/d","via":["x/a"],"skill":null,"version":"1.0.0","#
             + #""state":"constraint changed from \"^1\" to \"^2\"","ok":false}]}"#
         let dependency = ScopeSnapshot(
             status: try JSONDecoder().decode(StatusDocument.self, from: Data(status.utf8)), audit: nil, doctor: nil,

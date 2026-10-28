@@ -19,7 +19,7 @@ extension PreviewRegistry {
         },
         entry("withinRange") { VersionsSample(entry: DesignFixtures.pdf, info: DesignFixtures.pdfInfo, loaded: true) },
         entry("majorOutside") { VersionsSample(entry: DesignFixtures.legacyLint, info: DesignFixtures.legacyLintInfo) },
-        // The cooldown from a note-only `outdated` (the real 0.9.1 shape): eligible date from the note, release
+        // The cooldown from a note-only `outdated` (the real 0.9.4 shape): eligible date from the note, release
         // date unknown.
         entry("cooldownNoteOnly") {
             VersionsSample(

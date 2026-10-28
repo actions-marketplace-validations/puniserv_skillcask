@@ -553,7 +553,7 @@ file through the GitLab raw files API
 project folder, see each skill's state, updates and audit findings, read its SKILL.md and diffs,
 and run `add` (also `--adopt`), `update`, `remove`, `install` and `doctor --fix`; its Settings
 change every key `skillcask -g config` lists. It has no package logic of its own: it runs the
-`skillcask` binary and reads its `--json` output.
+`skillcask` binary, 0.9.4 or newer, and reads its `--json` output.
 
 `macos/bundle.sh` builds a universal `Skillcask.app` that carries its own CLI at
 `Contents/Helpers/skillcask`. Run outside a bundle (`swift run` from `macos/`), the app uses the

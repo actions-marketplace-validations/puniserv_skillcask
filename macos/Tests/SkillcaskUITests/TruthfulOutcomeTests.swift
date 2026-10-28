@@ -241,21 +241,19 @@ extension CLIError {
     }
 }
 
-/// skills.sh through `skillcask -g config` on a CLI that has it (0.9.4, D48): no search runs, and the app does
-/// not read config.toml itself; the adopted folder is measured by the store, off the views.
+/// skills.sh through `skillcask -g config` (D48): no search runs, and the app does not read config.toml itself;
+/// the adopted folder is measured by the store, off the views.
 @Suite @MainActor struct CLIConfigSettingsTests {
     let client = FakeCLIClient()
-    let capabilities = Capabilities(version: Version(0, 9, 4))
+    let capabilities = Capabilities(version: Capabilities.minimum)
     static let read = Invocation.Command.config(key: CLISettingsStore.skillsShKey)
 
     func context() -> CLISettingsStore.Context {
-        CLISettingsStore.Context(
-            client: client, capabilities: capabilities, configFile: URL(fileURLWithPath: "/c/config.toml"))
+        CLISettingsStore.Context(client: client, capabilities: capabilities)
     }
 
-    /// The file reader is never asked: it would answer `on`, `config` says not set.
     func store() -> CLISettingsStore {
-        CLISettingsStore(read: { _ in "[search]\nskills-sh = true\n" })
+        CLISettingsStore()
     }
 
     @Test(arguments: [
@@ -269,6 +267,17 @@ extension CLIError {
         #expect(store.skillsSh == expected)
         let invocation = try #require(await client.invocations.first)
         #expect(invocation.argv == ["-g", "config", "--json", "--", "search.skills-sh"])
+    }
+
+    /// A read that fails (a broken config.toml) leaves the switch unknown: nothing falls back to the file.
+    @Test func aFailedReadLeavesTheSwitchUnknown() async {
+        let broken = CLIError.failed(
+            code: .problem, message: "config.toml: expected `=`", hint: nil, stderr: "")
+        await client.script(Self.read, in: .personal, .error(broken))
+        let store = store()
+        await store.loadSkillsSh(in: context())
+        #expect(store.skillsSh == .unknown)
+        #expect(await client.invocations.count == 1)
     }
 
     /// The switch writes with `config -- search.skills-sh false` and reads back through `config`: no search.
@@ -290,8 +299,6 @@ extension CLIError {
                 ["-g", "config", "--json"],
             ])
         #expect(store.globalSettings?.file == "/c/config.toml", "Settings › Global reads the same key again")
-        #expect(!CLISettingsStore.flipRunsSearch(capabilities))
-        #expect(CLISettingsStore.flipRunsSearch(Capabilities(version: Capabilities.minimum)))
     }
 
     /// A refused write says why, and the state is what `config` reads back.
@@ -308,7 +315,7 @@ extension CLIError {
 
     @Test func theAdoptedFolderIsMeasuredByTheStore() async {
         let folder = URL(fileURLWithPath: "/c/adopted")
-        let store = CLISettingsStore(read: { _ in nil }, measure: { $0 == folder ? "4 folders · 1.2 MB" : nil })
+        let store = CLISettingsStore(measure: { $0 == folder ? "4 folders · 1.2 MB" : nil })
         #expect(store.adoptedSummary(of: folder) == nil)
         await store.measureAdopted(at: folder)
         #expect(store.adoptedSummary(of: folder) == "4 folders · 1.2 MB")

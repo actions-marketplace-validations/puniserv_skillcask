@@ -7,8 +7,8 @@ extension PreviewRegistry {
     /// Detail-States state. Composed from `DetailHeader` and `OverviewTab` over fixture data, as `SkillDetailView`
     /// composes them, so no store task reloads the detail during the render (the offline state keeps no `info`).
     ///
-    /// `cli` comes first: pdf as the 0.9.1 CLI's `status` reports it (`DesignFixtures.apiCLI`: no `source` or
-    /// `description` key). `notManaged` (caveman in the api project) is a planned shape: 0.9.1 reports not managed
+    /// `cli` comes first: pdf as the 0.9.4 CLI's `status` reports it (`DesignFixtures.apiCLI`: no `source` or
+    /// `description` key). `notManaged` (caveman in the api project) is a planned shape: 0.9.4 reports not managed
     /// skills in the personal scope only; `notManagedUnknown` is the reachable one.
     static let detail: [Entry] = [
         entry("cli") {

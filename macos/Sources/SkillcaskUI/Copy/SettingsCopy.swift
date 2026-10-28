@@ -8,14 +8,14 @@ import SkillcaskCore
 /// Invented (no board draws them): `chosenInSettings`, `toolNotFound`, `chooseTool`, `skillsShNotSet`,
 /// `couldNotSaveSkillsSh`, `skillsShNotSaved`, `gitHubUnknown`, `gitHubSignedIn`, `signOut`, `unknownNote`,
 /// `couldNotSignIn`, `couldNotSignOut`, `redacted`, `tokenStored`, `tokenStoredByHelper`, `tokenNoteNeutral`,
-/// `skillsShSideEffect`, `credentialsNotSaved`, `refusedVariable`, `removeVariable` (the board's
+/// `credentialsNotSaved`, `refusedVariable`, `removeVariable` (the board's
 /// aria-label "Remove" with the name), `adoptedSummary(folders:bytes:)`'s singular and empty forms, `noAdopted`,
 /// and the forms of `sourcesSearched(_:project:)` without a project or without project sources.
 ///
 /// Global (no board draws this tab; every string in its MARK is invented, after the maintainer's Settings window
 /// for `-g config` in upstream `eca0f53`): `global`, `settingLabel(_:)`, `layer(_:)`, `notSet`, `edit`, `unset`,
 /// `cancel`, `separateEntries`, `enforcedNote`, `unsetEnforcedFirst`, `environmentNote(variable:)`, `redactedSourcesNote`,
-/// `globalNeedsNewerCLI(_:)`, `globalNeedsCLI`, `couldNotReadGlobal`, `couldNotChange(_:)`, `globalFooter`, and
+/// `globalNeedsCLI`, `couldNotReadGlobal`, `couldNotChange(_:)`, `globalFooter`, and
 /// Advanced's `policyNote`, which replaced the board's read-only sentence.
 public enum SettingsCopy {
     // MARK: - Tabs
@@ -73,17 +73,12 @@ public enum SettingsCopy {
 
     /// config.toml does not set it. Invented.
     public static let skillsShNotSet = "Not set in config.toml yet; Add Skill… asks the first time you search."
-    /// What changing the switch does, said before it is flipped: the CLI saves the setting only as part of a
-    /// search (`search --remember` needs a query). Invented.
-    public static let skillsShSideEffect =
-        "Changing this runs one search for “\(CLISettingsStore.rememberQuery)” on Packagist, and on skills.sh when "
-        + "turned on, so the command-line tool can save it."
     /// Under the tool line while a sheet or the Remove alert is open in the main window: Choose… and "Use the
     /// detected one" would rebuild what it works on. Invented.
     public static let closeSheetFirst = "Close the open sheet in the main window to change the tool."
     /// Invented.
     public static let couldNotSaveSkillsSh = "Couldn’t save the skills.sh setting."
-    /// Why, when the run itself succeeded but the file did not change. Invented.
+    /// Why, when `config` itself succeeded but reading the key back gave another value. Invented.
     public static let skillsShNotSaved = "config.toml did not change."
 
     public static let sourcesSearchedLabel = "Sources searched:"
@@ -200,12 +195,6 @@ public enum SettingsCopy {
     public static let redactedSourcesNote =
         "URLs are shown without user names, passwords or queries, so saving from here would drop them. Change "
         + "this in config.toml (Advanced › Open config.toml)."
-
-    /// In place of the list on a CLI without `config`.
-    public static func globalNeedsNewerCLI(_ version: Version) -> String {
-        "Global settings need skillcask 0.9.4 or newer; this one is \(version). Until then they live in config.toml "
-            + "(Advanced › Open config.toml)."
-    }
 
     /// Before the CLI is located.
     public static let globalNeedsCLI = "Find the command-line tool in General to read these settings."

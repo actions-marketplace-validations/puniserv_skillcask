@@ -56,7 +56,7 @@ private struct OnboardingSample: View {
         _stores = State(initialValue: Boot.fixtures(selecting: .personal, selection: nil))
     }
 
-    /// Onboarding-States: 0.7.2 at the Homebrew path, 0.9.1 needed.
+    /// Onboarding-States: 0.7.2 at the Homebrew path, 0.9.4 needed.
     static let tooOldVersion = Version(0, 7, 2)
     static let tooOld = OnboardingState.tooOld(
         found: tooOldVersion, needs: Capabilities.minimum, path: "/opt/homebrew/bin/skillcask")

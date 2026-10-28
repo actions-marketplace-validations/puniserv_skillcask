@@ -44,10 +44,10 @@ import Testing
     }
 
     @Test func readyBinarySelectsPersonalAndCachesOneStorePerScope() async {
-        let client = await Self.versionClient("skillcask 0.9.1 (abc)\n")
+        let client = await Self.versionClient("skillcask 0.9.4 (abc)\n")
         let app = AppStore(settings: Self.settings(), locator: Self.found) { _ in client }
         await app.boot()
-        #expect(app.cli == .ready(Capabilities(version: Version(0, 9, 1))))
+        #expect(app.cli == .ready(Capabilities(version: Version(0, 9, 4))))
         #expect(app.selectedScope == .personal)
         let first = app.store(for: .personal)
         #expect(first != nil && first === app.store(for: .personal))
@@ -58,7 +58,7 @@ import Testing
     }
 
     @Test func staleStoresWithoutAReadyCLIAreNoStore() async {
-        let client = await Self.versionClient("skillcask 0.9.1 (abc)\n")
+        let client = await Self.versionClient("skillcask 0.9.4 (abc)\n")
         let ready = AppStore(settings: Self.settings(), locator: Self.found) { _ in client }
         await ready.boot()
         #expect(ready.store(for: .personal) != nil && ready.hasStore(for: .personal))

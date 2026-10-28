@@ -358,7 +358,7 @@ import SkillcaskDomain
     /// What Settings' own commands (skills.sh, `auth`) run with; nil until the CLI is ready.
     public var cliContext: CLISettingsStore.Context? {
         guard let client, let capabilities else { return nil }
-        return CLISettingsStore.Context(client: client, capabilities: capabilities, configFile: configFile())
+        return CLISettingsStore.Context(client: client, capabilities: capabilities)
     }
 
     /// Settings › General, "Use the detected one": forgets the chosen binary and detects again (bundled, then

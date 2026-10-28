@@ -41,7 +41,7 @@ public struct FixtureCLIClient: CLIClient {
         let board = Self.board(for: invocation.scope)
         switch invocation.command {
         case .version:
-            return answer(invocation, text: "skillcask 0.9.1 (fixture)\n")
+            return answer(invocation, text: "skillcask 0.9.4 (fixture)\n")
         case .status:
             return answer(invocation, fixture: "status.\(board)", exit: board == "api" ? 1 : 0)
         case .audit:

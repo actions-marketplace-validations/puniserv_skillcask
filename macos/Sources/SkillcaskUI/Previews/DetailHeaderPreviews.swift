@@ -9,7 +9,7 @@ extension PreviewRegistry {
     /// The state line states `status.state` (`DetailHeader.stateHealth`), so `project` and
     /// `notManagedUnknown` read "Project skill" / "Not managed" although their fixtures carry findings.
     /// `projectClean` is my-notes without findings and renders the same line. `notManaged` (caveman in the api
-    /// project) is a planned shape: 0.9.1 reports not managed skills in the personal scope only.
+    /// project) is a planned shape: 0.9.4 reports not managed skills in the personal scope only.
     static let detailHeader: [Entry] = [
         Entry(id: "P2-6", state: "update", size: CGSize(width: 600, height: 260)) {
             AnyView(DetailHeaderSample(entry: DesignFixtures.pdf))

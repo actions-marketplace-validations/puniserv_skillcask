@@ -43,7 +43,7 @@ import Testing
 
     // MARK: - Main and Overview (api)
 
-    /// `apiCLI` is api as the 0.9.1 CLI prints `status`: no planned `source`/`description` keys, and no not managed
+    /// `apiCLI` is api as the 0.9.4 CLI prints `status`: no planned `source`/`description` keys, and no not managed
     /// row in a project scope (`not_managed` answers only for the personal scope). Every other row is api's.
     @Test func apiCLIHasOnlyWhatTheShippedCLIPrints() {
         let cli = DesignFixtures.apiCLI
@@ -223,7 +223,7 @@ import Testing
         #expect(
             findings[0].message == "downloads code into a shell"
                 && findings[1].message == "U+202E RIGHT-TO-LEFT OVERRIDE")
-        // `not managed` rows are the planned `auditNotManaged` shape (Q7); the other three are what 0.9.1 prints.
+        // `not managed` rows are the planned `auditNotManaged` shape (Q7); the other three are what 0.9.4 prints.
         let kinds = [
             DesignFixtures.apiAudit, DesignFixtures.personalAudit,
             DesignFixtures.decode(AuditDocument.self, "audit.website"),

@@ -145,7 +145,7 @@ public enum AddSkillCopy {
         "Skills in this package · \(selected) selected"
     }
 
-    /// Invented: under the provided skills where the CLI has no `add --skill` (0.9.1): they cannot be unticked.
+    /// Invented: under the provided skills where the CLI has no `add --skill` (0.9.4): they cannot be unticked.
     public static let allSkillsAdded = "This version of skillcask adds every skill in the package."
     public static let versionRule = "Version rule"
     /// The rule button's label: `Up to next major`; `^0.y` reads `Up to next minor`; without a version (Adopt) the

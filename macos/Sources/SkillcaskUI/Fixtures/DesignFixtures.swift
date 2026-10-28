@@ -26,16 +26,16 @@ public enum DesignFixtures {
     /// The "Needs attention" chip is errors + warnings per the designer's note (8 here); the Main board's "5" is a
     /// board inconsistency.
     ///
-    /// Planned shape, beyond what the 0.9.1 CLI prints: `status.api.json` gives every row the `source` and
+    /// Planned shape, beyond what the 0.9.4 CLI prints: `status.api.json` gives every row the `source` and
     /// `description` keys (`Capabilities.Feature.statusSource` / `.statusDescription`, not emitted yet) and has a
-    /// `not managed` row (caveman) in a project scope, where 0.9.1 reports `not managed` only for the personal
+    /// `not managed` row (caveman) in a project scope, where 0.9.4 reports `not managed` only for the personal
     /// scope (`not_managed` in src/commands.rs returns nothing unless the scope is global). The boards draw both,
-    /// so the board states keep this fixture; `apiCLI` is the same scope as 0.9.1 prints it, and the first
+    /// so the board states keep this fixture; `apiCLI` is the same scope as 0.9.4 prints it, and the first
     /// preview of each screen built on api uses that.
     public static let api = snapshot(
         status: "status.api", audit: "audit.api", doctor: "doctor.api", outdated: "outdated.api",
         checkedSecondsAgo: 4 * 60)
-    /// `api` exactly as the 0.9.1 CLI prints its `status`: no `source` or `description` keys and no project-scope
+    /// `api` exactly as the 0.9.4 CLI prints its `status`: no `source` or `description` keys and no project-scope
     /// not managed row (caveman is gone, so safe-refactor's requirer is its package name). The first preview of
     /// the window, the detail and the Overview, so a default render never shows a state that CLI cannot reach.
     public static let apiCLI = snapshot(
@@ -63,7 +63,7 @@ public enum DesignFixtures {
         status: "status.api-synced", audit: "audit.api", doctor: "doctor.api", outdated: "outdated.api",
         checkedSecondsAgo: 0)
     /// `Activity` and the `Running` integrity state: pdf updated to 1.4.0, everything synced.
-    /// `api` with `outdated` exactly as 0.9.1 prints it: no planned `eligible`/`released` keys, the cooldown only in
+    /// `api` with `outdated` exactly as 0.9.4 prints it: no planned `eligible`/`released` keys, the cooldown only in
     /// the note (`4.3.0 eligible 2026-10-30T09:14:00Z`), so the parse is proven end to end.
     public static let apiNoteOnly = snapshot(
         status: "status.api", audit: "audit.api", doctor: "doctor.api", outdated: "outdated.api-note-only",
@@ -81,7 +81,7 @@ public enum DesignFixtures {
 
     /// The audit documents behind `api` and `personal`, decoded on their own for the Security tab's reach lists.
     /// Their `kind: "not managed"` rows (caveman in api; caveman, pdf and standup-summary in personal) are the
-    /// planned `Capabilities.Feature.auditNotManaged` shape (Q7): a 0.9.1 `audit` lists lock, hand-written and
+    /// planned `Capabilities.Feature.auditNotManaged` shape (Q7): a 0.9.4 `audit` lists lock, hand-written and
     /// project skills only, so on that CLI these rows are absent and the Security tab of a not-managed skill
     /// shows its "not audited" fallback. The boards need them for `Detail-States` ("No findings. You can read it
     /// before adopting.", "1 finding · mentions 2 hosts") and the Overview's "Security · 1 finding".
@@ -98,7 +98,7 @@ public enum DesignFixtures {
     public static let deployChecklist = entry("deploy-checklist", in: api)
     public static let sqlReview = entry("sql-review", in: api)
     public static let myNotes = entry("my-notes", in: api)
-    /// Planned shape: a not managed row in a project scope, which the 0.9.1 CLI never reports (`api`); the
+    /// Planned shape: a not managed row in a project scope, which the 0.9.4 CLI never reports (`api`); the
     /// personal scope's `personalCaveman` is the reachable one.
     public static let caveman = entry("caveman", in: api)
     public static let safeRefactor = entry("safe-refactor", in: api)
@@ -214,7 +214,7 @@ public enum DesignFixtures {
 
     // MARK: - Health (`Health-States`)
 
-    /// Doctor lines keep the CLI wording of the 0.9.1 capture (`links: N ok`, `<dir>: link wrong`, `<store>/<n>:
+    /// Doctor lines keep the CLI wording of the 0.9.4 capture (`links: N ok`, `<dir>: link wrong`, `<store>/<n>:
     /// not installed (<pkg>); run \`skillcask install\``, `.gitignore: stale managed block`); the app's Copy layer
     /// rewords them. The board's prose (".cursor/skills/pdf points at ../../old/pdf, not at the installed copy.",
     /// "jira-syntax is in skills.lock but its folder is missing.") is that copy, and the link target

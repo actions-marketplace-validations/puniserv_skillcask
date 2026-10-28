@@ -266,12 +266,12 @@ import SkillcaskDomain
 
     // MARK: - Provided skills and rename
 
-    /// `add --skill`: the provided skills can be chosen. Without it (0.9.1) every provided skill is added.
+    /// `add --skill`: the provided skills can be chosen. Without it (0.9.4) every provided skill is added.
     var canChooseSkills: Bool {
         store.capabilities.supports(.addSkill)
     }
 
-    /// `add --rename`: a clashing skill can be installed under another name. Without it (0.9.1) the clash is the
+    /// `add --rename`: a clashing skill can be installed under another name. Without it (0.9.4) the clash is the
     /// CLI's error and hint after Add.
     var canRename: Bool {
         store.capabilities.supports(.addRename)

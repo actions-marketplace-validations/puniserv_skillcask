@@ -32,7 +32,7 @@ public struct SkillEntry: Identifiable, Hashable, Sendable {
     /// skill on a CLI without the planned `auditNotManaged`, or no audit at all): "not audited", not "clean".
     public let reach: Reach?
     /// `status`'s `via` list as printed, kept for every kind: a package-only row of a drifted dependency carries it
-    /// here, since its `Kind` has no room for it (`src/commands.rs` status labels `name (via a, b)`).
+    /// here, since its `Kind` has no room for it.
     public let via: [String]
 
     public init(
