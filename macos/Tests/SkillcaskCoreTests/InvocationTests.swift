@@ -163,7 +163,7 @@ import Testing
             .status, .audit, .outdated, .doctor(fix: false), .info(.skill("a")), .info(.package("a/b")),
             .search(query: "q", skillsSh: nil, remember: false), .diff(package: nil),
             .diffTo(package: "a/b", version: "1.0"), .projects(roots: [URL(fileURLWithPath: "/tmp")]),
-            .config(key: "search.skills-sh"),
+            .config(key: "search.skills-sh"), .configList,
         ]
         for command in reads {
             #expect(try Invocation(command, in: project, capabilities: all).isReadOnly, "\(command)")
@@ -171,7 +171,8 @@ import Testing
         let others: [Invocation.Command] = [
             .version, .initialize, .install(frozen: false), .update(packages: []), .remove(packages: ["a"]),
             .doctor(fix: true), .search(query: "q", skillsSh: .include, remember: true),
-            .authSet(host: "h", username: nil), .configSet(key: "search.skills-sh", value: "true"),
+            .authSet(host: "h", username: nil), .configSet(key: "search.skills-sh", values: ["true"]),
+            .configUnset(key: "policy.enforce"),
         ]
         for command in others {
             #expect(try !Invocation(command, in: project, capabilities: all).isReadOnly, "\(command)")
@@ -202,16 +203,58 @@ import Testing
             try argv(.config(key: "search.skills-sh"), in: .personal, capabilities: all)
                 == ["-g", "config", "--json", "--", "search.skills-sh"])
         #expect(
-            try argv(.configSet(key: "search.skills-sh", value: "false"), in: .personal, capabilities: all)
+            try argv(.configSet(key: "search.skills-sh", values: ["false"]), in: .personal, capabilities: all)
                 == ["-g", "config", "--", "search.skills-sh", "false"])
         #expect(throws: CLIError.unsupported(feature: "config")) {
             try Invocation(.config(key: "search.skills-sh"), in: .personal, capabilities: caps)
         }
         #expect(throws: CLIError.self) {
-            try Invocation(.configSet(key: "search.skills-sh", value: ""), in: .personal, capabilities: all)
+            try Invocation(.configSet(key: "search.skills-sh", values: [""]), in: .personal, capabilities: all)
         }
         #expect(try Invocation(.config(key: "k"), in: .personal, capabilities: all).expectsDocument)
-        #expect(try !Invocation(.configSet(key: "k", value: "v"), in: .personal, capabilities: all).isMutation)
+        #expect(try !Invocation(.configSet(key: "k", values: ["v"]), in: .personal, capabilities: all).isMutation)
+    }
+
+    /// Settings › Global: the whole list with `--json`; a list key gets one argument per entry after `--`, so an
+    /// entry starting with `-` stays a value; `--unset` goes before `--`. All need `config` (0.9.4).
+    @Test func globalConfigCommands() throws {
+        #expect(try argv(.configList, in: .personal, capabilities: all) == ["-g", "config", "--json"])
+        #expect(
+            try argv(.configSet(key: "agents.targets", values: ["claude", "-x"]), in: .personal, capabilities: all)
+                == ["-g", "config", "--", "agents.targets", "claude", "-x"])
+        #expect(
+            try argv(.configUnset(key: "policy.enforce"), in: .personal, capabilities: all)
+                == ["-g", "config", "--unset", "--", "policy.enforce"])
+        for command in [Invocation.Command.configList, .configUnset(key: "k"), .configSet(key: "k", values: ["v"])] {
+            #expect(throws: CLIError.unsupported(feature: "config")) {
+                try Invocation(command, in: .personal, capabilities: caps)
+            }
+        }
+        for command in [Invocation.Command.configSet(key: "k", values: []), .configUnset(key: "")] {
+            #expect(throws: CLIError.self) { try Invocation(command, in: .personal, capabilities: all) }
+        }
+        let list = try Invocation(.configList, in: .personal, capabilities: all)
+        #expect(list.isReadOnly && list.expectsDocument && !list.isMutation)
+        let unset = try Invocation(.configUnset(key: "k"), in: .personal, capabilities: all)
+        #expect(!unset.isReadOnly && !unset.expectsDocument && !unset.isMutation)
+    }
+
+    /// `allow-sources` URLs may carry a token: argv has them as typed, the Activity line as the CLI prints them.
+    @Test func credentialBearingValuesAreRedactedInTheDisplayCommand() throws {
+        let typed = "https://user:tok@repo.example/p?x=1"
+        let secret = try Invocation(
+            .configSet(key: "policy.allow-sources", values: ["packagist", typed]), in: .personal, capabilities: all)
+        #expect(secret.argv.last == typed)
+        #expect(
+            secret.displayCommand
+                == "skillcask -g config -- policy.allow-sources packagist 'https://repo.example/p?%E2%80%A6'")
+        #expect(!secret.displayCommand.contains("tok"))
+        let bare = try Invocation(
+            .configSet(key: "policy.allow-sources", values: ["u:p@h.example/x"]), in: .personal, capabilities: all)
+        #expect(bare.displayCommand == "skillcask -g config -- policy.allow-sources '••••@h.example/x'")
+        let plain = try Invocation(
+            .configSet(key: "agents.targets", values: ["https://user:tok@x.example"]), in: .personal, capabilities: all)
+        #expect(plain.displayCommand.contains("tok"), "only allow-sources is redacted")
     }
 
     @Test func displayCommandQuotesOnlyWhatNeedsIt() throws {

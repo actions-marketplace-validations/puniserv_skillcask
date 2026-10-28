@@ -48,9 +48,15 @@ public struct Invocation: Hashable, Sendable {
         /// `config --json -- <key>` (D48, `Capabilities.Feature.config`): `{"value", "from"}`, `null` and exit 1
         /// when nothing sets the key. Personal keys (`search.skills-sh`) need the personal scope (`-g`).
         case config(key: String)
-        /// `config -- <key> <value>`: writes one setting of config.toml (personal) or skills.toml; prints
-        /// `set <key> in <file>`.
-        case configSet(key: String, value: String)
+        /// `config --json` (D48): every key with its effective value and layer, `{"file", "settings"}`; with `-g`
+        /// the keys of config.toml as an empty project would see them.
+        case configList
+        /// `config -- <key> <value>…`: writes one setting of config.toml (personal) or skills.toml, one argument
+        /// per entry of a list key; prints `set <key> in <file>`. An empty list cannot be written (no values reads
+        /// the key): `configUnset` removes it.
+        case configSet(key: String, values: [String])
+        /// `config --unset -- <key>`: removes the key from the file; prints `removed <key> from <file>`.
+        case configUnset(key: String)
     }
 
     /// What the child reads. Its descriptions and mirror never show the text (a token for `auth set`), so neither
@@ -103,7 +109,8 @@ public struct Invocation: Hashable, Sendable {
     /// under `GuardedClient.readTimeout`. `search --remember` writes config.toml and stays out.
     public var isReadOnly: Bool {
         switch command {
-        case .status, .audit, .outdated, .doctor(fix: false), .info, .diff, .diffTo, .projects, .config: true
+        case .status, .audit, .outdated, .doctor(fix: false), .info, .diff, .diffTo, .projects, .config, .configList:
+            true
         case .search(_, _, let remember): !remember
         default: false
         }
@@ -132,9 +139,9 @@ public struct Invocation: Hashable, Sendable {
     /// `--json` is on the command line, so stdout is a document (even on exit 1 for the read-only verbs).
     public var expectsDocument: Bool {
         switch command {
-        case .status, .audit, .outdated, .doctor, .info, .search, .projects, .config: true
+        case .status, .audit, .outdated, .doctor, .info, .search, .projects, .config, .configList: true
         case .initialize, .install, .update, .add, .remove: capabilities.supports(.jsonMutations)
-        case .version, .diff, .diffTo, .authSet, .authRemove, .configSet: false
+        case .version, .diff, .diffTo, .authSet, .authRemove, .configSet, .configUnset: false
         }
     }
 
@@ -147,9 +154,16 @@ public struct Invocation: Hashable, Sendable {
         return args
     }
 
-    /// `skillcask -g add -- vendor/name`, for the Activity drawer and logs.
+    /// `skillcask -g add -- vendor/name`, for the Activity drawer and logs. The values of a key that may carry a
+    /// credential (`ConfigKey.mayHoldCredentials`) are shown as the CLI prints URLs, and any `user:password@` left
+    /// (a value without a scheme) is masked: no user name, password or query.
     public var displayCommand: String {
-        (["skillcask"] + argv.map(Self.quoted)).joined(separator: " ")
+        var shown = argv
+        if case .configSet(let key, let values) = command, ConfigKey.mayHoldCredentials(key) {
+            shown.replaceSubrange(
+                (shown.count - values.count)..., with: values.map { Redaction.credentials(in: Redaction.url($0)) })
+        }
+        return (["skillcask"] + shown.map(Self.quoted)).joined(separator: " ")
     }
 
     // MARK: - Rendering
@@ -225,8 +239,12 @@ public struct Invocation: Hashable, Sendable {
             return ["auth", "remove"] + (username.map { ["--username", $0] } ?? []) + ["--", host]
         case .config(let key):
             return ["config"] + json + ["--", key]
-        case .configSet(let key, let value):
-            return ["config", "--", key, value]
+        case .configList:
+            return ["config"] + json
+        case .configSet(let key, let values):
+            return ["config", "--", key] + values
+        case .configUnset(let key):
+            return ["config", "--unset", "--", key]
         }
     }
 
@@ -268,9 +286,15 @@ public struct Invocation: Hashable, Sendable {
         case .config(let key):
             try feature(.config, capabilities, "config")
             try require(!key.isEmpty, "config needs a key")
-        case .configSet(let key, let value):
+        case .configList:
             try feature(.config, capabilities, "config")
-            try require(!key.isEmpty && !value.isEmpty, "config needs a key and a value")
+        case .configSet(let key, let values):
+            try feature(.config, capabilities, "config")
+            try require(
+                !key.isEmpty && !values.isEmpty && values.allSatisfy { !$0.isEmpty }, "config needs a key and a value")
+        case .configUnset(let key):
+            try feature(.config, capabilities, "config")
+            try require(!key.isEmpty, "config --unset needs a key")
         case .version, .status, .audit, .outdated, .doctor, .initialize, .install:
             break
         }

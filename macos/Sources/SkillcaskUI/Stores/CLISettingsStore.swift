@@ -3,8 +3,9 @@ import Observation
 import SkillcaskCore
 import SkillcaskDomain
 
-/// The settings that live in the CLI, not in the app (S14): `[search] skills-sh` in config.toml and the GitHub
-/// token in git's credential helper (the Keychain on macOS), and the size of the adopted copies' folder. App-lifetime
+/// The settings that live in the CLI, not in the app (S14): `[search] skills-sh` and the other keys of config.toml
+/// (Settings › Global, `-g config`, 0.9.4), the GitHub token in git's credential helper (the Keychain on macOS), and
+/// the size of the adopted copies' folder. App-lifetime
 /// (`AppStore.cliSettings`), so what this session learnt survives closing the Settings window.
 ///
 /// skills.sh goes through `skillcask -g config` where the CLI has it (`Capabilities.Feature.config`, 0.9.4, D48):
@@ -96,8 +97,35 @@ import SkillcaskDomain
     /// The last measured adopted folder and its summary (`measureAdopted(at:)`).
     public private(set) var adopted: (folder: URL, summary: String?)?
 
+    /// `-g config --json`: every key of config.toml with its value and layer; nil before the first read and after
+    /// a read that failed.
+    public private(set) var globalSettings: ConfigListDocument?
+    /// Why the last read of `globalSettings` failed (a broken config.toml), masked.
+    public private(set) var globalSettingsFailure: UserMessage?
+    /// The key whose change is running; one at a time.
+    public private(set) var changingSetting: String?
+    /// The CLI's refusal of the last change, under the key it was for.
+    public private(set) var settingRefusal: SettingRefusal?
+
+    /// A change the CLI refused, kept with its key; values that may hold credentials are masked in it.
+    public struct SettingRefusal: Hashable, Sendable {
+        public let key: String
+        public let message: UserMessage
+    }
+
     /// Set by `preload`: a preview's state is not replaced by the file on disk.
     @ObservationIgnored private var isPreloaded = false
+    /// Set by `preloadGlobal`.
+    @ObservationIgnored private var isGlobalPreloaded = false
+    /// Counts reads of `globalSettings`: only the newest one may set it, so a slow earlier read cannot overwrite
+    /// what a later one (after a change) read.
+    @ObservationIgnored private var globalGeneration = 0
+
+    /// A write of config.toml is running: the skills.sh switch or a Global change. One at a time, so two `config`
+    /// runs never race on the file and each read-back sees its own write.
+    public var isWritingConfig: Bool {
+        pendingSkillsSh != nil || changingSetting != nil
+    }
 
     public init(
         read: @escaping Reader = CLISettingsStore.readFile, measure: @escaping Measurer = CLISettingsStore.measureFolder
@@ -170,7 +198,7 @@ import SkillcaskDomain
     /// --remember -- skillcask` in the personal scope, then the file, so a search that failed after the CLI saved
     /// the value (offline) still counts, and one that failed before shows why.
     public func setSkillsSh(_ on: Bool, in context: Context) async {
-        guard pendingSkillsSh == nil else { return }
+        guard !isWritingConfig else { return }
         pendingSkillsSh = on
         skillsShFailure = nil
         defer { pendingSkillsSh = nil }
@@ -179,7 +207,7 @@ import SkillcaskDomain
         do throws(CLIError) {
             let command: Invocation.Command =
                 viaConfig
-                ? .configSet(key: Self.skillsShKey, value: on ? "true" : "false")
+                ? .configSet(key: Self.skillsShKey, values: [on ? "true" : "false"])
                 : .search(query: Self.rememberQuery, skillsSh: on ? .include : .exclude, remember: true)
             let result = try await context.client.run(
                 Invocation(command, in: .personal, capabilities: context.capabilities))
@@ -190,6 +218,8 @@ import SkillcaskDomain
             failure = error
         }
         await loadSkillsSh(in: context)
+        // Settings › Global lists the same key.
+        await loadGlobalSettings(in: context)
         if skillsSh != (on ? .on : .off) {
             skillsShFailure = ErrorCopy.message(
                 for: failure ?? .launchFailed(SettingsCopy.skillsShNotSaved), title: SettingsCopy.couldNotSaveSkillsSh)
@@ -203,6 +233,95 @@ import SkillcaskDomain
         case false?: .off
         case nil: .notSet
         }
+    }
+
+    // MARK: - Global settings
+
+    /// Seeds Settings › Global for a preview; later loads keep it.
+    func preloadGlobal(
+        _ document: ConfigListDocument?, failure: UserMessage? = nil, refusal: SettingRefusal? = nil,
+        changing: String? = nil
+    ) {
+        isGlobalPreloaded = true
+        globalSettings = document
+        globalSettingsFailure = failure
+        settingRefusal = refusal
+        changingSetting = changing
+    }
+
+    /// Reads every key through `-g config --json`. Nothing runs on a CLI without `config` (older than 0.9.4): the
+    /// pane says so instead. A cancelled read (the pane went away) changes nothing, and only the newest read
+    /// sets the state.
+    public func loadGlobalSettings(in context: Context) async {
+        guard !isGlobalPreloaded, context.capabilities.supports(.config) else { return }
+        globalGeneration += 1
+        let generation = globalGeneration
+        do throws(CLIError) {
+            let invocation = try Invocation(.configList, in: .personal, capabilities: context.capabilities)
+            let document = try await context.client.run(invocation).document(ConfigListDocument.self)
+            guard generation == globalGeneration else { return }
+            globalSettings = document
+            globalSettingsFailure = nil
+        } catch {
+            guard generation == globalGeneration, error != .cancelled else { return }
+            globalSettings = nil
+            var message = ErrorCopy.message(for: error, title: SettingsCopy.couldNotReadGlobal)
+            message.details = nil
+            globalSettingsFailure = message
+        }
+    }
+
+    /// `-g config -- <key> <values…>`, then the list again. Returns whether the CLI took it; a refusal is kept in
+    /// `settingRefusal` with the values of a credential-bearing key masked.
+    @discardableResult public func setGlobal(_ key: String, values: [String], in context: Context) async -> Bool {
+        await changeGlobal(key, .configSet(key: key, values: values), typed: values, in: context)
+    }
+
+    /// `-g config --unset -- <key>`, then the list again.
+    @discardableResult public func unsetGlobal(_ key: String, in context: Context) async -> Bool {
+        await changeGlobal(key, .configUnset(key: key), typed: [], in: context)
+    }
+
+    private func changeGlobal(
+        _ key: String, _ command: Invocation.Command, typed: [String], in context: Context
+    ) async -> Bool {
+        guard !isWritingConfig else { return false }
+        changingSetting = key
+        settingRefusal = nil
+        defer { changingSetting = nil }
+        var failure: CLIError?
+        do throws(CLIError) {
+            let invocation = try Invocation(command, in: .personal, capabilities: context.capabilities)
+            failure = try await context.client.run(invocation).failure()
+        } catch {
+            failure = error
+        }
+        await loadGlobalSettings(in: context)
+        if key == Self.skillsShKey {
+            await loadSkillsSh(in: context)
+        }
+        guard let failure else { return true }
+        var message = ErrorCopy.message(for: failure, title: SettingsCopy.couldNotChange(key))
+        message.details = nil
+        if ConfigKey.mayHoldCredentials(key) {
+            message = Self.masking(typed, in: message)
+        }
+        settingRefusal = SettingRefusal(key: key, message: message)
+        return false
+    }
+
+    /// `message` with user names, passwords and the queries of typed values masked (`Redaction.credentials`): the
+    /// CLI's refusal quotes a rejected `allow-sources` entry as typed (`"http://user:tok@host" is not packagist, …`).
+    static func masking(_ values: [String], in message: UserMessage) -> UserMessage {
+        func mask(_ text: String?) -> String? {
+            text.map { Redaction.credentials(in: $0, typed: values) }
+        }
+        var message = message
+        message.title = mask(message.title) ?? ""
+        message.reason = mask(message.reason)
+        message.action = mask(message.action)
+        message.monoFragment = mask(message.monoFragment)
+        return message
     }
 
     // MARK: - Adopted copies

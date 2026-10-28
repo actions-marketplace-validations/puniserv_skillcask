@@ -75,11 +75,13 @@ public struct FixtureCLIClient: CLIClient {
                 throw .cancelled
             }
             return RunResult(invocation: invocation, status: .exited(0), stdout: Data(), stderr: "")
-        case .authSet, .authRemove, .configSet:
+        case .authSet, .authRemove, .configSet, .configUnset:
             return RunResult(invocation: invocation, status: .exited(0), stdout: Data(), stderr: "")
         case .config:
             // Nothing set: what `config --json` prints for a key no layer sets, with its exit 1.
             return answer(invocation, text: #"{"from":null,"value":null}"#, exit: 1)
+        case .configList:
+            return answer(invocation, fixture: "config.global")
         }
     }
 

@@ -1,0 +1,1 @@
+error: /Users/me/.config/skillcask/config.toml: policy.allow-sources "http://user:tok@bad.example" is not packagist, github, an https:// URL prefix or a repository name

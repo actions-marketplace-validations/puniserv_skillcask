@@ -11,6 +11,12 @@ import SkillcaskCore
 /// `skillsShSideEffect`, `credentialsNotSaved`, `refusedVariable`, `removeVariable` (the board's
 /// aria-label "Remove" with the name), `adoptedSummary(folders:bytes:)`'s singular and empty forms, `noAdopted`,
 /// and the forms of `sourcesSearched(_:project:)` without a project or without project sources.
+///
+/// Global (no board draws this tab; every string in its MARK is invented, after the maintainer's Settings window
+/// for `-g config` in upstream `eca0f53`): `global`, `settingLabel(_:)`, `layer(_:)`, `notSet`, `edit`, `unset`,
+/// `cancel`, `separateEntries`, `enforcedNote`, `unsetEnforcedFirst`, `environmentNote(variable:)`, `redactedSourcesNote`,
+/// `globalNeedsNewerCLI(_:)`, `globalNeedsCLI`, `couldNotReadGlobal`, `couldNotChange(_:)`, `globalFooter`, and
+/// Advanced's `policyNote`, which replaced the board's read-only sentence.
 public enum SettingsCopy {
     // MARK: - Tabs
 
@@ -18,6 +24,7 @@ public enum SettingsCopy {
     public static let search = "Search"
     public static let updates = "Updates"
     public static let advanced = "Advanced"
+    public static let global = "Global"
 
     // MARK: - General
 
@@ -138,6 +145,80 @@ public enum SettingsCopy {
     /// What replaces a token if any text would ever contain it. Invented.
     public static let redacted = "••••"
 
+    // MARK: - Global
+
+    /// The row label of a `config` key; a key a newer CLI adds is labelled by itself.
+    public static func settingLabel(_ key: String) -> String {
+        switch key {
+        case "policy.min-release-age": "Minimum release age:"
+        case "policy.allow-ranges": "Allow version ranges:"
+        case "policy.packagist": "Use Packagist:"
+        case "policy.github-requires": "Allow GitHub dependencies:"
+        case "policy.allow-sources": "Allowed sources:"
+        case "policy.deny-patterns": "Refuse risky patterns:"
+        case "policy.enforce": "Enforced settings:"
+        case "agents.targets": "Agents:"
+        case "search.skills-sh": alsoSearchSkillsSh
+        default: "\(key):"
+        }
+    }
+
+    /// Where the value comes from, after the mono key: `policy.min-release-age · enforced in config.toml`.
+    public static func layer(_ layer: ConfigLayer?) -> String {
+        switch layer {
+        case .configFile?: "from config.toml"
+        case .enforced?: "enforced in config.toml"
+        case .environment?: "from the environment"
+        case .builtIn?: "built-in default"
+        case .manifest?: "from skills.toml"
+        case .other(let name)?: "from \(name)"
+        case nil: "not set"
+        }
+    }
+
+    /// The value of a key nothing sets.
+    public static let notSet = "Not set"
+    public static let edit = "Edit"
+    /// Runs `-g config --unset`.
+    public static let unset = "Unset"
+    public static let cancel = "Cancel"
+    /// Under a list being edited.
+    public static let separateEntries = "Separate entries with commas; an empty list removes the key."
+    /// Under a key `policy.enforce` lists.
+    public static let enforcedNote = "Enforced: no project can loosen it."
+    /// After `enforcedNote`: the row has no Unset, since the CLI refuses to unset a key `policy.enforce` lists.
+    public static let unsetEnforcedFirst = "To unset it, remove it from Enforced settings first."
+
+    /// Under a key a `SKILLCASK_*` variable sets: the row is read-only.
+    public static func environmentNote(variable: String?) -> String {
+        let named = variable.map { "\($0) is set" } ?? "It is set"
+        return "\(named) in the command-line tool’s environment, which wins over config.toml; a change here has "
+            + "no effect while it is set."
+    }
+
+    /// Under `allow-sources` with a URL entry: the row is read-only.
+    public static let redactedSourcesNote =
+        "URLs are shown without user names, passwords or queries, so saving from here would drop them. Change "
+        + "this in config.toml (Advanced › Open config.toml)."
+
+    /// In place of the list on a CLI without `config`.
+    public static func globalNeedsNewerCLI(_ version: Version) -> String {
+        "Global settings need skillcask 0.9.4 or newer; this one is \(version). Until then they live in config.toml "
+            + "(Advanced › Open config.toml)."
+    }
+
+    /// Before the CLI is located.
+    public static let globalNeedsCLI = "Find the command-line tool in General to read these settings."
+    public static let couldNotReadGlobal = "Couldn’t read the global settings."
+
+    public static func couldNotChange(_ key: String) -> String {
+        "Couldn’t change \(key)."
+    }
+
+    public static let globalFooter =
+        "Every project starts from these settings of config.toml. Each change runs skillcask -g config, which "
+        + "checks it before writing the file, and the list is read again afterwards."
+
     // MARK: - Advanced
 
     public static let environmentTitle = "Environment variables for the command-line tool"
@@ -178,6 +259,10 @@ public enum SettingsCopy {
     public static let activity = "Activity:"
     public static let showActivity = "Show Activity ⌥⌘L"
     public static let activityNote = "Only this session; nothing is written to disk by the app."
+    /// Points to Settings › Global (invented, replacing the board's read-only sentence once `-g config` came):
+    /// a project's skills.toml overrides a key config.toml sets, but must not differ from an enforced one
+    /// (`src/policy.rs` `resolve`).
     public static let policyNote =
-        "Policy (allowed sources, minimum release age, enforced settings) is read-only here; it lives in config.toml and skills.toml."
+        "Global settings, including policy, are changed in Settings › Global through skillcask -g config; a "
+        + "project’s skills.toml can override them, except the ones config.toml enforces."
 }

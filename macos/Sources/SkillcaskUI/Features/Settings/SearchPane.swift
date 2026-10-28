@@ -17,7 +17,7 @@ struct SearchPane: View {
                             .controlSize(.small)
                             .labelsHidden()
                             .tint(Color.accent)
-                            .disabled(app.cliContext == nil || store.pendingSkillsSh != nil)
+                            .disabled(app.cliContext == nil || store.isWritingConfig)
                         VStack(alignment: .leading, spacing: Spacing.xs) {
                             SettingsNote(note)
                             if CLISettingsStore.flipRunsSearch(app.capabilities) {

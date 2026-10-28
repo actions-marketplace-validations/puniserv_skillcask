@@ -273,8 +273,9 @@ extension CLIError {
 
     /// The switch writes with `config -- search.skills-sh false` and reads back through `config`: no search.
     @Test func switchWritesThroughConfig() async throws {
-        await client.lines(.configSet(key: CLISettingsStore.skillsShKey, value: "false"), in: .personal, [])
+        await client.lines(.configSet(key: CLISettingsStore.skillsShKey, values: ["false"]), in: .personal, [])
         await client.json(Self.read, in: .personal, #"{"from":"config.toml","value":false}"#)
+        await client.json(.configList, in: .personal, #"{"file":"/c/config.toml","settings":{}}"#)
         let store = store()
         await store.setSkillsSh(false, in: context())
         #expect(store.skillsSh == .off && store.skillsShFailure == nil)
@@ -286,7 +287,9 @@ extension CLIError {
                     "-g", "config", "--json", "--",
                     "search.skills-sh",
                 ],
+                ["-g", "config", "--json"],
             ])
+        #expect(store.globalSettings?.file == "/c/config.toml", "Settings › Global reads the same key again")
         #expect(!CLISettingsStore.flipRunsSearch(capabilities))
         #expect(CLISettingsStore.flipRunsSearch(Capabilities(version: Capabilities.minimum)))
     }
@@ -296,7 +299,7 @@ extension CLIError {
         let refused = CLIError.failed(
             code: .problem, message: "config.toml: search must be a table", hint: nil, stderr: "")
         await client.script(
-            .configSet(key: CLISettingsStore.skillsShKey, value: "true"), in: .personal, .error(refused))
+            .configSet(key: CLISettingsStore.skillsShKey, values: ["true"]), in: .personal, .error(refused))
         await client.json(Self.read, in: .personal, #"{"from":null,"value":null}"#, exit: 1)
         let store = store()
         await store.setSkillsSh(true, in: context())

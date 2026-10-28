@@ -21,7 +21,7 @@ import Testing
 
     @Test func everyJSONFileDecodesThroughItsDocumentType() throws {
         let names = try Self.files(withExtension: "json")
-        #expect(names.count == 32)
+        #expect(names.count == 33)
         for name in names {
             let data = try Data(contentsOf: Self.designDirectory.appending(path: name))
             let decoder = JSONDecoder()
@@ -33,6 +33,7 @@ import Testing
             case "info": _ = try decoder.decode(InfoDocument.self, from: data)
             case "search": _ = try decoder.decode(SearchDocument.self, from: data)
             case "projects": _ = try decoder.decode(ProjectsDocument.self, from: data)
+            case "config": _ = try decoder.decode(ConfigListDocument.self, from: data)
             default: Issue.record("unexpected design fixture \(name)")
             }
         }

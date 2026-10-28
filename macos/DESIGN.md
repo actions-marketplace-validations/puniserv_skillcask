@@ -28,7 +28,7 @@ change fails until both are updated.
 | S11 | Running: progress in the list header or the sheet, toast, failure banner, integrity failure |
 | S12 | Health results popover: problems, warnings, repaired, passed |
 | S13 | Onboarding: CLI missing or too old, first launch hints |
-| S14 | Settings: General, Search, Updates, Advanced |
+| S14 | Settings: General, Search, Updates, Global, Advanced |
 | S15 | Activity drawer: one row per run this session with its transcript |
 
 Flows, walked end to end through the screens: F1 first launch, F2 add a skill, F3 update with
@@ -153,6 +153,8 @@ them by number; the numbers have gaps.
   exit word, duration and the full transcript. It opens by itself only from a failure's Details.
 - Settings (⌘,) is the standard Settings window: CLI path and version, the skills.sh switch, GitHub
   sign-in (`auth set` / `auth remove`), the environment table, and the size of the adopted copies.
+  Global (no board) lists every key of `-g config --json` with its layer and changes it through
+  `-g config` (0.9.4+), read-only where the environment wins or `allow-sources` holds a redacted URL.
 
 ## Safety
 
