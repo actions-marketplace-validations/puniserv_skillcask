@@ -1,0 +1,13 @@
+{
+  "ok": true,
+  "passed": [
+    "links: 3 ok",
+    "targets: no links left in former target directories",
+    "git index: no managed paths committed",
+    ".gitignore: managed block up to date",
+    "installed: 3 skill(s) match skills.lock"
+  ],
+  "problems": [],
+  "fixed": [],
+  "warnings": []
+}

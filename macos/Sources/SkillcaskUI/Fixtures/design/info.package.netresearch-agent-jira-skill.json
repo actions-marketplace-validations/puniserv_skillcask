@@ -1,0 +1,37 @@
+{
+  "package": "netresearch/agent-jira-skill",
+  "source": "composer",
+  "repository": "https://repo.packagist.org/",
+  "version": "4.3.0",
+  "locked": true,
+  "description": "Conventions for writing Jira issues and comments the way the team reads them: field syntax, linking, status language, and when not to comment at all.",
+  "license": [
+    "MIT"
+  ],
+  "abandoned": null,
+  "versions": [
+    "4.3.0",
+    "4.2.0",
+    "4.1.2",
+    "4.1.1",
+    "4.0.0",
+    "3.34.0",
+    "3.33.0",
+    "3.32.4",
+    "3.32.3"
+  ],
+  "requires": {},
+  "skills": [
+    {
+      "name": "jira-syntax",
+      "description": "Jira field and markup syntax, with examples."
+    },
+    {
+      "name": "jira-communication",
+      "description": "How to write comments, status updates and hand-offs."
+    }
+  ],
+  "why": [
+    "netresearch/agent-jira-skill: in skills.toml as \"^4.2\""
+  ]
+}

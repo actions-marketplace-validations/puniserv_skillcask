@@ -1,0 +1,2 @@
+warning: netresearch/agent-jira-skill is abandoned; use netresearch/jira-skill instead
+no newer versions within the constraints

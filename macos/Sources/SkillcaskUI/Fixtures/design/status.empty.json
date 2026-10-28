@@ -1,0 +1,19 @@
+{
+  "ok": true,
+  "entries": [],
+  "policy": {
+    "min-release-age": { "value": "72h", "from": "config.toml, enforced" },
+    "allow-sources": { "value": ["packagist", "acme"], "from": "config.toml, enforced" },
+    "allow-ranges": { "value": true, "from": "default" }
+  },
+  "targets": {
+    "entries": ["claude", "cursor"],
+    "dirs": [".claude/skills", ".cursor/skills"],
+    "from": "skills.toml"
+  },
+  "repositories": [
+    { "allowed": true, "name": "packagist", "type": "composer", "url": "https://repo.packagist.org/" },
+    { "allowed": false, "name": "github", "type": "github", "url": "https://api.github.com/" },
+    { "allowed": true, "name": "acme", "type": "composer", "url": "https://skills.acme.example/packages.json" }
+  ]
+}

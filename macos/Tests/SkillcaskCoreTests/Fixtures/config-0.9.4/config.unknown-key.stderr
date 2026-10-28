@@ -1,0 +1,2 @@
+error: unknown key "policy.nope"
+  hint: keys: policy.min-release-age, policy.allow-ranges, policy.packagist, policy.github-requires, policy.allow-sources, policy.deny-patterns, agents.targets; with -g also policy.enforce, search.skills-sh; tables only through skillcask config edit

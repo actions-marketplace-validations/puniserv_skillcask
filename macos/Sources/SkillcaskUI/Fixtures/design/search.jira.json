@@ -1,0 +1,42 @@
+{
+  "results": [
+    {
+      "name": "netresearch/agent-jira-skill",
+      "description": "Jira issue syntax and communication conventions for agents. Provides 2 skills.",
+      "source": "packagist",
+      "installs": 4100
+    },
+    {
+      "name": "acme/jira-triage",
+      "description": "Triage rules for our Jira boards: labels, priorities, who to assign.",
+      "source": "acme",
+      "installs": 38
+    },
+    {
+      "name": "atlassian/jira-cli-skill",
+      "description": "Drive Jira from the command line with jira-cli.",
+      "source": "packagist",
+      "installs": 2200
+    },
+    {
+      "name": "kolya/jira-to-md",
+      "description": "Convert Jira wiki markup to Markdown and back.",
+      "source": "packagist",
+      "installs": 610
+    },
+    { "name": "github:ankit/jira-helper", "description": null, "source": "github", "installs": null },
+    {
+      "name": "netresearch/jira-skill",
+      "description": "Netresearch AI skill for Jira API operations and wiki markup syntax",
+      "source": "packagist",
+      "installs": null
+    },
+    {
+      "name": "netresearch/german-technical-writing-skill",
+      "description": "Netresearch AI skill for natural German technical register in Jira comments and descriptions, internal German-language documentation, and team-chat messages",
+      "source": "packagist",
+      "installs": null
+    }
+  ],
+  "skills-sh": null
+}

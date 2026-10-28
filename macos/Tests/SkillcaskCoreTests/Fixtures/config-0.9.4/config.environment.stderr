@@ -1,0 +1,1 @@
+warning: SKILLCASK_ALLOW_RANGES overrides policy.allow-ranges = true enforced by /Users/me/.config/skillcask/config.toml; using false

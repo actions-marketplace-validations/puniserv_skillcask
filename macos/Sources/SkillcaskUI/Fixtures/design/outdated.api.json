@@ -1,0 +1,49 @@
+{
+  "behind": [],
+  "packages": [
+    {
+      "package": "anthropics/skills",
+      "locked": "1.2.0",
+      "within": "1.4.0",
+      "latest": "1.4.0",
+      "note": null,
+      "released": "2026-10-24T00:00:00Z"
+    },
+    {
+      "package": "netresearch/agent-jira-skill",
+      "locked": "4.2.0",
+      "within": "4.3.0",
+      "latest": "4.3.0",
+      "note": "4.3.0 eligible 2026-10-30T09:14:00Z",
+      "eligible": "2026-10-30T09:14:00Z",
+      "released": "2026-10-28T09:14:00Z"
+    },
+    { "package": "acme/sql-review", "locked": "0.9.2", "within": "0.9.2", "latest": "0.9.2", "note": null },
+    {
+      "package": "juliusbrussee/safe-refactor",
+      "locked": "4.0.1",
+      "within": "4.0.1",
+      "latest": "4.0.1",
+      "note": null
+    },
+    {
+      "package": "acme/lint",
+      "locked": "2.3.1",
+      "within": "2.3.1",
+      "latest": "3.0.0",
+      "note": null,
+      "released": "2026-10-15T00:00:00Z"
+    },
+    { "package": "acme/review-pr", "locked": "2.1.0", "within": "2.2.0", "latest": "2.2.0", "note": null },
+    {
+      "package": "acme/commit",
+      "locked": "3.1.0",
+      "within": "3.1.0",
+      "latest": "3.1.0",
+      "note": null,
+      "released": "2026-10-01T00:00:00Z"
+    },
+    { "package": "acme/api-docs", "locked": "1.8.0", "within": "1.8.0", "latest": "1.8.0", "note": null },
+    { "package": "acme/changelog", "locked": "0.4.0", "within": "0.4.0", "latest": "0.4.0", "note": null }
+  ]
+}

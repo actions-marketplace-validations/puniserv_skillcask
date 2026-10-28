@@ -1,0 +1,41 @@
+import SkillcaskCore
+import SwiftUI
+
+/// The Overview header's warning when a refresh read `status` but `audit` or `doctor` failed
+/// (`ScopeStore.partialFailure`): one compact strip with `StripCopy.partialRefresh`, and a Details link that shows
+/// the failure under it (the error's sentences and the CLI's stderr), selectable, as a banner's Details would.
+struct PartialRefreshStrip: View {
+    let failure: ScopeStore.PartialFailure
+    @State private var showsDetails: Bool
+
+    /// - Parameter showsDetails: Starts with the details open (previews).
+    init(_ failure: ScopeStore.PartialFailure, showsDetails: Bool = false) {
+        self.failure = failure
+        _showsDetails = State(initialValue: showsDetails)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Spacing.xs) {
+            MessageStrip(
+                .warning, text: StripCopy.partialRefresh(failure), density: .compact,
+                trailing: .link(showsDetails ? StripCopy.hideDetails : OutcomeCopy.details) {
+                    showsDetails.toggle()
+                })
+            if showsDetails {
+                Text(Self.details(of: failure.error))
+                    .font(Font.Token.monoSmall)
+                    .foregroundStyle(Color.textSecondary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    /// What Details shows: the message's sentences, then the transcript when there is one.
+    static func details(of error: CLIError) -> String {
+        let message = ErrorCopy.message(for: error)
+        return [message.title, message.reason, message.action, message.details].compactMap { $0 }
+            .filter { !$0.isEmpty }.joined(separator: "\n")
+    }
+}

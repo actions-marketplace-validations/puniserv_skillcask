@@ -547,6 +547,20 @@ a repository. A repository `url` with a query string is used as given, so client
 file through the GitLab raw files API
 (`.../repository/files/composer%2Fpackages.json/raw?ref=main`) with a `gitlab-token`.
 
+## macOS app
+
+`macos/` holds a SwiftUI app for macOS 14+ over the CLI (D35): open My Skills (the `-g` scope) or a
+project folder, see each skill's state, updates and audit findings, read its SKILL.md and diffs,
+and run `add` (also `--adopt`), `update`, `remove`, `install` and `doctor --fix`; its Settings
+change every key `skillcask -g config` lists. It has no package logic of its own: it runs the
+`skillcask` binary and reads its `--json` output.
+
+`macos/bundle.sh` builds a universal `Skillcask.app` that carries its own CLI at
+`Contents/Helpers/skillcask`. Run outside a bundle (`swift run` from `macos/`), the app uses the
+path set in its Settings, else looks on `PATH`, in `/opt/homebrew/bin`, `/usr/local/bin` and
+`~/.cargo/bin`. Building it needs Xcode 26.x with Swift 6.3 or newer, not only the Command Line
+Tools. Building, signing, Gatekeeper, tests and renders: [macos/README.md](macos/README.md).
+
 ## Design
 
 See [docs/specs/2026-10-19-skillcask-v1.md](docs/specs/2026-10-19-skillcask-v1.md).

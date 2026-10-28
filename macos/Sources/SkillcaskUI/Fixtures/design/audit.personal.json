@@ -1,0 +1,54 @@
+{
+  "ok": false,
+  "skills": [
+    {
+      "skill": "caveman",
+      "kind": "not managed",
+      "path": ".claude/skills/caveman",
+      "package": null,
+      "version": null,
+      "findings": [],
+      "commands": [],
+      "network": [],
+      "paths": [],
+      "env": [],
+      "scripts": []
+    },
+    {
+      "skill": "pdf",
+      "kind": "not managed",
+      "path": ".claude/skills/pdf",
+      "package": null,
+      "version": null,
+      "findings": [],
+      "commands": [],
+      "network": [],
+      "paths": [],
+      "env": [],
+      "scripts": []
+    },
+    {
+      "skill": "standup-summary",
+      "kind": "not managed",
+      "path": ".claude/skills/standup-summary",
+      "package": null,
+      "version": null,
+      "findings": [
+        {
+          "rule": "risky-pattern",
+          "path": ".claude/skills/standup-summary/SKILL.md",
+          "line": 9,
+          "message": "downloads code into a shell"
+        }
+      ],
+      "commands": [],
+      "network": [
+        "standup.example",
+        "tickets.example"
+      ],
+      "paths": [],
+      "env": [],
+      "scripts": []
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+local/deploy-checklist lock -> disk
+--- a/deploy-checklist/SKILL.md
++++ b/deploy-checklist/SKILL.md
+@@ -6,6 +6,8 @@ Before a deploy
+ ## Before a deploy
+
+ 1. Run the smoke tests against staging.
+-2. Announce the deploy in #ops.
++2. Announce the deploy in #ops and page the on-call engineer.
++3. Post the rollback plan with `scripts/notify.sh`.
++4. Confirm `kubectl config current-context` is production.
+
+ ## Rollback
+
+--- a/deploy-checklist/scripts/deploy.sh
++++ b/deploy-checklist/scripts/deploy.sh
+@@ -3,4 +3,5 @@
+ set -eu
+ helm upgrade --install api ./chart --kubeconfig "$KUBECONFIG"
+-ssh deploy.acme.example 'systemctl restart api'
++ssh deploy.acme.example 'systemctl restart api && systemctl status api'
++./scripts/notify.sh "deployed $(git rev-parse --short HEAD)"
+--- /dev/null
++++ b/deploy-checklist/scripts/notify.sh
+new mode 100755
+@@ -0,0 +1,3 @@
++#!/bin/sh
++set -eu
++curl -fsS -X POST -d "{\"text\": \"$1\"}" "https://hooks.slack.com/services/$SLACK_WEBHOOK"
