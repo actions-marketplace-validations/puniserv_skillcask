@@ -189,14 +189,35 @@ extension ScopeSnapshot.Doctor {
     /// `passed`, typed.
     public var passedItems: [DoctorItem] { passed.map(DoctorItem.init(line:)) }
 
+    /// The skills `doctor` reports as not installed (`.skillcask/skills/<name>: not installed …`).
+    public var missingSkills: Set<String> {
+        Set(
+            problemItems.compactMap { item in
+                if case .notInstalled(let skill, _) = item { skill } else { nil }
+            })
+    }
+
+    /// What fixes `item` in this answer. `doctor --fix` relinks only when the skill's folder exists
+    /// (`src/commands.rs` `doctor`: `s.root.join(source).join(&n).is_dir()`), so a link to a skill that is not
+    /// installed stays open after Repair: Sync installs the skill and links it. Every other item: `item.remedy`.
+    public func remedy(of item: DoctorItem) -> DoctorItem.Remedy? {
+        if case .link(let path, let problem) = item, problem != .foreign,
+            let name = path.split(separator: "/").last, missingSkills.contains(String(name))
+        {
+            return .sync
+        }
+        return item.remedy
+    }
+
     /// Repair (`doctor --fix`) has something to do: an open problem or warning it fixes (Health-States: after
     /// Repair, with only a download left, the button is disabled).
     public var canRepair: Bool {
-        (problemItems + warningItems).contains { $0.remedy == .repair }
+        (problemItems + warningItems).contains { remedy(of: $0) == .repair }
     }
 
-    /// Links in `directory` that are open problems: the Agents card's "One Cursor link is wrong".
+    /// Links in `directory` that Repair would fix: the Agents card's "One Cursor link is wrong". A link to a skill
+    /// that is not installed is the missing skill's problem, which Health reports as such.
     public func brokenLinks(in directory: String) -> Int {
-        problemItems.filter { $0.linkDirectory == directory }.count
+        problemItems.filter { $0.linkDirectory == directory && remedy(of: $0) == .repair }.count
     }
 }

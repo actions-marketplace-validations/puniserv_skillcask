@@ -200,10 +200,15 @@ public enum DesignFixtures {
     /// "jira-syntax is in skills.lock but its folder is missing.") is that copy, and the link target
     /// `../../old/pdf` exists in no CLI document (Q6). The board's warning ".gitignore does not exclude
     /// .skillcask/cache/" is a stale managed block, which the CLI reports under `problems` (its `warnings` are
-    /// shadowed skill names only), so `doctor.api.json` has 3 problems and no warning where the board shows
-    /// "2 problems, 1 warning"; the repaired document's `fixed` then has its before-state. The CLI has five
-    /// `passed` kinds, so the board's "6 / 7 / 8 checks passed" become 3 / 4 / 5 lines; only `personal`
-    /// ("5 checks passed") matches.
+    /// shadowed skill names only). The CLI also reports, in `link_plan` order (skills sorted, then targets), a
+    /// `<target>/<skill>: link missing` per agent target for each skill that is not installed (jira-syntax and
+    /// sql-review, as `status.api.json` says), prints the `not installed` lines after the gitignore check, and
+    /// prints `links: N ok` only when no link is open; and `--fix` relinks only skills whose folder exists. So
+    /// `doctor.api.json` has 8 problems and no warning where the board shows "2 problems, 1 warning", and the
+    /// repaired document fixes the pdf link and the block and leaves the four links and the two downloads, 6 open
+    /// (P3-11 review). A check `--fix` repaired goes to `fixed`, not to
+    /// `passed` (the block, the git index and stray links are `passed` only when they already matched), so the
+    /// board's "6 / 7 / 8 checks passed" become 2 / 2 / 5 lines; only `personal` ("5 checks passed") matches.
     public static let healthProblems = decode(DoctorDocument.self, "doctor.api")
     public static let healthRepaired = decode(DoctorDocument.self, "doctor.api-repaired")
     public static let healthAllPassed = decode(DoctorDocument.self, "doctor.all-passed")

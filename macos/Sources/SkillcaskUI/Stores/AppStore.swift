@@ -94,9 +94,21 @@ import SkillcaskDomain
 
     /// The settings the sidebar (recents) and the boot (binary path, open-at-launch) read.
     public let settings: SettingsStore
-    /// The environment every child gets: the live client is built with it, and `manifest(of:)` resolves the
-    /// personal skills.toml through it, so a Settings override reaches both.
-    public let environment: EnvironmentPolicy
+    /// The environment every child gets: the live client reads it at every spawn (through `environmentSource`),
+    /// and `manifest(of:)` and `configFile()` resolve through it, so a Settings override reaches all three from the
+    /// next run on. Starts from the policy given plus Settings › Advanced's table; `setEnvironmentVariables(_:)`
+    /// changes it.
+    public private(set) var environment: EnvironmentPolicy {
+        didSet { environmentSource.policy = environment }
+    }
+    /// The live policy `ProcessRunner` reads; shared by reference so no client needs rebuilding.
+    @ObservationIgnored private let environmentSource: EnvironmentSource
+    /// The policy the app was built with, before Settings' table: a table edit rebuilds `environment` from it, so
+    /// removing a row restores a base override of the same name rather than wiping it.
+    @ObservationIgnored private let baseEnvironment: EnvironmentPolicy
+    /// Settings' CLI-side state (S14: skills.sh in config.toml, the GitHub token); app-lifetime, so this session's
+    /// sign-in survives closing the Settings window.
+    public let cliSettings = CLISettingsStore()
     /// The one mutation queue of the app, shared with `ActionRunner`.
     public let queue: MutationQueue
     private let locator: Locator
@@ -123,11 +135,23 @@ import SkillcaskDomain
     }
     /// The sheet or alert on screen; see `request(_:)` and `dismiss(_:)`.
     public private(set) var presentation: Presentation?
+    /// A detection failed and none has succeeded since: the S13 onboarding sheet stays up, also while Try Again
+    /// or Locate… re-detects (`cli` is `.locating` then), until the CLI is ready.
+    public private(set) var detectionFailed = false
+    /// Try Again or Locate… is running: a second press while one runs is ignored, so a double click detects once.
+    /// Set on the main actor before the first `await`, so two presses can never both pass the check.
+    public private(set) var isRedetecting = false
 
-    /// A sheet or the Remove alert is up: every other request is refused and the commands that make one are
-    /// disabled.
+    /// The S13 onboarding sheet covers the window (P3-12): the CLI is missing or too old, or being re-detected
+    /// after such a failure.
+    public var isOnboarding: Bool {
+        detectionFailed && !isReady
+    }
+
+    /// A sheet, the Remove alert or the onboarding sheet is up: every other request is refused and the commands
+    /// that make one are disabled.
     public var isPresenting: Bool {
-        presentation != nil
+        presentation != nil || isOnboarding
     }
 
     /// The presentation when it is a sheet, for `.sheet(item:)`.
@@ -144,7 +168,7 @@ import SkillcaskDomain
     /// so a menu shortcut can never replace a running sheet or pop the alert over it, and without a scope or its
     /// store (the CLI not ready).
     @discardableResult public func request(_ sheet: Sheet) -> Bool {
-        guard presentation == nil, let scope = selectedScope, store(for: scope) != nil else { return false }
+        guard !isPresenting, let scope = selectedScope, store(for: scope) != nil else { return false }
         presentation = Presentation(id: UUID(), sheet: sheet, scope: scope)
         return true
     }
@@ -173,6 +197,8 @@ import SkillcaskDomain
     public private(set) var binary: Locator.Choice?
     @ObservationIgnored private var client: (any CLIClient)?
     @ObservationIgnored private var stores: [Scope: ScopeStore] = [:]
+    /// Where every scope store records the reads the user starts (S15): `ActionRunner.record(_:)`, set by `Boot`.
+    @ObservationIgnored public var recordActivity: ActionRunner.ActivitySink?
 
     /// The live app: locates the binary on `boot()` and talks to it through `makeClient`.
     public init(
@@ -184,8 +210,12 @@ import SkillcaskDomain
         self.settings = settings
         self.queue = queue
         self.locator = locator
-        self.environment = environment
-        self.makeClient = makeClient ?? { ProcessRunner(executable: $0, policy: environment) }
+        let policy = Self.policy(environment, with: settings)
+        let source = EnvironmentSource(policy)
+        self.environment = policy
+        environmentSource = source
+        baseEnvironment = environment
+        self.makeClient = makeClient ?? { ProcessRunner(executable: $0, source: source) }
         self.textReader = textReader
         self.manifestExists = manifestExists
     }
@@ -199,7 +229,10 @@ import SkillcaskDomain
     ) {
         self.settings = settings
         self.queue = queue
-        self.environment = environment
+        let policy = Self.policy(environment, with: settings)
+        self.environment = policy
+        environmentSource = EnvironmentSource(policy)
+        baseEnvironment = environment
         locator = Locator()
         makeClient = { _ in client }
         self.textReader = textReader
@@ -249,6 +282,7 @@ import SkillcaskDomain
         let store = ScopeStore(
             scope: scope, client: client, capabilities: capabilities, settings: settings, queue: queue,
             textReader: textReader)
+        store.recordActivity = recordActivity
         stores[scope] = store
         return store
     }
@@ -256,6 +290,47 @@ import SkillcaskDomain
     /// The store of `scope` only when the scope was visited: the sidebar badge reads this.
     public func visitedStore(for scope: Scope) -> ScopeStore? {
         stores[scope]
+    }
+
+    // MARK: - Settings
+
+    /// `environment` with Settings' table on top of its overrides.
+    private static func policy(_ environment: EnvironmentPolicy, with settings: SettingsStore) -> EnvironmentPolicy {
+        var policy = environment
+        policy.overrides.merge(settings.environmentOverrides) { _, table in table }
+        return policy
+    }
+
+    /// Settings › Advanced: stores the table and applies the rows the policy allows to every run that starts
+    /// after this call (running ones keep the environment they started with).
+    public func setEnvironmentVariables(_ rows: [SettingsStore.EnvironmentVariable]) {
+        settings.environmentVariables = rows
+        environment = Self.policy(baseEnvironment, with: settings)
+    }
+
+    /// The CLI's config.toml, resolved in the children's environment (Settings › Advanced, Open config.toml).
+    public func configFile(base: [String: String] = ProcessInfo.processInfo.environment) -> URL {
+        CLIConfig.file(
+            environment: environment.environment(from: base), home: FileManager.default.homeDirectoryForCurrentUser)
+    }
+
+    /// What Settings' own commands (skills.sh, `auth`) run with; nil until the CLI is ready.
+    public var cliContext: CLISettingsStore.Context? {
+        guard let client, let capabilities else { return nil }
+        return CLISettingsStore.Context(client: client, capabilities: capabilities, configFile: configFile())
+    }
+
+    /// Settings › General, "Use the detected one": forgets the chosen binary and detects again (bundled, then
+    /// `PATH`). The scope stores built over the old client are dropped so every later run uses the new one.
+    public func useDetectedBinary() async {
+        guard !isRedetecting else { return }
+        isRedetecting = true
+        defer { isRedetecting = false }
+        settings.binaryPath = nil
+        client = nil
+        stores.removeAll()
+        cli = .locating
+        await boot()
     }
 
     /// The skills.toml the CLI reads for `scope`, resolved in the children's environment (`environment`).
@@ -269,6 +344,14 @@ import SkillcaskDomain
     }
 
     // MARK: - Boot
+
+    /// Try Again (S13): detects again unless Try Again or Locate… is already running.
+    public func tryAgain() async {
+        guard !isRedetecting else { return }
+        isRedetecting = true
+        defer { isRedetecting = false }
+        await boot()
+    }
 
     /// Locate → `--version` → `Capabilities`, then the scope Settings asks for. Runs again after "Try again" or a
     /// binary path change; a ready app only re-selects.
@@ -286,8 +369,58 @@ import SkillcaskDomain
     private func locate() async {
         cli = .locating
         bootError = nil
+        switch await find(configured: settings.binaryPath) {
+        case .failure(let error):
+            fail(error, searched: [])
+            return
+        case .success(let choice):
+            binary = choice
+            do {
+                let (client, capabilities) = try await probe(choice.url)
+                self.client = client
+                cli = .ready(capabilities)
+                detectionFailed = false
+            } catch {
+                fail(error, searched: [choice.url.path])
+            }
+        }
+    }
+
+    /// Locate… (S13) and Settings' Choose…: `url` goes through the same locator and `--version` gate as a boot.
+    /// Only a binary that passes is written to Settings (`binaryPath`) and boots the app, and the scope stores are
+    /// rebuilt over it; a refused one leaves Settings and `cli` as they were. Returns why it was refused, nil when the app is ready, `.cancelled` when a detection was already
+    /// running. `url` is stored as given (the symlink the user picked, not the file it resolves to), so a Homebrew
+    /// upgrade that moves the Cellar target keeps working.
+    @discardableResult public func locate(executable url: URL) async -> CLIError? {
+        guard !isRedetecting else { return .cancelled }
+        isRedetecting = true
+        defer { isRedetecting = false }
+        let path = url.path
+        switch await find(configured: path) {
+        case .failure(let error):
+            return error
+        case .success(let choice):
+            do {
+                let (client, capabilities) = try await probe(choice.url)
+                settings.binaryPath = path
+                binary = choice
+                self.client = client
+                // Built over the old client: dropped so every open scope's next command runs the chosen tool.
+                stores.removeAll()
+                bootError = nil
+                cli = .ready(capabilities)
+                detectionFailed = false
+            } catch {
+                return error
+            }
+        }
+        await boot()
+        return nil
+    }
+
+    /// `Locator.locate` off the main actor: the file checks never block the window.
+    private func find(configured: String?) async -> Result<Locator.Choice, CLIError> {
         let locator = locator
-        let configured = settings.binaryPath
         let located: Result<Locator.Choice, CLIError> =
             await Task.detached {
                 do {
@@ -299,27 +432,19 @@ import SkillcaskDomain
                 }
             }
             .value
-        switch located {
-        case .failure(let error):
-            fail(error, searched: [])
-            return
-        case .success(let choice):
-            binary = choice
-            let client = makeClient(choice.url)
-            do {
-                let probe = try Invocation(
-                    .version, in: .personal, capabilities: Capabilities(version: Capabilities.minimum))
-                let capabilities = try await client.capabilities(via: probe)
-                self.client = client
-                cli = .ready(capabilities)
-            } catch {
-                fail(error, searched: [choice.url.path])
-            }
-        }
+        return located
+    }
+
+    /// `--version` through the gate on a client for `url`.
+    private func probe(_ url: URL) async throws(CLIError) -> (any CLIClient, Capabilities) {
+        let client = makeClient(url)
+        let probe = try Invocation(.version, in: .personal, capabilities: Capabilities(version: Capabilities.minimum))
+        return (client, try await client.capabilities(via: probe))
     }
 
     private func fail(_ error: CLIError, searched: [String]) {
         bootError = error
+        detectionFailed = true
         switch error {
         case .binaryMissing(let paths): cli = .missing(searched: paths)
         case .tooOld(let found, let needs): cli = .tooOld(found: found, needs: needs)

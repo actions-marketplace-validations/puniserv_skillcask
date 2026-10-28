@@ -3,15 +3,20 @@ import SwiftUI
 
 /// The Health card (Overview, Health-States): `doctor`'s problems, warnings and repaired items as the boards'
 /// sentences with what fixes each, the passed count as a disclosure of the passed checks, the Repair and Sync
-/// buttons in the header and the footnote. Healthy, it collapses to `Health · all good  8 checks passed`.
+/// buttons in the header and the footnote. Healthy, it collapses to `Health · all good  8 checks passed`. The
+/// title opens the results popover (S12, Health-States "opens from the Health card title"); before doctor has
+/// answered there is nothing to show, and the title opens the filtered list as the other cards' titles do.
 struct HealthCard: View {
     let snapshot: ScopeSnapshot
     let isBusy: Bool
     let onRepair: () -> Void
     let onSync: () -> Void
+    let onCheckAgain: () -> Void
+    /// The title without a doctor answer.
     let onTitleTap: () -> Void
 
     @State private var showsPassed = false
+    @State private var showsResults = false
 
     private var doctor: ScopeSnapshot.Doctor? { snapshot.doctor }
 
@@ -49,7 +54,7 @@ struct HealthCard: View {
     var body: some View {
         CardContainer(
             title: OverviewCopy.health, status: status, severity: Self.severity(snapshot), summary: summary,
-            isCollapsed: Self.isCollapsed(snapshot), onTitleTap: onTitleTap
+            isCollapsed: Self.isCollapsed(snapshot), onTitleTap: titleTap
         ) {
             if !Self.isCollapsed(snapshot) {
                 HStack(spacing: Spacing.inline) {
@@ -75,10 +80,14 @@ struct HealthCard: View {
                 }
                 if let doctor {
                     ForEach(Array(doctor.problemItems.enumerated()), id: \.offset) { _, item in
-                        OverviewLine(OverviewCopy.problem(item), glyph: .symbol("xmark.circle", .error))
+                        OverviewLine(
+                            OverviewCopy.problem(item, remedy: doctor.remedy(of: item)),
+                            glyph: .symbol("xmark.circle", .error))
                     }
                     ForEach(Array(doctor.warningItems.enumerated()), id: \.offset) { _, item in
-                        OverviewLine(OverviewCopy.problem(item), glyph: .symbol("exclamationmark.triangle", .warning))
+                        OverviewLine(
+                            OverviewCopy.problem(item, remedy: doctor.remedy(of: item)),
+                            glyph: .symbol("exclamationmark.triangle", .warning))
                     }
                     ForEach(Array(doctor.fixedItems.enumerated()), id: \.offset) { _, item in
                         OverviewLine(OverviewCopy.fixed(item), glyph: .symbol("checkmark.circle", .update))
@@ -90,6 +99,39 @@ struct HealthCard: View {
                     .foregroundStyle(Color.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+        // Anchored on the title's bounds (`CardTitleAnchor`), so the arrow points at what was clicked.
+        .overlayPreferenceValue(CardTitleAnchor.self) { anchor in
+            GeometryReader { proxy in
+                if let anchor {
+                    let title = proxy[anchor]
+                    Color.clear
+                        .frame(width: title.width, height: title.height)
+                        // Laid out at the title's frame (not drawn there by an offset), so the popover's anchor is it.
+                        .position(x: title.midX, y: title.midY)
+                        .allowsHitTesting(false)
+                        .popover(isPresented: $showsResults, arrowEdge: .bottom) { results }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var results: some View {
+        if let doctor {
+            HealthPopover(
+                report: .resolve(doctor),
+                when: RunningCopy.when(snapshot.checkedAt, repaired: !doctor.fixed.isEmpty), isBusy: isBusy,
+                canSync: ToolbarRules.canSync(snapshot), onRepair: onRepair, onSync: onSync,
+                onCheckAgain: onCheckAgain)
+        }
+    }
+
+    /// The popover once doctor answered, else the caller's list filter.
+    private func titleTap() {
+        if doctor == nil {
+            onTitleTap()
+        } else {
+            showsResults = true
         }
     }
 

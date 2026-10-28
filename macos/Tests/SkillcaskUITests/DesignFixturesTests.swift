@@ -84,7 +84,7 @@ import Testing
         #expect(api.availableUpdates.count == 2 && api.attention.needing == 8)
         #expect(api.availableUpdates.map(\.package) == ["acme/review-pr", "anthropics/skills"])
         #expect(
-            api.doctor?.problems.count == 3 && api.doctor?.warnings.isEmpty == true && api.doctor?.passed.count == 3)
+            api.doctor?.problems.count == 8 && api.doctor?.warnings.isEmpty == true && api.doctor?.passed.count == 2)
         #expect(api.entries.filter { $0.health == .changedOnDisk }.count == 1)
         #expect(api.entries.flatMap(\.findings).filter { $0.rule != "modified" }.count == 2)
         #expect(api.repositories.map(\.name) == ["packagist", "github", "acme"])
@@ -382,11 +382,16 @@ import Testing
     @Test func healthStates() {
         let problems = DesignFixtures.healthProblems
         #expect(
-            !problems.ok && problems.problems.count == 3 && problems.warnings.isEmpty && problems.passed.count == 3)
-        #expect(problems.problems.last == ".gitignore: stale managed block")
-        #expect(problems.problems[0] == ".cursor/skills/pdf: link wrong")
+            !problems.ok && problems.problems.count == 8 && problems.warnings.isEmpty && problems.passed.count == 2)
+        #expect(problems.problems[5] == ".gitignore: stale managed block")
+        #expect(problems.problems[3] == ".claude/skills/sql-review: link missing")
+        #expect(
+            problems.problems[7]
+                == ".skillcask/skills/sql-review: not installed (acme/sql-review); run `skillcask install`")
+        #expect(problems.problems[2] == ".cursor/skills/pdf: link wrong")
+        #expect(problems.problems[0] == ".claude/skills/jira-syntax: link missing")
         let repaired = DesignFixtures.healthRepaired
-        #expect(repaired.fixed.count == 2 && repaired.problems.count == 1 && repaired.passed.count == 4)
+        #expect(repaired.fixed.count == 2 && repaired.problems.count == 6 && repaired.passed.count == 2)
         #expect(repaired.fixed == [".cursor/skills/pdf: link wrong", ".gitignore: stale managed block"])
         #expect(DesignFixtures.apiRepaired.doctor?.fixed == repaired.fixed)
         let passed = DesignFixtures.healthAllPassed

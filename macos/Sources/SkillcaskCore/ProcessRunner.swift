@@ -19,13 +19,24 @@ public actor ProcessRunner: CLIClient {
     }
 
     public let executable: URL
-    public let policy: EnvironmentPolicy
+    /// Read at every spawn, so a Settings change reaches the next run.
+    public let source: EnvironmentSource
     public let limits: Limits
     private var running: [UUID: Process] = [:]
 
+    /// The policy the next child gets.
+    public nonisolated var policy: EnvironmentPolicy {
+        source.policy
+    }
+
     public init(executable: URL, policy: EnvironmentPolicy = .default, limits: Limits = Limits()) {
+        self.init(executable: executable, source: EnvironmentSource(policy), limits: limits)
+    }
+
+    /// A runner over a shared, live policy (the app's: `AppStore.environment`).
+    public init(executable: URL, source: EnvironmentSource, limits: Limits = Limits()) {
         self.executable = executable
-        self.policy = policy
+        self.source = source
         self.limits = limits
     }
 
@@ -38,6 +49,7 @@ public actor ProcessRunner: CLIClient {
         process.executableURL = executable
         process.arguments = invocation.argv
         process.currentDirectoryURL = invocation.scope.root
+        let policy = source.policy
         process.environment = policy.environment()
         let stdout = Pipe()
         let stderr = Pipe()
@@ -90,9 +102,11 @@ public actor ProcessRunner: CLIClient {
         if out.truncated {
             throw .outputTooLarge(limit: limits.stdoutBytes)
         }
-        return RunResult(
+        var result = RunResult(
             invocation: invocation, status: status, stdout: out.data, stderr: String(decoding: err.data, as: UTF8.self),
             duration: ContinuousClock.now - start)
+        result.environmentOverrides = policy.appliedOverrideNames
+        return result
     }
 
     /// SIGTERM, then SIGKILL after the grace period if the child is still there. Safe mid-mutation: the CLI writes

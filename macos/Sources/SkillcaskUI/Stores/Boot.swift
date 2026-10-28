@@ -64,8 +64,9 @@ public enum Boot {
         let settings = SettingsStore()
         let queue = MutationQueue()
         let app = AppStore(settings: settings, queue: queue)
-        return Stores(
-            app: app, runner: ActionRunner(queue: queue), settings: settings, client: UnavailableCLIClient.shared)
+        let runner = ActionRunner(queue: queue)
+        app.recordActivity = { [weak runner] in runner?.record($0) }
+        return Stores(app: app, runner: runner, settings: settings, client: UnavailableCLIClient.shared)
     }
 
     /// The window as the Main board shows it: the api scope open with pdf selected, website, the not-set-up
@@ -86,6 +87,8 @@ public enum Boot {
         let app = AppStore(
             settings: settings, queue: queue, client: client, capabilities: Capabilities(version: Capabilities.minimum),
             textReader: fixtureText, manifestExists: { $0 != infra })
+        let runner = ActionRunner(queue: queue)
+        app.recordActivity = { [weak runner] in runner?.record($0) }
         app.store(for: apiScope)?
             .preload(
                 snapshot: DesignFixtures.api, selection: selection,
@@ -96,7 +99,7 @@ public enum Boot {
         if let sheet {
             app.request(sheet)
         }
-        return Stores(app: app, runner: ActionRunner(queue: queue), settings: settings, client: client)
+        return Stores(app: app, runner: runner, settings: settings, client: client)
     }
 
     /// The SKILL.md of a fixture skill, by the last folder of its path; the boards have two.

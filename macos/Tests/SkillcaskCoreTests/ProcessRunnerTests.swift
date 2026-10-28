@@ -111,6 +111,29 @@ import os
         #expect(env["FAKE_MODE"] == "env")
     }
 
+    /// A runner over a shared `EnvironmentSource` reads it at every spawn: a change reaches the next run.
+    @Test func sharedSourceReachesTheNextRun() async throws {
+        let source = EnvironmentSource(
+            EnvironmentPolicy(overrides: ["FAKE_FIXTURES": Fixture.root.path, "FAKE_MODE": "env", "X_SET": "1"]))
+        let runner = ProcessRunner(executable: Fixture.fakeCLI, source: source)
+        #expect(try await runner.run(status()).stdoutText.contains("X_SET=1\n"))
+        source.policy.overrides["X_SET"] = "2"
+        #expect(try await runner.run(status()).stdoutText.contains("X_SET=2\n"))
+        #expect(runner.policy.overrides["X_SET"] == "2")
+    }
+
+    /// The run record names the overrides the child got, never their values.
+    @Test func runRecordNamesTheAppliedOverrides() async throws {
+        let source = EnvironmentSource(
+            EnvironmentPolicy(
+                overrides: [
+                    "FAKE_FIXTURES": Fixture.root.path, "FAKE_MODE": "status", "HTTPS_PROXY": "http://secret:1",
+                    "GITHUB_TOKEN": "refused",
+                ]))
+        let result = try await ProcessRunner(executable: Fixture.fakeCLI, source: source).run(status())
+        #expect(result.environmentOverrides == ["FAKE_FIXTURES", "FAKE_MODE", "HTTPS_PROXY"])
+    }
+
     @Test func argvAndWorkingDirectory() async throws {
         let args = try await runner(mode: "args").run(status(in: .personal))
         #expect(args.stdoutText == "-g\nstatus\n--json\n")

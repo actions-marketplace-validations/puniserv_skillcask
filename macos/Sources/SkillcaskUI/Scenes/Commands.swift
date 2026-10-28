@@ -4,7 +4,8 @@ import SwiftUI
 /// The menu bar (designer's note): File, Skill, Scope, View and Help, with the shortcuts, reaching the focused
 /// window's stores through `FocusedValues` (SUI-11). View is SwiftUI's own menu with the filters, the sort order
 /// and Activity inserted after its sidebar items. Add Skill…, Update…, Update All, Remove… and Adopt… set
-/// `AppStore.sheet`, which `MainWindow` presents (Remove as an alert); Activity waits for its drawer.
+/// `AppStore.sheet`, which `MainWindow` presents (Remove as an alert); View › Activity (⌥⌘L) shows or hides the
+/// Activity drawer (S15), ticked while it shows.
 public struct SkillcaskCommands: Commands {
     /// Remove…: ⌘⌫ (Remove board, "⌘⌫ from the list"); a plain ⌫ would fire while typing in a field.
     static let removeShortcut = KeyboardShortcut(.delete, modifiers: .command)
@@ -40,6 +41,7 @@ public struct SkillcaskCommands: Commands {
                     Button(item.name) { app?.selectedScope = item.scope }
                 }
             }
+            .disabled(app?.isReady != true)
         }
         CommandGroup(after: .textEditing) {
             Button(ShellCopy.find) { focusSearch?.perform() }
@@ -125,9 +127,12 @@ public struct SkillcaskCommands: Commands {
                 }
             }
             Divider()
-            Button(ShellCopy.activity) {}
-                .keyboardShortcut("l", modifiers: [.command, .option])
-                .disabled(true)
+            Toggle(
+                ShellCopy.activity,
+                isOn: Binding(get: { runner?.isActivityShown == true }, set: { runner?.isActivityShown = $0 })
+            )
+            .keyboardShortcut("l", modifiers: [.command, .option])
+            .disabled(runner == nil)
         }
         CommandGroup(replacing: .help) {
             Link(ShellCopy.help, destination: Self.readme)

@@ -3,8 +3,8 @@ import SwiftUI
 
 /// The sidebar (Main board): a `List` of scopes in two sections, Personal with the one "My Skills" row and
 /// Projects with the recent project folders, each a `ScopeRow` with its `ScopeBadge`. Selection is the system's
-/// (bound to `AppStore.selectedScope`). With no projects, the Overview-States hint block sits under the Projects
-/// header; the bottom line repeats Open Folder… with its shortcut, which the File menu binds.
+/// (bound to `AppStore.selectedScope`). With no projects, the Onboarding-States hint (`SidebarHint`) sits under the
+/// Projects header; the bottom line repeats Open Folder… with its shortcut, which the File menu binds.
 struct SidebarView: View {
     @Environment(AppStore.self) private var app
 
@@ -16,7 +16,7 @@ struct SidebarView: View {
                     .tag(Scope.personal)
             }
             Section(ShellCopy.projects) {
-                if app.projects.isEmpty {
+                if SidebarHint.isShown(projects: app.projects) {
                     hint
                 } else {
                     ForEach(app.projects) { item in
@@ -42,13 +42,10 @@ struct SidebarView: View {
 
     // MARK: - Subviews
 
+    /// Onboarding-States "First launch": the dashed hint with Open Folder… and Find Projects in Folder….
     private var hint: some View {
-        EmptyState(
-            icon: "folder.badge.plus", title: EmptyCopy.noProjectsTitle, body: EmptyCopy.noProjectsBody,
-            actions: [.primary(EmptyCopy.openFolder, shortcutHint: EmptyCopy.openFolderShortcut, perform: openFolder)],
-            style: .dashed
-        )
-        .listRowInsets(EdgeInsets(top: Spacing.xs, leading: 0, bottom: Spacing.xs, trailing: 0))
+        SidebarHint(onOpenFolder: openFolder, onFindProjects: findProjects)
+            .listRowInsets(EdgeInsets(top: Spacing.xs, leading: 0, bottom: Spacing.xs, trailing: 0))
     }
 
     /// The board's bottom line: a plus glyph and "Open Folder… ⌘O" in secondary 11 pt, over a hairline.
@@ -72,6 +69,12 @@ struct SidebarView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(ShellCopy.addProject)
+        }
+    }
+
+    private func findProjects() {
+        if let folder = Workspace.chooseFolder(prompt: EmptyCopy.findProjects) {
+            Task { await app.findProjects(under: folder) }
         }
     }
 

@@ -156,8 +156,10 @@ public enum OverviewCopy {
     /// An open problem or warning as the Overview board words it. Board sources: link wrong ("link points
     /// elsewhere"), not installed ("is in skills.lock but not installed"), modified (the Security card's "differs
     /// from the version in the lock"). Every other sentence is invented (declared in the P3-4 report).
-    public static func problem(_ item: DoctorItem) -> Line {
-        let hint = hint(item.remedy)
+    /// - Parameter remedy: What fixes the item in its doctor answer (`ScopeSnapshot.Doctor.remedy(of:)`); defaults
+    ///   to the item's own.
+    public static func problem(_ item: DoctorItem, remedy: DoctorItem.Remedy?? = nil) -> Line {
+        let hint = hint(remedy ?? item.remedy)
         switch item {
         case .link(let path, let problem):
             return Line(lead: .path(path), words: linkWords(problem), hint: hint)
@@ -434,6 +436,12 @@ public enum OverviewCopy {
     public static func linked(skills: Int, agents: Int) -> String {
         let into = agents == 2 ? "both" : (agents == 1 ? "it" : "all \(agents)")
         return skills == 1 ? "1 skill is linked into \(into)." : "\(skills) skills are linked into \(into)."
+    }
+
+    /// `Not linked: jira-syntax, sql-review.`: the skills `linked(skills:agents:)` leaves out because they are not
+    /// installed or not linked. Invented (P3-11 review): the board counts every skill as linked.
+    public static func notLinked(_ skills: [String]) -> String {
+        "Not linked: \(skills.joined(separator: ", "))."
     }
 
     /// `One Cursor link is wrong — see Health.`; the plural is invented.

@@ -40,8 +40,16 @@ public struct ListState: Hashable, Sendable {
     public let isOffline: Bool
     /// The header progress title: the running action's, else "Checking…" while refreshing; nil hides the bar.
     public let progressTitle: String?
+    /// A run started from the window (toolbar, menus, Overview) is in flight in this scope (Running board "Rows
+    /// dim while the lock is being applied"); a sheet's run and a run in another scope leave it false.
+    public let isRunning: Bool
     /// The chip badges; offline, Updates has none (`outdated` has not answered).
     public let chipCounts: [Filter: Int]
+
+    /// The rows drawn at `SkillRow.staleOpacity` (50 %): stale while refreshing, or while a window run is in flight
+    /// in this scope. The list stays selectable and scrollable (the detail keeps explaining the selected row); the
+    /// rows' hover actions hide, since every mutation waits for the run (`ActionRunner.isBusy`).
+    public var isDimmed: Bool { isRefreshing || isRunning }
 
     /// Chips drawn at 50 %: Updates while offline.
     public var dimmedFilters: Set<Filter> { isOffline ? [.updates] : [] }
@@ -81,7 +89,8 @@ public struct ListState: Hashable, Sendable {
         }
         return ListState(
             content: content, isRefreshing: isRefreshing, isOffline: isOffline,
-            progressTitle: runningTitle ?? (isRefreshing ? ListCopy.checking : nil), chipCounts: counts)
+            progressTitle: runningTitle ?? (isRefreshing ? ListCopy.checking : nil), isRunning: runningTitle != nil,
+            chipCounts: counts)
     }
 
     /// The state of `store`, with the runner's action when it runs in the store's scope from the window; a sheet's

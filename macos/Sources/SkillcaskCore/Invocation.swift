@@ -36,16 +36,35 @@ public struct Invocation: Hashable, Sendable {
         case update(packages: [String])
         case add(spec: String, repository: String?, adopt: Bool, rename: [String: String], skills: [String])
         case remove(packages: [String])
-        /// `auth set <host>`: the token goes to stdin, never into argv.
+        /// `auth set <host>`: the token goes to stdin, never into argv. Like `auth remove`, the CLI refuses `-g`
+        /// ("--global does not apply"), so the scope only sets the working directory.
         case authSet(host: String, username: String?)
-        case authRemove(host: String)
+        /// `auth remove <host>`: `username` must be the one the token was set with (the CLI's default otherwise).
+        case authRemove(host: String, username: String?)
     }
 
-    public enum Stdin: Hashable, Sendable {
+    /// What the child reads. Its descriptions and mirror never show the text (a token for `auth set`), so neither
+    /// string interpolation, `dump` nor a test failure message of an `Invocation` can print it.
+    public enum Stdin: Hashable, Sendable, CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
         /// `/dev/null`: the CLI only prompts on a terminal, so it never waits on us.
         case null
         /// Written and closed before the child reads; used for `auth set`. Never logged.
         case text(String)
+
+        public var description: String {
+            switch self {
+            case .null: "null"
+            case .text: "text(<redacted>)"
+            }
+        }
+
+        public var debugDescription: String {
+            description
+        }
+
+        public var customMirror: Mirror {
+            Mirror(self, children: [], displayStyle: .enum)
+        }
     }
 
     public let scope: Scope
@@ -105,7 +124,7 @@ public struct Invocation: Hashable, Sendable {
 
     private var acceptsGlobal: Bool {
         switch command {
-        case .version, .projects: false
+        case .version, .projects, .authSet, .authRemove: false
         default: true
         }
     }
@@ -168,8 +187,8 @@ public struct Invocation: Hashable, Sendable {
             return ["remove"] + json + ["--"] + packages
         case .authSet(let host, let username):
             return ["auth", "set"] + (username.map { ["--username", $0] } ?? []) + ["--", host]
-        case .authRemove(let host):
-            return ["auth", "remove", "--", host]
+        case .authRemove(let host, let username):
+            return ["auth", "remove"] + (username.map { ["--username", $0] } ?? []) + ["--", host]
         }
     }
 
@@ -202,8 +221,9 @@ public struct Invocation: Hashable, Sendable {
         case .authSet(let host, let username):
             try require(!host.isEmpty, "auth set needs a host")
             try require(username?.isEmpty != true, "auth set --username needs a name")
-        case .authRemove(let host):
+        case .authRemove(let host, let username):
             try require(!host.isEmpty, "auth remove needs a host")
+            try require(username?.isEmpty != true, "auth remove --username needs a name")
         case .version, .status, .audit, .outdated, .doctor, .initialize, .install:
             break
         }

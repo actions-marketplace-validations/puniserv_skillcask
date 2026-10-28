@@ -29,6 +29,6 @@ public enum PreviewRegistry {
     public static var all: [Entry] {
         probe + tokens + progress + statusDot + chips + badges + detailHeader + rows + cards + diff + outcomes + strips
             + emptyStates + shell + list + detail + overview + contents + security + versions + reviewUpdate
-            + adopt + addSkill
+            + adopt + addSkill + onboarding + running + settings + activity
     }
 }

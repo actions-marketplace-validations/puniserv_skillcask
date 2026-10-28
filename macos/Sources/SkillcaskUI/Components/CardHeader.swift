@@ -52,6 +52,7 @@ public struct CardHeader<Accessory: View>: View {
                     .alignmentGuide(.firstTextBaseline) { $0[.bottom] }
             }
             titleView
+                .anchorPreference(key: CardTitleAnchor.self, value: .bounds) { $0 }
             // The HStack's own gaps already separate title and summary; a zero minimum keeps Healthy's one-liners
             // ("Security · no findings  Nothing changed on disk") on one line in a 330 pt card.
             Spacer(minLength: 0)

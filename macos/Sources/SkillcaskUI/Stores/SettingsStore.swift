@@ -4,12 +4,47 @@ import SkillcaskCore
 
 /// The user's settings (S14), backed by `UserDefaults` and read by the other stores. Every property writes
 /// through on change, so a value survives a relaunch; the suite is injected so tests never touch the real
-/// defaults. Nothing here runs the CLI: the binary path is only stored, `AppStore` validates it.
+/// defaults. Nothing here runs the CLI: the binary path is only stored, `AppStore` validates it. The skills.sh
+/// switch is not here: its one home is config.toml (`CLISettingsStore`), so the app and the CLI never disagree.
+/// No token is ever stored here (or anywhere by the app): `auth set` keeps it in the Keychain.
 @MainActor @Observable public final class SettingsStore {
     /// Which scope the window opens with (Settings › General, "Open at launch").
     public enum OpenAtLaunch: String, CaseIterable, Hashable, Sendable {
         case lastScope
         case personal
+    }
+
+    /// One row of Settings › Advanced's environment table, in the order the user added them. `id` is the row's
+    /// identity for `Table`, never stored.
+    public struct EnvironmentVariable: Identifiable, Hashable, Sendable {
+        public let id: UUID
+        public var name: String
+        public var value: String
+
+        public init(id: UUID = UUID(), name: String, value: String) {
+            self.id = id
+            self.name = name
+            self.value = value
+        }
+
+        /// The policy accepts the name (`EnvironmentPolicy.allowsOverride`); an empty name is a row being typed.
+        public var isAllowed: Bool {
+            EnvironmentPolicy.allowsOverride(name)
+        }
+
+        /// The value holds URL credentials (`scheme://user:pass@`): applied this session, never written to disk.
+        public var hasCredentials: Bool {
+            EnvironmentPolicy.hasCredentials(value)
+        }
+
+        /// What goes to `UserDefaults`: the name always, the value only when `EnvironmentPolicy.mayStoreValue`
+        /// allows it, so a refused name (or one on its way to being refused) or a credentialed URL never reaches
+        /// disk.
+        /// The row as written, with `committed` (the value at the last commit) in place of the live one.
+        func stored(committed: String?) -> [String: String] {
+            let value = committed ?? ""
+            return ["name": name, "value": EnvironmentPolicy.mayStoreValue(name: name, value: value) ? value : ""]
+        }
     }
 
     /// The keys, in one place so the tests and a future migration can name them.
@@ -19,7 +54,7 @@ import SkillcaskCore
         static let recentProjects = "recentProjects"
         static let lastScope = "lastScope"
         static let checkUpdatesOnOpen = "checkUpdatesOnOpen"
-        static let searchSkillsSh = "searchSkillsSh"
+        static let environmentVariables = "environmentVariables"
         /// The value stored under `lastScope` for the personal scope; a project stores its path.
         static let personalScope = "personal"
     }
@@ -53,10 +88,21 @@ import SkillcaskCore
         didSet { defaults.set(checkUpdatesOnOpen, forKey: Key.checkUpdatesOnOpen) }
     }
 
-    /// Whether search includes skills.sh; nil until the consent card was answered (S8).
-    public var searchSkillsSh: Bool? {
-        didSet { defaults.set(searchSkillsSh, forKey: Key.searchSkillsSh) }
+    /// Settings › Advanced's table, rows the policy refuses included (they show a warning and never apply). Written
+    /// through `EnvironmentVariable.stored`: refused rows and credentialed values keep their value in memory only.
+    ///
+    /// Names are written live; a value only once committed (`commitEnvironmentValues`: end of editing, focus loss,
+    /// submit), so a value half typed (`http://me:pa55` before its `@`) never reaches disk.
+    public var environmentVariables: [EnvironmentVariable] {
+        didSet {
+            let ids = Set(environmentVariables.map(\.id))
+            committedValues = committedValues.filter { ids.contains($0.key) }
+            writeEnvironment()
+        }
     }
+
+    /// The value of each row at its last commit; rows read from disk start committed.
+    @ObservationIgnored private var committedValues: [UUID: String] = [:]
 
     /// - Parameter defaults: The suite to read and write; tests pass their own.
     public init(defaults: UserDefaults = .standard) {
@@ -67,7 +113,30 @@ import SkillcaskCore
         recentProjects = (defaults.stringArray(forKey: Key.recentProjects) ?? []).map { URL(fileURLWithPath: $0) }
         lastScope = defaults.string(forKey: Key.lastScope).flatMap(Self.scope(stored:))
         checkUpdatesOnOpen = defaults.bool(forKey: Key.checkUpdatesOnOpen)
-        searchSkillsSh = defaults.object(forKey: Key.searchSkillsSh) as? Bool
+        environmentVariables = ((defaults.array(forKey: Key.environmentVariables) as? [[String: String]]) ?? [])
+            .compactMap { row in
+                row["name"].map { EnvironmentVariable(name: $0, value: row["value"] ?? "") }
+            }
+        committedValues = Dictionary(uniqueKeysWithValues: environmentVariables.map { ($0.id, $0.value) })
+    }
+
+    /// Takes every row's current value as committed and writes the table (values only where
+    /// `EnvironmentPolicy.mayStoreValue` allows). Settings › Advanced calls it when a cell ends editing.
+    public func commitEnvironmentValues() {
+        committedValues = Dictionary(uniqueKeysWithValues: environmentVariables.map { ($0.id, $0.value) })
+        writeEnvironment()
+    }
+
+    private func writeEnvironment() {
+        let rows = environmentVariables.map { $0.stored(committed: committedValues[$0.id]) }
+        defaults.set(rows, forKey: Key.environmentVariables)
+    }
+
+    // MARK: - Derived
+
+    /// The rows the policy accepts, as `EnvironmentPolicy.overrides`; for a name typed twice, the later row wins.
+    public var environmentOverrides: [String: String] {
+        environmentVariables.filter(\.isAllowed).reduce(into: [:]) { $0[$1.name] = $1.value }
     }
 
     // MARK: - Actions

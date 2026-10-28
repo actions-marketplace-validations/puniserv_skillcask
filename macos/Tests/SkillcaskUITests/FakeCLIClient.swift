@@ -54,6 +54,13 @@ actor FakeCLIClient: CLIClient {
 
     private var answers: [Key: [(answer: Answer, gate: Gate?)]] = [:]
     private(set) var invocations: [Invocation] = []
+    /// The Settings environment names every result reports (`RunResult.environmentOverrides`).
+    private var environmentNames: [String] = []
+
+    /// Every later result reports `names` as the environment overrides the child got.
+    func environment(_ names: [String]) {
+        environmentNames = names
+    }
 
     /// The commands run so far, in order.
     var commands: [Invocation.Command] {
@@ -97,7 +104,10 @@ actor FakeCLIClient: CLIClient {
             for line in lines {
                 onLine(line)
             }
-            return RunResult(invocation: invocation, status: .exited(exit), stdout: Data(stdout.utf8), stderr: "")
+            var result = RunResult(
+                invocation: invocation, status: .exited(exit), stdout: Data(stdout.utf8), stderr: "")
+            result.environmentOverrides = environmentNames
+            return result
         }
     }
 }

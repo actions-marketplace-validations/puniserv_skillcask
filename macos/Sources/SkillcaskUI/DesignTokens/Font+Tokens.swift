@@ -10,6 +10,9 @@ extension Font {
     public enum Token {
         /// `type.title` · 22 / 28 · Bold: scope and skill names (detail header, Overview heading).
         public static let title = Scale.title.font
+        /// `type.sheetTitle` · 20 / 26 · Bold: the onboarding sheet's title (Onboarding boards, `h2 font-size: 20px;
+        /// line-height: 26px; font-weight: 700`).
+        public static let sheetTitle = Scale.sheetTitle.font
         /// `type.headline` · 15 / 20 · Semibold: sheet titles, empty-state titles.
         public static let headline = Scale.headline.font
         /// `type.body` · 13 / 18 · Regular: default text, key/value rows, buttons.
@@ -42,11 +45,15 @@ extension Font {
         public enum LineHeight {
             /// The diff grid draws `type.mono.small` on an 18 pt line (Components `.sc .dl`, gap G13; P2-9).
             public static let diff: CGFloat = 18
+            /// The Activity transcript draws `type.mono.small` on a 15 pt line (Activity board `.mono` with
+            /// `line-height: 15px`), as G13 records for the diff grid's 18 pt.
+            public static let transcript: CGFloat = 15
         }
 
         /// Every entry of the scale with its metrics, so the token sheet and the tests can enumerate it.
         public enum Scale: String, CaseIterable, Sendable {
             case title
+            case sheetTitle
             case headline
             case body
             case bodyEmphasis
@@ -64,6 +71,7 @@ extension Font {
             public var size: CGFloat {
                 switch self {
                 case .title: 22
+                case .sheetTitle: 20
                 case .headline: 15
                 case .body, .bodyEmphasis, .bodyMedium: 13
                 case .callout, .calloutMedium, .calloutSemibold, .mono: 12
@@ -75,6 +83,7 @@ extension Font {
             public var lineHeight: CGFloat {
                 switch self {
                 case .title: 28
+                case .sheetTitle: 26
                 case .headline: 20
                 case .body, .bodyEmphasis, .bodyMedium: 18
                 case .callout, .calloutMedium, .calloutSemibold, .mono: 16
@@ -84,7 +93,7 @@ extension Font {
 
             public var weight: Font.Weight {
                 switch self {
-                case .title: .bold
+                case .title, .sheetTitle: .bold
                 case .headline, .bodyEmphasis, .calloutSemibold, .captionSemibold: .semibold
                 case .bodyMedium, .calloutMedium, .captionMedium: .medium
                 case .body, .callout, .caption, .mono, .monoSmall: .regular

@@ -6,8 +6,11 @@ import SwiftUI
 /// run or refresh and the compact offline strip; a hairline closes it. Under it sits the failure banner of the last
 /// run, then the body `ListState` picks: the rows (`SkillListRow` in a `List(selection:)` bound to the store's id,
 /// SUI-6), "No skills yet" with Add Skill…, or the no-matches echo with Show All and Clear Search. Stale while
-/// refreshing fades the whole list to `SkillRow.staleOpacity`, selection kept; offline hides what only `outdated`
-/// knows. The success toast of a run rides at the bottom of the column for its 4 s.
+/// refreshing, or while a run started from the window is in flight in this scope, fades the whole list to
+/// `SkillRow.staleOpacity`, selection kept and the rows' hover actions hidden (Running board); a run past
+/// `RunProgress.blockThreshold` grows its header progress into the block with elapsed time, Cancel and output.
+/// Offline hides what only `outdated` knows. The success toast of a run rides at the bottom of the column for its
+/// 4 s; its "Show details" and the banner's Details ask the Activity drawer for the run (`showDetails(of:)`).
 struct SkillListView: View {
     let store: ScopeStore
     /// Previews only: the row drawn hovered (a render has no pointer).
@@ -32,8 +35,7 @@ struct SkillListView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(Color.surfaceWindow)
-        // "Show details" opens Activity at the run; the drawer arrives with its own task.
-        .toast($runner.toast)
+        .toast($runner.toast) { runner.showDetails(of: $0.id) }
         .focusedSceneValue(\.focusSearch, FocusSearchAction { isSearchFocused = true })
         .task(id: store.scope) { await store.refreshIfStale() }
     }
@@ -42,6 +44,12 @@ struct SkillListView: View {
 
     private var state: ListState {
         .resolve(store: store, running: runner.current)
+    }
+
+    /// The run whose progress this header shows: started from the window, in this scope.
+    private var windowRun: ActionRunner.RunningAction? {
+        guard let running = runner.current, state.isRunning, running.scope == store.scope else { return nil }
+        return running
     }
 
     private var count: Int {
@@ -60,7 +68,11 @@ struct SkillListView: View {
                 sortMenu
             }
             FilterChipBar(counts: state.chipCounts, dimmed: state.dimmedFilters, selection: $store.filter)
-            if let title = state.progressTitle {
+            if let running = windowRun {
+                RunProgress(model: .init(running), onCancel: { runner.cancel() })
+                    // A new run starts with its output shown, whatever the last one's Hide output said.
+                    .id(running.id)
+            } else if let title = state.progressTitle {
                 ProgressHeader(title: title)
             }
             if state.isOffline {
@@ -159,7 +171,8 @@ struct SkillListView: View {
             ForEach(rows) { entry in
                 SkillListRow(
                     entry: entry, scope: store.scope, isSelected: entry.id == store.selection, isOffline: isOffline,
-                    requiredBy: store.requirerSkills(for: entry), hovering: entry.id == hoveredRow
+                    requiredBy: store.requirerSkills(for: entry), hovering: entry.id == hoveredRow,
+                    showsActions: !state.isRunning
                 )
                 .listRowInsets(EdgeInsets())
                 .listRowSeparator(.hidden)
@@ -167,7 +180,7 @@ struct SkillListView: View {
         }
         .listStyle(.inset)
         .scrollContentBackground(.hidden)
-        .opacity(state.isRefreshing ? SkillRow.staleOpacity : 1)
+        .opacity(state.isDimmed ? SkillRow.staleOpacity : 1)
         .onDeleteCommand { removeSelected() }
         // Esc with the list focused returns the detail to the Scope Overview (S3), as Esc in the detail does.
         .onExitCommand { store.clearSelection() }
@@ -179,8 +192,7 @@ struct SkillListView: View {
     private func banner(_ message: UserMessage) -> some View {
         FailureBanner(
             message,
-            // Details opens Activity scrolled to the run; the drawer arrives with its own task.
-            onDetails: {},
+            onDetails: { if let id = runner.bannerID { runner.showDetails(of: id) } },
             onDismiss: { runner.dismissBanner() },
             onRetry: { runner.retry() },
             onSignIn: { openSettings() }
@@ -191,9 +203,12 @@ struct SkillListView: View {
 
     // MARK: - Actions
 
-    /// ⌫ in the list: Remove… for a row that can be removed (the Skill menu's rule).
+    /// ⌫ in the list: Remove… for a row that can be removed (the Skill menu's rule); nothing while a window run
+    /// dims the list, as its hover actions are hidden then.
     private func removeSelected() {
-        guard let entry = store.selectedEntry, DetailActions.resolve(entry, offline: false).showsRemove else { return }
+        guard !state.isRunning, let entry = store.selectedEntry,
+            DetailActions.resolve(entry, offline: false).showsRemove
+        else { return }
         app.request(.remove(skills: [entry.id]))
     }
 }

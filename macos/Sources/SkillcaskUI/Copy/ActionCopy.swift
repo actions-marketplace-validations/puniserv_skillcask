@@ -3,9 +3,11 @@
 public enum ActionCopy {
     // MARK: - Titles (List-States "Checking…", S11 "short runs show an indeterminate bar + title")
 
-    public static let syncing = "Syncing…"
+    /// Running board ("Short run") and Flow-F5.
+    public static let syncing = "Syncing with skills.lock…"
     public static let checking = "Checking…"
-    public static let repairing = "Repairing…"
+    /// Flow-F5 ("Repairing links…" in the list header).
+    public static let repairing = "Repairing links…"
     public static let settingUp = "Setting up…"
     /// Reinstall from lock (`install --frozen`), Security tab. Invented: no board draws the run.
     public static let restoring = "Restoring from the lock…"

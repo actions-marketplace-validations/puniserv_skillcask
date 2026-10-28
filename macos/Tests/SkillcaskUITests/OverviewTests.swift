@@ -109,7 +109,10 @@ import Testing
         #expect(api.brokenLinks(in: ".cursor/skills") == 1)
         #expect(
             AgentsCard.footnote(DesignFixtures.api)
-                == "14 skills are linked into both. One Cursor link is wrong — see Health.")
+                == "12 skills are linked into both. Not linked: jira-syntax, sql-review. One Cursor link is wrong — see "
+                + "Health.")
+        #expect(AgentsCard.unlinked(DesignFixtures.api) == ["jira-syntax", "sql-review"])
+        #expect(AgentsCard.unlinked(DesignFixtures.website).isEmpty, "a healthy project links every skill")
     }
 
     // MARK: - Policy and sources

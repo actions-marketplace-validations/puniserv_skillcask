@@ -50,7 +50,11 @@ import Testing
             ["auth", "set", "--username", "oauth2", "--", "api.github.com"]
         ),
         (.authSet(host: "gitlab.example", username: nil), ["auth", "set", "--", "gitlab.example"]),
-        (.authRemove(host: "api.github.com"), ["auth", "remove", "--", "api.github.com"]),
+        (.authRemove(host: "gitlab.example", username: nil), ["auth", "remove", "--", "gitlab.example"]),
+        (
+            .authRemove(host: "api.github.com", username: "oauth2"),
+            ["auth", "remove", "--username", "oauth2", "--", "api.github.com"]
+        ),
     ])
     func projectArgv(command: Invocation.Command, expected: [String]) throws {
         #expect(try argv(command) == expected)
@@ -62,7 +66,15 @@ import Testing
             try argv(.add(spec: "a/b", repository: nil, adopt: true, rename: [:], skills: []), in: .personal) == [
                 "-g", "add", "--adopt", "--", "a/b",
             ])
-        #expect(try argv(.authSet(host: "h", username: nil), in: .personal) == ["-g", "auth", "set", "--", "h"])
+    }
+
+    /// The CLI refuses `-g` on `auth` ("--global does not apply to this command"), so the personal scope adds none.
+    @Test func authNeverTakesGlobal() throws {
+        #expect(try argv(.authSet(host: "h", username: nil), in: .personal) == ["auth", "set", "--", "h"])
+        #expect(
+            try argv(.authRemove(host: "h", username: "oauth2"), in: .personal) == [
+                "auth", "remove", "--username", "oauth2", "--", "h",
+            ])
     }
 
     @Test func versionAndProjectsNeverTakeGlobal() throws {
@@ -113,7 +125,8 @@ import Testing
         .update(packages: [""]),
         .authSet(host: "", username: nil),
         .authSet(host: "h", username: ""),
-        .authRemove(host: ""),
+        .authRemove(host: "", username: nil),
+        .authRemove(host: "h", username: ""),
     ])
     func emptyDataIsRejected(command: Invocation.Command) {
         #expect(throws: CLIError.self) { try Invocation(command, in: project, capabilities: caps) }
@@ -153,6 +166,19 @@ import Testing
         let auth = try Invocation(
             .authSet(host: "h", username: nil), in: project, capabilities: caps, stdin: .text("tok"))
         #expect(auth.stdin == .text("tok") && !auth.displayCommand.contains("tok"))
+    }
+
+    /// Interpolation, `debugDescription` and `dump` of an invocation never show what it writes to stdin.
+    @Test func stdinTextIsRedactedEverywhere() throws {
+        let secret = "ghp_secretTokenValue123"
+        let auth = try Invocation(
+            .authSet(host: "api.github.com", username: "oauth2"), in: project, capabilities: caps,
+            stdin: .text(secret))
+        var dumped = ""
+        dump(auth, to: &dumped)
+        for text in [String(describing: auth), String(reflecting: auth), "\(auth.stdin)", dumped] {
+            #expect(!text.contains(secret))
+        }
     }
 }
 

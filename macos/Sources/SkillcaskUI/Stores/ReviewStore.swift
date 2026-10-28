@@ -8,8 +8,9 @@ import SkillcaskDomain
 /// runs through the sheet's `SheetRun`.
 ///
 /// `diff` downloads, so it runs when the sheet appears (opening it was the user's explicit action), never earlier,
-/// straight through the scope's `CLIClient`: a read-only command, so it neither waits for `MutationQueue` nor
-/// shows in Activity. Closing the sheet cancels the load's task, which terminates the child.
+/// straight through the scope's `CLIClient`: a read-only command, so it does not wait for `MutationQueue`; the user
+/// asked for it by opening the sheet, so each load is recorded in Activity (`recordActivity`: "Reviewed changes for
+/// pdf 1.2.0 → 1.4.0"). Closing the sheet cancels the load's task, which terminates the child.
 ///
 /// Flags (Q11 interim): `diff` has no JSON and `audit` describes only the installed version, whose line numbers
 /// are the old file's, so a pending update shows no flags at all. The outline, the amber file dot and the callout
@@ -64,6 +65,8 @@ import SkillcaskDomain
     private let capabilities: Capabilities
     /// The scope's snapshot when the sheet opened: names, sources, agents, the tag note.
     private let snapshot: ScopeSnapshot?
+    /// Where each `diff` load is recorded for Activity (S15); the scope store's, nil records nothing.
+    @ObservationIgnored public var recordActivity: ActionRunner.ActivitySink?
     /// The selected row's `info` when the sheet opened, for the allowed range (`^1.2`).
     private let detailInfo: InfoDocument?
 
@@ -135,6 +138,7 @@ import SkillcaskDomain
             package: package, offeredVersion: offeredVersion, reviewOnly: reviewOnly, client: store.client,
             scope: store.scope, capabilities: store.capabilities, snapshot: store.snapshot,
             detailInfo: store.detail?.info)
+        recordActivity = store.recordActivity
     }
 
     // MARK: - Derived
@@ -354,10 +358,16 @@ import SkillcaskDomain
         guard phase == .loading else { return }
         generation += 1
         let mine = generation
+        let startedAt = Date()
+        var trace = ActionRunner.ReadTrace(command: ActionCopy.unbuilt)
         let outcome: Result<UnifiedDiff, CLIError>
         do {
             let invocation = try Invocation(.diff(package: package), in: scope, capabilities: capabilities)
+            trace.command = invocation.displayCommand
             let result = try await client.run(invocation)
+            trace.status = result.status
+            trace.stderr = result.stderr
+            trace.environmentOverrides = result.environmentOverrides
             if let failure = result.failure() {
                 outcome = .failure(failure)
             } else {
@@ -366,6 +376,7 @@ import SkillcaskDomain
         } catch {
             outcome = .failure(error)
         }
+        record(outcome, trace: trace, startedAt: startedAt)
         guard mine == generation, !Task.isCancelled else { return }
         switch outcome {
         case .success(let diff):
@@ -375,6 +386,35 @@ import SkillcaskDomain
         case .failure(let error):
             fail(error)
         }
+    }
+
+    /// Hands the load's row to `recordActivity`: what was reviewed, or the sheet's own failure title.
+    private func record(_ outcome: Result<UnifiedDiff, CLIError>, trace: ActionRunner.ReadTrace, startedAt: Date) {
+        guard let recordActivity else { return }
+        let headline: String
+        var error: CLIError?
+        switch outcome {
+        case .success(let diff):
+            if diff.packages.count > 1 {
+                headline = ActivityCopy.reviewedAll(diff.packages.count)
+            } else if let only = diff.packages.first {
+                headline = ActivityCopy.reviewed(Self.skillName(of: only) ?? only.name, from: only.from, to: only.to)
+            } else {
+                headline =
+                    isAll ? ActivityCopy.reviewedAll(0) : ActivityCopy.reviewed(displayName ?? "", from: nil, to: nil)
+            }
+        case .failure(let failure):
+            headline = ""
+            error = failure
+        }
+        let failure =
+            isAll
+            ? ReviewUpdateCopy.fetchFailedAll
+            : ReviewUpdateCopy.fetchFailed(version: offeredVersion, name: displayName ?? package ?? "")
+        recordActivity(
+            .read(
+                headline: headline, failure: failure, scope: scope, startedAt: startedAt, traces: [trace],
+                error: error, expectsDocument: false))
     }
 
     /// Retry after a failed fetch: back to loading, and a new attempt for the sheet's task.

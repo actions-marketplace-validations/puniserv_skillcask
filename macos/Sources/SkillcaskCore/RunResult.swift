@@ -9,6 +9,9 @@ public struct RunResult: Sendable {
     public let stdout: Data
     public let stderr: String
     public let duration: Duration
+    /// The Settings environment names the child got (`EnvironmentPolicy.appliedOverrideNames`), set by
+    /// `ProcessRunner`; names only, so a run record can say which overrides applied without showing a value.
+    public var environmentOverrides: [String] = []
 
     public init(invocation: Invocation, status: ExitStatus, stdout: Data, stderr: String, duration: Duration = .zero) {
         self.invocation = invocation

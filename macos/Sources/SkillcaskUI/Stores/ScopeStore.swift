@@ -29,6 +29,20 @@ import SkillcaskDomain
     private let settings: SettingsStore?
     /// The app's queue, asked before an automatic refresh (ADR §5 rule 4); nil in tests that need none.
     private let queue: MutationQueue?
+    /// Where the reads the user starts are recorded for Activity (S15), set by `AppStore`; nil records nothing.
+    /// Recorded: opening the scope (`refreshIfStale` when it reads: "Opened api"), `refresh()` (⌘R, a failed
+    /// Overview's Retry: "Refreshed api") and `checkUpdates()` (⌘R, Check Now: "Checked for updates"). Not
+    /// recorded, because nobody asked for them: the refresh a finished mutation runs (`refreshAfterMutation`; the
+    /// mutation's own row stands for it) and the `outdated` that Settings "check updates when a project opens"
+    /// adds to the first open.
+    @ObservationIgnored public var recordActivity: ActionRunner.ActivitySink?
+
+    /// Why a read runs, which decides its Activity row.
+    private enum Read {
+        case open
+        case refresh
+        case checkUpdates
+    }
 
     // MARK: - State
 
@@ -64,6 +78,11 @@ import SkillcaskDomain
         var audit: AuditDocument?
         var doctor: DoctorDocument?
         var outdated: OutdatedDocument?
+        /// The last Repair's `doctor --fix --json`: what it fixed and what it left. Only the refresh the Repair
+        /// itself starts (`refreshAfterMutation(repair:)`) sets it, when that refresh lands; any other refresh that
+        /// lands, and that one failing, clears it. So the Health popover says what was repaired (S12 "After
+        /// Repair") until the next Check, ⌘R or re-open, and a ⌘R racing the Repair's refresh wins.
+        var repair: DoctorDocument?
     }
 
     public init(
@@ -113,15 +132,22 @@ import SkillcaskDomain
             return
         }
         let firstOpen = snapshot == nil
-        await refresh()
+        await refresh(keeping: nil, recording: .open)
         if firstOpen, snapshot != nil, settings?.checkUpdatesOnOpen == true {
-            await checkUpdates()
+            await checkUpdates(recording: nil)
         }
     }
 
     /// `status`, `audit` and `doctor` in parallel, then one snapshot. `outdated` is kept from the last check.
     /// `isRefreshing` ends with this refresh however it returns (cancelled included), unless a newer one started.
     public func refresh() async {
+        await refresh(keeping: nil, recording: .refresh)
+    }
+
+    /// `refresh()`, with the Repair document `repair` shown in place of `doctor` when this refresh lands, and the
+    /// Activity row of `read` (none for a mutation's refresh).
+    private func refresh(keeping repair: DoctorDocument?, recording read: Read?) async {
+        let startedAt = Date()
         generation += 1
         let mine = generation
         isRefreshing = true
@@ -130,21 +156,37 @@ import SkillcaskDomain
                 isRefreshing = false
             }
         }
-        async let status = result(StatusDocument.self, .status)
-        async let audit = result(AuditDocument.self, .audit)
-        async let doctor = result(DoctorDocument.self, .doctor(fix: false))
-        let (statusResult, auditResult, doctorResult) = await (status, audit, doctor)
+        async let status = traced(StatusDocument.self, .status)
+        async let audit = traced(AuditDocument.self, .audit)
+        async let doctor = traced(DoctorDocument.self, .doctor(fix: false))
+        let ((statusResult, statusTrace), (auditResult, auditTrace), (doctorResult, doctorTrace)) = await (
+            status, audit, doctor
+        )
+        // A read superseded or cancelled (switching scopes cancels the list's `.task(id:)`) is not the user's
+        // outcome: only a read that ended is recorded, with the first failure among the three.
         guard mine == generation, !Task.isCancelled else { return }
+        if let read {
+            let failures = [
+                (Self.failure(of: statusResult), statusTrace), (Self.failure(of: auditResult), auditTrace),
+                (Self.failure(of: doctorResult), doctorTrace),
+            ]
+            let failed = failures.first { $0.0 != nil }
+            record(
+                read, startedAt: startedAt, traces: [statusTrace, auditTrace, doctorTrace], error: failed?.0,
+                status: failed?.1.status)
+        }
         switch statusResult {
         case .success(let document):
             documents.status = document
             documents.audit = try? auditResult.get()
             documents.doctor = try? doctorResult.get()
+            documents.repair = repair
             lastError = nil
             rebuild()
         case .failure(.cancelled):
-            break
+            documents.repair = nil
         case .failure(let error):
+            documents.repair = nil
             lastError = error
             if snapshot == nil {
                 presentation = Presentation.forFailedLoad(error)
@@ -156,6 +198,12 @@ import SkillcaskDomain
     /// "check on open"). Its own generation, so a check never drops an in-flight trio and a newer check drops an
     /// older one; the new document joins whatever trio documents are current when it lands.
     public func checkUpdates() async {
+        await checkUpdates(recording: .checkUpdates)
+    }
+
+    /// `checkUpdates()`, recorded in Activity only when `read` says so.
+    private func checkUpdates(recording read: Read?) async {
+        let startedAt = Date()
         checkGeneration += 1
         let mine = checkGeneration
         isCheckingUpdates = true
@@ -164,8 +212,11 @@ import SkillcaskDomain
                 isCheckingUpdates = false
             }
         }
-        let outcome = await result(OutdatedDocument.self, .outdated)
+        let (outcome, trace) = await traced(OutdatedDocument.self, .outdated)
         guard mine == checkGeneration, !Task.isCancelled else { return }
+        if let read {
+            record(read, startedAt: startedAt, traces: [trace], error: Self.failure(of: outcome))
+        }
         switch outcome {
         case .success(let document):
             documents.outdated = document
@@ -185,10 +236,11 @@ import SkillcaskDomain
 
     /// The refresh a finished mutation asks for (ADR §5): the offline trio, and `outdated` again only when it had
     /// been checked before, so "last checked" stays truthful.
-    public func refreshAfterMutation() async {
-        await refresh()
+    /// - Parameter repair: The finished Repair's `doctor --fix --json`, shown until the next refresh lands.
+    public func refreshAfterMutation(repair: DoctorDocument? = nil) async {
+        await refresh(keeping: repair, recording: nil)
         if documents.outdated != nil {
-            await checkUpdates()
+            await checkUpdates(recording: nil)
         }
     }
 
@@ -212,7 +264,8 @@ import SkillcaskDomain
     private func rebuild() {
         guard let status = documents.status else { return }
         let built = ScopeSnapshot(
-            status: status, audit: documents.audit, doctor: documents.doctor, outdated: documents.outdated)
+            status: status, audit: documents.audit, doctor: documents.repair ?? documents.doctor,
+            outdated: documents.outdated)
         snapshot = built
         checkedAt = built.checkedAt
         presentation = .ready
@@ -225,12 +278,50 @@ import SkillcaskDomain
     private func result<T: Decodable & Sendable>(
         _ type: T.Type, _ command: Invocation.Command
     ) async -> Result<T, CLIError> {
+        await traced(type, command).0
+    }
+
+    /// `result`, with what the read left for its Activity row (`CLIClient.document` is `run` then `document`).
+    private func traced<T: Decodable & Sendable>(
+        _ type: T.Type, _ command: Invocation.Command
+    ) async -> (Result<T, CLIError>, ActionRunner.ReadTrace) {
+        var trace = ActionRunner.ReadTrace(command: ActionCopy.unbuilt)
         do {
             let invocation = try Invocation(command, in: scope, capabilities: capabilities)
-            return .success(try await client.document(type, for: invocation))
+            trace.command = invocation.displayCommand
+            let run = try await client.run(invocation)
+            trace.status = run.status
+            trace.stderr = run.stderr
+            trace.environmentOverrides = run.environmentOverrides
+            return (.success(try run.document(type)), trace)
         } catch {
-            return .failure(error)
+            return (.failure(error), trace)
         }
+    }
+
+    private static func failure<T>(of result: Result<T, CLIError>) -> CLIError? {
+        if case .failure(let error) = result { error } else { nil }
+    }
+
+    /// Hands the row of `read` to `recordActivity`.
+    /// A read that ended in `.cancelled` was stopped by the app (the scope changed), not by the user: no row.
+    /// `status` is the failing command's exit, the first trace's otherwise.
+    private func record(
+        _ read: Read, startedAt: Date, traces: [ActionRunner.ReadTrace], error: CLIError?,
+        status: ExitStatus? = nil
+    ) {
+        guard let recordActivity, error != .cancelled else { return }
+        let name = ShellCopy.name(of: scope)
+        let (headline, failure): (String, String) =
+            switch read {
+            case .open: (ActivityCopy.opened(name), ActivityCopy.couldNotOpen(name))
+            case .refresh: (ActivityCopy.refreshed(name), ActivityCopy.couldNotRefresh(name))
+            case .checkUpdates: (ActivityCopy.checkedForUpdates, ActivityCopy.couldNotCheckForUpdates)
+            }
+        recordActivity(
+            .read(
+                headline: headline, failure: failure, scope: scope, startedAt: startedAt, traces: traces, error: error,
+                status: status))
     }
 
     // MARK: - Selection

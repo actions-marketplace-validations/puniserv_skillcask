@@ -18,10 +18,30 @@ struct AgentsCard: View {
             }
     }
 
-    /// `14 skills are linked into both. One Cursor link is wrong — see Health.`
+    /// The skills that have no links in the agent folders: not installed or not linked by `status`, or reported
+    /// as not installed by `doctor` (whose per-target `link missing` lines Health lists). Sorted by name.
+    static func unlinked(_ snapshot: ScopeSnapshot) -> [String] {
+        let missing = snapshot.doctor?.missingSkills ?? []
+        return snapshot.entries
+            .filter { entry in
+                switch entry.health {
+                case .notInstalled, .notLinked: true
+                default: missing.contains(entry.name)
+                }
+            }
+            .map(\.name)
+            .sorted()
+    }
+
+    /// `12 skills are linked into both. Not linked: jira-syntax, sql-review. One Cursor link is wrong — see
+    /// Health.` The linked count leaves out `unlinked`, so it agrees with doctor's missing links.
     static func footnote(_ snapshot: ScopeSnapshot) -> String {
         let targets = targets(snapshot)
-        var sentences = [OverviewCopy.linked(skills: snapshot.entries.count, agents: targets.count)]
+        let unlinked = unlinked(snapshot)
+        var sentences = [OverviewCopy.linked(skills: snapshot.entries.count - unlinked.count, agents: targets.count)]
+        if !unlinked.isEmpty {
+            sentences.append(OverviewCopy.notLinked(unlinked))
+        }
         for target in targets {
             let broken = snapshot.doctor?.brokenLinks(in: target.directory) ?? 0
             if broken > 0 {

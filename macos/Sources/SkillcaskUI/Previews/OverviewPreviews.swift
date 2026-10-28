@@ -3,7 +3,8 @@ import SkillcaskDomain
 import SwiftUI
 
 extension PreviewRegistry {
-    /// P3-4: the Scope Overview in the detail column (720 × 900) over the fixture boot, one state per Overview and
+    /// P3-4: the Scope Overview in the detail column (720 × 1300: tall enough for the Agents card under the Health
+    /// card's 8 problems) over the fixture boot, one state per Overview and
     /// Overview-States panel: `attention` (api, the Overview board), `healthy` (website), `loading` (api before
     /// its first status), `noProjects` (My Skills with an empty sidebar), `notSetUp` (infra-playbooks) and
     /// `repaired` (api after Repair, Health-States "After Repair" as a card).
@@ -17,7 +18,7 @@ extension PreviewRegistry {
     ]
 
     private static func entry(_ state: String, _ make: @escaping @MainActor @Sendable () -> OverviewSample) -> Entry {
-        Entry(id: "P3-4", state: state, size: CGSize(width: 720, height: 900)) { AnyView(make()) }
+        Entry(id: "P3-4", state: state, size: CGSize(width: 720, height: 1300)) { AnyView(make()) }
     }
 }
 

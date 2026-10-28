@@ -39,25 +39,14 @@ import SkillcaskDomain
         /// `.sheet`: the list header leaves the progress to the sheet.
         public let origin: Origin
         public fileprivate(set) var lines: [OutputLine] = []
+        /// Lines dropped from the front of `lines` to keep a long run within `ActivityEntry.transcriptLimit`.
+        public fileprivate(set) var omittedLines = 0
         fileprivate let task: Task<RunEnd, Never>?
 
         /// Terminates the child (SIGTERM, then SIGKILL after the grace period); the outcome reads `Cancelled.`
         public func cancel() {
             task?.cancel()
         }
-    }
-
-    /// One finished run of this session, newest first in `activity`.
-    public struct ActivityEntry: Identifiable, Hashable, Sendable {
-        public let id: UUID
-        public let title: String
-        public let command: String
-        public let startedAt: Date
-        public let duration: Duration
-        /// How the child ended; nil when it never ran (the command could not be built or launched).
-        public let status: ExitStatus?
-        public let error: CLIError?
-        public let transcript: [OutputLine]
     }
 
     /// What the window shows when a run ends: the toast at the bottom of the list column, or the banner at its top.
@@ -78,9 +67,29 @@ import SkillcaskDomain
     // MARK: - State
 
     public private(set) var current: RunningAction?
+    /// This session's finished runs, newest first, at most `ActivityEntry.limit` (S15). Nothing is written to disk.
     public private(set) var activity: [ActivityEntry] = []
-    /// The toast or banner of the last finished run; the window clears it when dismissed or timed out.
-    public var outcome: Outcome?
+    /// Every run recorded this session, also the ones `activity` no longer keeps (the drawer's header count).
+    public private(set) var sessionRunCount = 0
+    /// The success toast at the bottom of the list column, bindable for `View.toast`, which clears it after 4 s.
+    public var toast: ToastMessage?
+    /// The failure banner at the top of the list column, if the last failed run left one.
+    public private(set) var banner: UserMessage?
+    /// The run `banner` reports, for its Details link.
+    public private(set) var bannerID: UUID?
+    /// The run whose transcript the Activity drawer should show: set by the toast's "Show details" and the banner's
+    /// Details (`showDetails(of:)`). The drawer consumes it (`consumeDetailsRequest()`), which opens Activity there.
+    public var detailsRequest: UUID?
+
+    // MARK: - Activity drawer (S15)
+
+    /// Whether the Activity drawer shows under the list. Hidden at launch; ⌥⌘L (View › Activity), the toolbar's ⋯,
+    /// Settings › Advanced and the Details of a toast or banner open it, nothing else does. Session only.
+    public var isActivityShown = false
+    /// The run the drawer scrolls to once it is on screen, set by `consumeDetailsRequest()`; the drawer clears it.
+    public private(set) var activityFocus: UUID?
+    /// The rows showing their transcript: the ones the user expanded and the one Details asked for.
+    public private(set) var expandedActivity: Set<UUID> = []
 
     /// The last run that ended in a failure banner, so Retry can run it again (never automatically).
     private struct FailedRun {
@@ -102,30 +111,78 @@ import SkillcaskDomain
         self.queue = queue
     }
 
-    /// The success toast of `outcome`, bindable for `View.toast`: setting nil clears a showing toast only.
-    public var toast: ToastMessage? {
+    /// The toast or banner of the last finished run (Running board: one toast at a time, one banner at a time).
+    /// A toast replaces the banner, except an integrity banner, which stays until dismissed and can show beside the
+    /// toast (Running board "Integrity failure (exit 4) and a success toast"); a banner replaces both. Reading it
+    /// gives the toast when both show. Setting nil clears both.
+    public var outcome: Outcome? {
         get {
-            if case .toast(let message) = outcome { message } else { nil }
+            if let toast { return .toast(toast) }
+            if let banner, let bannerID { return .banner(banner, id: bannerID) }
+            return nil
         }
         set {
-            if let newValue {
-                outcome = .toast(newValue)
-            } else if case .toast = outcome {
-                outcome = nil
+            switch newValue {
+            case .toast(let message):
+                toast = message
+                if banner?.isIntegrity != true {
+                    banner = nil
+                    bannerID = nil
+                }
+            case .banner(let message, let id):
+                banner = message
+                bannerID = id
+                toast = nil
+            case nil:
+                toast = nil
+                banner = nil
+                bannerID = nil
             }
         }
     }
 
-    /// The failure banner of `outcome`, if that is what the last run left.
-    public var banner: UserMessage? {
-        if case .banner(let message, _) = outcome { message } else { nil }
+    /// Asks the Activity drawer for run `id` (the toast's "Show details", the banner's Details).
+    public func showDetails(of id: UUID) {
+        detailsRequest = id
+    }
+
+    /// Opens Activity for the pending `detailsRequest` and clears it: a run of `activity` is expanded and becomes
+    /// the scroll target; an id that names no run (a batch's summary toast) opens the drawer without scrolling.
+    public func consumeDetailsRequest() {
+        guard let id = detailsRequest else { return }
+        detailsRequest = nil
+        isActivityShown = true
+        guard activity.contains(where: { $0.id == id }) else {
+            activityFocus = nil
+            return
+        }
+        expandedActivity.insert(id)
+        activityFocus = id
+    }
+
+    /// The drawer scrolled to `activityFocus`.
+    public func clearActivityFocus() {
+        activityFocus = nil
+    }
+
+    /// ⌥⌘L, View › Activity, the toolbar's Show Activity, the drawer's close button.
+    public func toggleActivity() {
+        isActivityShown.toggle()
+    }
+
+    /// Expands or collapses the transcript of run `id`.
+    public func toggleExpanded(_ id: UUID) {
+        if expandedActivity.contains(id) {
+            expandedActivity.remove(id)
+        } else {
+            expandedActivity.insert(id)
+        }
     }
 
     /// Dismisses the banner; an integrity failure stays until this is called (Running board).
     public func dismissBanner() {
-        if case .banner = outcome {
-            outcome = nil
-        }
+        banner = nil
+        bannerID = nil
     }
 
     /// Re-runs the last action that failed (same command, title and outcome, in the same scope) and clears its
@@ -145,9 +202,21 @@ import SkillcaskDomain
     }
 
     /// Previews: shows `title` as a run in flight in `scope`, with no child process behind it.
-    func preloadRunning(title: String, in scope: Scope, from origin: Origin = .window) {
+    func preloadRunning(
+        title: String, in scope: Scope, from origin: Origin = .window, startedAt: Date = Date(),
+        lines: [OutputLine] = [], command: String = ""
+    ) {
         current = RunningAction(
-            id: UUID(), title: title, scope: scope, command: "", startedAt: Date(), origin: origin, task: nil)
+            id: UUID(), title: title, scope: scope, command: command, startedAt: startedAt, origin: origin,
+            lines: lines, task: nil)
+    }
+
+    /// Previews: this session's finished runs, newest first, with `expanded` showing their transcripts.
+    func preloadActivity(_ entries: [ActivityEntry], expanded: Set<UUID> = [], shown: Bool = true) {
+        activity = Array(entries.prefix(ActivityEntry.limit))
+        sessionRunCount = entries.count
+        expandedActivity = expanded
+        isActivityShown = shown
     }
 
     // MARK: - Derived
@@ -260,7 +329,7 @@ import SkillcaskDomain
             return finish(
                 id: UUID(), title: title, failure: failureTitle, command: ActionCopy.unbuilt, startedAt: Date(),
                 duration: .zero, status: nil, error: error, transcript: [], outcomeText: report, origin: origin,
-                announce: announce, store: store)
+                announce: announce, store: store, record: .init(isMutation: false, expectsDocument: false))
         }
         let id = UUID()
         let startedAt = Date()
@@ -321,6 +390,23 @@ import SkillcaskDomain
     private func append(_ line: OutputLine, to id: UUID) {
         guard current?.id == id else { return }
         current?.lines.append(line)
+        // Drop in chunks, so a chatty run does not shift the whole array on every line past the limit.
+        let excess = (current?.lines.count ?? 0) - ActivityEntry.transcriptLimit
+        if excess >= Self.trimChunk {
+            current?.lines.removeFirst(excess)
+            current?.omittedLines += excess
+        }
+    }
+
+    /// How far past `ActivityEntry.transcriptLimit` a live transcript grows before its oldest lines are dropped.
+    private static let trimChunk = 256
+
+    /// What `finish` records besides the run's outcome.
+    private struct Record {
+        let isMutation: Bool
+        let expectsDocument: Bool
+        var environmentOverrides: [String] = []
+        var omittedLines = 0
     }
 
     private func complete(
@@ -334,10 +420,19 @@ import SkillcaskDomain
         let duration = Duration.seconds(Date().timeIntervalSince(running.startedAt))
         let verdict: CLIError?
         let status: ExitStatus?
+        var repair: DoctorDocument?
+        var record = Record(
+            isMutation: invocation.isMutation, expectsDocument: invocation.expectsDocument,
+            omittedLines: running.omittedLines)
         switch result {
         case .success(let run):
             status = run.status
+            record.environmentOverrides = run.environmentOverrides
             verdict = Self.verdict(of: run)
+            // Repair's document is the only record of what it fixed: the follow-up refresh shows it (S12).
+            if verdict == nil, run.invocation.command == .doctor(fix: true) {
+                repair = try? run.document(DoctorDocument.self)
+            }
         case .failure(let error):
             status = nil
             verdict = error
@@ -346,10 +441,11 @@ import SkillcaskDomain
             id: id, title: title, failure: failure, command: running.command, startedAt: running.startedAt,
             duration: duration,
             status: status, error: verdict, transcript: running.lines, outcomeText: outcomeText, origin: origin,
-            announce: announce, store: store)
+            announce: announce, store: store, record: record)
         // Always refresh afterwards (ADR §9 #4): a cancelled or failed run may have changed files. In a task of its
         // own, which does not inherit this one's cancellation: after Cancel the reads must still run.
-        await Task { await store.refreshAfterMutation() }.value
+        let kept = repair
+        await Task { await store.refreshAfterMutation(repair: kept) }.value
         return end
     }
 
@@ -358,13 +454,16 @@ import SkillcaskDomain
         status: ExitStatus?,
         error: CLIError?, transcript: [OutputLine], outcomeText: (String, [OutputLine]) -> String, origin: Origin,
         announce: Bool,
-        store: ScopeStore
+        store: ScopeStore, record: Record
     ) -> RunEnd {
         current = nil
-        activity.insert(
+        let said = error == nil ? outcomeText(ShellCopy.name(of: store.scope), transcript) : failure
+        insert(
             ActivityEntry(
-                id: id, title: title, command: command, startedAt: startedAt, duration: duration, status: status,
-                error: error, transcript: transcript), at: 0)
+                id: id, title: title, headline: said, command: command, scope: store.scope, startedAt: startedAt,
+                duration: duration, status: status, error: error, transcript: transcript,
+                omittedLines: record.omittedLines, isMutation: record.isMutation,
+                expectsDocument: record.expectsDocument, environmentOverrides: record.environmentOverrides))
         if let error {
             let message = ErrorCopy.message(for: error, title: failure)
             switch origin {
@@ -381,9 +480,24 @@ import SkillcaskDomain
             failedRun = nil
         }
         if announce {
-            outcome = .toast(ToastMessage(id: id, text: outcomeText(ShellCopy.name(of: store.scope), transcript)))
+            outcome = .toast(ToastMessage(id: id, text: said))
         }
         return .succeeded
+    }
+
+    /// Records a read the user started (`ScopeStore`, `ReviewStore` through their `ActivitySink`).
+    public func record(_ entry: ActivityEntry) {
+        insert(entry)
+    }
+
+    /// Adds `entry` as the newest run, dropping the oldest past `ActivityEntry.limit` (and their expansion).
+    private func insert(_ entry: ActivityEntry) {
+        sessionRunCount += 1
+        activity.insert(entry, at: 0)
+        guard activity.count > ActivityEntry.limit else { return }
+        let dropped = activity[ActivityEntry.limit...].map(\.id)
+        activity.removeLast(activity.count - ActivityEntry.limit)
+        expandedActivity.subtract(dropped)
     }
 
     /// The one decoding rule (ADR §4): a command that prints a document succeeded when stdout holds one, whatever

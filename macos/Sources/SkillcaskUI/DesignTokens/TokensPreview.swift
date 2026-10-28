@@ -353,6 +353,7 @@ private struct TypeRow: View {
     private var sample: String {
         switch scale {
         case .title: "pdf — scope and skill names"
+        case .sheetTitle: "Skillcask needs its command-line tool (onboarding)"
         case .headline: "Update pdf 1.2.0 → 1.4.0 (sheet titles)"
         case .body: "Default text. pdf will no longer be available to Claude Code in this project."
         case .bodyEmphasis: "Row titles, card titles"

@@ -28,6 +28,84 @@ import Testing
         #expect(env["lower"] == nil && env["1A"] == nil && env[""] == nil)
     }
 
+    /// The Settings table can never export a token or undo what the policy sets: those keys are refused.
+    @Test func tokensAndPolicyKeysCannotBeOverridden() {
+        let forbidden = [
+            "GITHUB_TOKEN", "GH_TOKEN", "COMPOSER_AUTH", "NO_COLOR", "SKILLCASK_AGENT", "CLICOLOR_FORCE", "CLAUDECODE",
+            "AI_AGENT", "PATH", "HOME",
+        ]
+        let policy = EnvironmentPolicy(
+            extraPaths: [], overrides: Dictionary(uniqueKeysWithValues: forbidden.map { ($0, "x") }))
+        let env = policy.environment(from: ["PATH": "/usr/bin", "HOME": "/Users/me"])
+        for key in forbidden {
+            #expect(!EnvironmentPolicy.allowsOverride(key))
+            #expect(env[key] != "x", "\(key) must not come from the table")
+        }
+        #expect(env["NO_COLOR"] == "1" && env["SKILLCASK_AGENT"] == "0")
+        #expect(EnvironmentPolicy.allowsOverride("HTTPS_PROXY") && !EnvironmentPolicy.allowsOverride("SKILLCASK_HOME"))
+    }
+
+    /// One case per class of the table on `EnvironmentPolicy.forbidden`.
+    @Test(arguments: [
+        // Policy (policy.rs:16, 159-171).
+        ("SKILLCASK_MIN_RELEASE_AGE", false), ("SKILLCASK_ALLOW_RANGES", false), ("SKILLCASK_PACKAGIST", false),
+        ("SKILLCASK_GITHUB_REQUIRES", false), ("SKILLCASK_ALLOW_SOURCES", false), ("SKILLCASK_DENY_PATTERNS", false),
+        // Hosts and credentials.
+        ("SKILLCASK_GITHUB_API", false), ("GITHUB_API_URL", false), ("SKILLCASK_SKILLS_SH", false),
+        ("SKILLCASK_GIT_CREDENTIALS", false), ("GITHUB_TOKEN", false), ("GH_TOKEN", false), ("COMPOSER_AUTH", false),
+        ("COMPOSER_HOME", false), ("APPDATA", false), ("XDG_CONFIG_HOME", false), ("XDG_DATA_HOME", false),
+        ("SKILLCASK_CA_FILE", false),
+        // Behaviour and output.
+        ("CI", false), ("NO_COLOR", false), ("SKILLCASK_AGENT", false), ("USERPROFILE", false),
+        // Loader and git injection.
+        ("DYLD_INSERT_LIBRARIES", false), ("LD_PRELOAD", false), ("GIT_ASKPASS", false), ("GIT_CONFIG_COUNT", false),
+        ("SSH_ASKPASS", false), ("GCM_INTERACTIVE", false),
+        // Unknown SKILLCASK_ names: a later CLI may read them as policy.
+        ("SKILLCASK_FUTURE_POLICY", false),
+        // Allowed.
+        ("SKILLCASK_HOME", false), ("SKILLCASK_LINK_MODE", true), ("SKILLCASK_CACHE_DIR", true), ("WT_SESSION", true),
+        ("HTTPS_PROXY", true), ("HTTP_PROXY", true), ("ALL_PROXY", true), ("NO_PROXY", true), ("GITLAB_HOST", true),
+    ])
+    func classification(key: String, allowed: Bool) {
+        #expect(EnvironmentPolicy.allowsOverride(key) == allowed)
+        let env = EnvironmentPolicy(extraPaths: [], overrides: [key: "x"]).environment(from: [:])
+        #expect((env[key] == "x") == allowed)
+    }
+
+    @Test(arguments: [
+        ("http://me:pw@proxy:3128", true), ("https://token@host/x", true), ("http://proxy:3128", false),
+        ("me@example.com", false), ("~/Library/Caches/skillcask", false),
+        ("ghp_abcDEF123", true), ("gho_x1", true), ("ghu_x1", true), ("ghs_x1", true), ("ghr_x1", true),
+        ("github_pat_11AB_cd", true), ("glpat-xYz_1", true), ("Bearer ghp_abc", true), ("ghp_", false),
+    ])
+    func credentialsInURLs(value: String, found: Bool) {
+        #expect(EnvironmentPolicy.hasCredentials(value) == found)
+    }
+
+    /// Display masks URL userinfo and token-shaped parts, nothing else.
+    @Test func maskingHidesCredentialsOnly() {
+        #expect(EnvironmentPolicy.masked("http://me:pw@proxy:3128") == "http://••••@proxy:3128")
+        #expect(EnvironmentPolicy.masked("token ghp_abcDEF123 end") == "token ghp_•••• end")
+        #expect(EnvironmentPolicy.masked("glpat-abc") == "glpat-••••")
+        #expect(EnvironmentPolicy.masked("http://proxy:3128") == "http://proxy:3128")
+    }
+
+    /// A name that is still being typed towards a refused one never stores a value.
+    @Test func valuesAreNotStoredForPrefixesOfRefusedNames() {
+        #expect(!EnvironmentPolicy.mayStoreValue(name: "GITHUB_TOKE", value: "v"))
+        #expect(!EnvironmentPolicy.mayStoreValue(name: "DYL", value: "v"))
+        #expect(!EnvironmentPolicy.mayStoreValue(name: "GITHUB_TOKEN", value: "v"))
+        #expect(!EnvironmentPolicy.mayStoreValue(name: "HTTPS_PROXY", value: "http://a:b@p"))
+        #expect(EnvironmentPolicy.mayStoreValue(name: "HTTPS_PROXY", value: "http://p:3128"))
+    }
+
+    /// A shared source changes what the next read sees.
+    @Test func sourceIsLive() {
+        let source = EnvironmentSource(EnvironmentPolicy(extraPaths: []))
+        source.policy.overrides["A"] = "1"
+        #expect(source.policy.environment(from: [:])["A"] == "1")
+    }
+
     @Test func emptyPathStillGetsTheInstallLocations() {
         let env = EnvironmentPolicy.default.environment(from: [:])
         #expect(env["PATH"] == EnvironmentPolicy.installLocations.joined(separator: ":"))

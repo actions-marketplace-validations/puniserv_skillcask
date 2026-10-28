@@ -159,6 +159,7 @@ import Testing
     @Test func typeScaleMatchesTheBoard() {
         let expected: [(Font.Token.Scale, CGFloat, CGFloat, Font.Weight, Font.Design)] = [
             (.title, 22, 28, .bold, .default),
+            (.sheetTitle, 20, 26, .bold, .default),
             (.headline, 15, 20, .semibold, .default),
             (.body, 13, 18, .regular, .default),
             (.bodyEmphasis, 13, 18, .semibold, .default),
@@ -184,6 +185,7 @@ import Testing
         #expect(
             Font.Token.title == Font.Token.Scale.title.font && Font.Token.monoSmall == Font.Token.Scale.monoSmall.font)
         #expect(Font.Token.bodyMedium == Font.Token.Scale.bodyMedium.font)
+        #expect(Font.Token.sheetTitle == Font.Token.Scale.sheetTitle.font)
         #expect(Font.Token.captionSemibold == Font.Token.Scale.captionSemibold.font)
         #expect(Font.Token.calloutSemibold == Font.Token.Scale.calloutSemibold.font)
         #expect(Font.Token.titleTracking == -0.22)
@@ -212,7 +214,8 @@ import Testing
             (Size.reachChip, 20), (Size.hairline, 1), (Size.iconToolbar, 13), (Size.iconSidebar, 16),
             (Size.iconInline, 12), (Size.windowMinWidth, 960),
             (Size.sidebarWidth, 220), (Size.sidebarMinWidth, 180), (Size.listWidth, 360), (Size.listMinWidth, 300),
-            (Size.detailMinWidth, 400),
+            (Size.detailMinWidth, 400), (Size.settingsWidth, 600), (Size.settingsLabel, 200),
+            (Size.settingsRemoveColumn, 40), (Size.settingsTableRow, 28),
         ]
         for (actual, expected) in sizes {
             #expect(actual == expected)

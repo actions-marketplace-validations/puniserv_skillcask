@@ -59,10 +59,11 @@ struct ScopeToolbar: ToolbarContent {
             .help(ShellCopy.checkHelp)
             .disabled(!isIdle)
             Menu {
-                // The Activity drawer arrives with its task; the shortcut is registered now so the menu shows it.
-                Button(ShellCopy.showActivity) {}
-                    .keyboardShortcut("l", modifiers: [.command, .option])
-                    .disabled(true)
+                // ⌥⌘L lives on View › Activity (the menu bar carries the shortcuts): registering it here as well
+                // would fire both and toggle the drawer twice.
+                Button(runner.isActivityShown ? ActivityCopy.hideActivity : ActivityCopy.showActivity) {
+                    runner.toggleActivity()
+                }
                 Divider()
                 Button(ShellCopy.revealManifest) {
                     if let store {

@@ -79,6 +79,15 @@ public enum Size {
     public static let addSkillSheet = CGSize(width: 900, height: 660)
     /// The Adopt sheet, single and batch (Adopt-States board: `.sheet { width: 592px; height: 340px }`).
     public static let adoptSheet = CGSize(width: 592, height: 340)
+    /// The Settings window's width (Settings boards: `.swin{width:600px}`); its height follows the tab.
+    public static let settingsWidth: CGFloat = 600
+    /// The right-aligned label column of a Settings row (`.fr{grid-template-columns:200px …}`).
+    public static let settingsLabel: CGFloat = 200
+    /// The remove column of Advanced's environment table (`<th style="width: 40px">`).
+    public static let settingsRemoveColumn: CGFloat = 40
+    /// One row of that table, header included (`td{padding:6px 8px}` around a 12 pt line, rounded up for the
+    /// text field).
+    public static let settingsTableRow: CGFloat = 28
 
     /// Every scalar size in the order above, for the token sheet and the tests (the sheet sizes are listed apart).
     public static let catalog: [(name: String, value: CGFloat)] = [
@@ -90,6 +99,8 @@ public enum Size {
         ("iconToolbar", iconToolbar),
         ("iconSidebar", iconSidebar), ("iconInline", iconInline), ("windowMinWidth", windowMinWidth),
         ("sidebarWidth", sidebarWidth), ("sidebarMinWidth", sidebarMinWidth), ("listWidth", listWidth),
-        ("listMinWidth", listMinWidth), ("detailMinWidth", detailMinWidth),
+        ("listMinWidth", listMinWidth), ("detailMinWidth", detailMinWidth), ("settingsWidth", settingsWidth),
+        ("settingsLabel", settingsLabel), ("settingsRemoveColumn", settingsRemoveColumn),
+        ("settingsTableRow", settingsTableRow),
     ]
 }

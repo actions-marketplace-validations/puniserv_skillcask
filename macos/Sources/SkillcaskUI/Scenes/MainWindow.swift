@@ -12,6 +12,8 @@ import SwiftUI
 public struct MainWindow: View {
     /// The window's minimum height; the boards are 800 tall, 600 keeps the Overview grid readable.
     public static let minHeight: CGFloat = 600
+    /// The scene's id, so Settings › Advanced "Show Activity" can open the window when none is open.
+    public static let sceneID = "main"
 
     @Environment(AppStore.self) private var app
     @Environment(ActionRunner.self) private var runner
@@ -57,7 +59,20 @@ public struct MainWindow: View {
             pinnedRemoval = removeAlert.flatMap { alert in app.removal.map { ($0.id, alert) } }
         }
         .onChange(of: app.cli) { app.dropOrphanedPresentation() }
+        .background { onboarding }
         .task { await app.boot() }
+    }
+
+    // MARK: - Onboarding (S13)
+
+    /// The onboarding sheet over the empty window while the CLI is missing or too old (`AppStore.isOnboarding`).
+    /// Hosted on a background view so it never shares a presenter with `presentedSheet`; it cannot be closed
+    /// from here, only by a detection that succeeds.
+    private var onboarding: some View {
+        Color.clear
+            .sheet(isPresented: Binding(get: { app.isOnboarding }, set: { _ in })) {
+                CLIOnboardingSheet(state: OnboardingState.resolve(app.cli, binary: app.binary) ?? .missing)
+            }
     }
 
     // MARK: - Sheets (`AppStore.Sheet`)
@@ -100,11 +115,14 @@ public struct MainWindow: View {
 
     // MARK: - Columns
 
-    @ViewBuilder private var content: some View {
-        if let store = app.selectedStore, isSetUp {
-            SkillListView(store: store)
-        } else {
-            Color.surfaceWindow
+    /// The skills list, or the empty column, with the Activity drawer (S15) at its bottom when shown.
+    private var content: some View {
+        ActivityPane {
+            if let store = app.selectedStore, isSetUp {
+                SkillListView(store: store)
+            } else {
+                Color.surfaceWindow
+            }
         }
     }
 
@@ -131,27 +149,15 @@ public struct MainWindow: View {
         ScopeOverviewView(store: store, isSetUp: false)
     }
 
-    /// Until the onboarding sheet (P3-7): the CLI state in the detail column, nothing else.
+    /// The detail before the CLI is ready: a spinner while the first detection runs, the empty window under the
+    /// onboarding sheet (S13) when it failed.
     @ViewBuilder private var unavailable: some View {
-        switch app.cli {
-        case .locating:
+        if app.cli == .locating && !app.isOnboarding {
             Spinner()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color.surfaceGrouped)
-        case .missing:
-            EmptyState(
-                icon: "terminal", tone: .error, title: ErrorCopy.binaryMissingTitle,
-                body: ErrorCopy.binaryMissingReason + " " + ErrorCopy.binaryMissingAction
-            )
-            .background(Color.surfaceGrouped)
-        case .tooOld:
-            EmptyState(
-                icon: "terminal", tone: .error, title: ErrorCopy.tooOldTitle,
-                body: ErrorCopy.tooOldReason + " " + ErrorCopy.tooOldAction
-            )
-            .background(Color.surfaceGrouped)
-        case .ready:
-            Color.surfaceGrouped
+        } else {
+            Color.surfaceWindow
         }
     }
 }

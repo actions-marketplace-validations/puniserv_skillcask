@@ -277,7 +277,8 @@ struct ScopeOverviewView: View {
     private func health(_ snapshot: ScopeSnapshot) -> some View {
         HealthCard(
             snapshot: snapshot, isBusy: runner.isBusy(store.scope), onRepair: { runner.start(.repair, in: store) },
-            onSync: { runner.start(.sync, in: store) }, onTitleTap: { show(Self.filter(for: .health)) })
+            onSync: { runner.start(.sync, in: store) }, onCheckAgain: { runner.start(.check, in: store) },
+            onTitleTap: { show(Self.filter(for: .health)) })
     }
 
     private func updates(_ snapshot: ScopeSnapshot) -> some View {
