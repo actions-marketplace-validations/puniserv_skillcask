@@ -50,7 +50,13 @@ universal() {
     lipo "$1" -verify_arch arm64 2>/dev/null && lipo "$1" -verify_arch x86_64 2>/dev/null
 }
 
-# 0. Preconditions, before any build: the prebuilt CLI is usable, or both Rust targets are installed.
+# 0. Preconditions, before any build: Xcode's toolchain (SwiftUI's macro plugins, `@State`, `@Entry`,
+# `#Preview`, ship only with Xcode, not with the Command Line Tools), then the prebuilt CLI is usable, or both
+# Rust targets are installed.
+case "$(xcrun --find swift 2>/dev/null)" in
+*/Xcode*.app/Contents/Developer/*) ;;
+*) fail "Skillcask for Mac needs Xcode: the @Entry and #Preview macro plugins ship only with Xcode; sudo xcode-select -s /Applications/Xcode.app" ;;
+esac
 if [ -n "${SKILLCASK_CLI:-}" ]; then
     cli=$SKILLCASK_CLI
     [ -f "$cli" ] && [ -x "$cli" ] || fail "SKILLCASK_CLI=$cli is not an executable file"

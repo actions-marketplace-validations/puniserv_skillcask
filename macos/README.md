@@ -1,7 +1,10 @@
 # Skillcask for macOS
 
 A SwiftUI app over the `skillcask` CLI (spec D35). It runs on macOS 14 or newer; building it needs
-Swift 6.3 or newer (CI builds it with Xcode 26.6, Swift 6.3.3; Xcode 26.0 to 26.3 ship Swift 6.2). How the app looks and behaves, and the rules it keeps: [DESIGN.md](DESIGN.md).
+Xcode 26.x with Swift 6.3 or newer (CI builds it with Xcode 26.6, Swift 6.3.3; Xcode 26.0 to 26.3
+ship Swift 6.2). The Command Line Tools alone are not enough: SwiftUI's macro plugins (`@State`,
+`@Entry`, `#Preview`) ship only with Xcode, so `test.sh` and `bundle.sh` stop at once without it.
+How the app looks and behaves, and the rules it keeps: [DESIGN.md](DESIGN.md).
 
 ## Try it
 
@@ -53,10 +56,10 @@ macos/test.sh                      # lint, build and tests; fails on any compile
 macos/Scripts/smoke-app.sh         # launches the built app and checks it uses the bundled CLI
 ```
 
-`test.sh` also works with only the Command Line Tools. Extra arguments go to `swift test`
-(`macos/test.sh --filter ProcessRunner`); `SKILLCASK_BIN=<path>` also runs the contract tests
-against that CLI. An incremental build hides warnings in unchanged files, so trust a count of 0 only
-after `swift package clean`. CI's `macos-app` job runs `test.sh` on a clean checkout.
+Extra arguments go to `swift test` (`macos/test.sh --filter ProcessRunner`);
+`SKILLCASK_BIN=<path>` also runs the contract tests against that CLI. An incremental build hides
+warnings in unchanged files, so trust a count of 0 only after `swift package clean`. CI's
+`macos-app` job runs `test.sh` on a clean checkout.
 
 `smoke-app.sh` needs a logged-in GUI session. It checks the app's `--version` refusal, then starts
 the built app on the sample data and live (with a fresh `SKILLCASK_HOME` and a `PATH` without
