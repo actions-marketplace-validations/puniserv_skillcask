@@ -75,6 +75,28 @@ import os
         #expect(ran.withLock { $0 } == ["first", "third"])
     }
 
+    /// A caller cancelled before it reaches `enqueue`, with the scope idle, gets `CancellationError`, never runs its
+    /// operation and leaves no slot behind, so the next mutation of the scope runs at once. Repeated 500 times
+    /// because the old code lost this only some of the time; the Gate orders each round, no sleeps.
+    @Test(.timeLimit(.minutes(1))) func aCallerCancelledBeforeItQueuesNeverRuns() async throws {
+        let queue = MutationQueue()
+        let ran = OSAllocatedUnfairLock(initialState: 0)
+        for _ in 0..<500 {
+            let gate = Gate()
+            let caller = Task {
+                await gate.wait()
+                return try await queue.enqueue(in: a) { ran.withLock { $0 += 1 } }
+            }
+            await gate.arrived()
+            caller.cancel()
+            await gate.open()
+            await #expect(throws: CancellationError.self) { try await caller.value }
+        }
+        #expect(ran.withLock { $0 } == 0)
+        #expect(await !queue.isBusy(a))
+        #expect(try await queue.enqueue(in: a) { 42 } == 42)
+    }
+
     @Test func resultAndErrorPassThrough() async throws {
         let queue = MutationQueue()
         #expect(try await queue.enqueue(in: a) { 42 } == 42)

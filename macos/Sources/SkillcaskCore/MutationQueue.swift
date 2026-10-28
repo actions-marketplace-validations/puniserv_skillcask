@@ -8,19 +8,20 @@ public actor MutationQueue {
     public init() {}
 
     /// Runs `operation` after every mutation queued earlier for `scope`. Cancelling the caller cancels this
-    /// operation (and through the runner, its child) but not the ones queued behind it.
+    /// operation (and through the runner, its child) but not the ones queued behind it. A caller cancelled before
+    /// its operation starts never runs it.
     public func enqueue<T: Sendable>(
         in scope: Scope, _ operation: @escaping @Sendable () async throws -> T
     ) async throws -> T {
+        // Cancelled before it got here: no slot, and nothing for later mutations to wait on.
+        try Task.checkCancellation()
         let previous = tails[scope]
         busy[scope, default: 0] += 1
-        let task = Task<T, any Error> {
-            await previous?.value
-            try Task.checkCancellation()
-            return try await operation()
-        }
-        tails[scope] = Task { _ = try? await task.value }
         defer { finished(scope) }
+        // `task` is unstructured, so it learns of the caller's cancellation only through the handler below; `start`
+        // keeps it from checking before that handler is installed.
+        let task = Task<T, any Error> { try await self.start(after: previous, operation) }
+        tails[scope] = Task { _ = try? await task.value }
         return try await withTaskCancellationHandler {
             try await task.value
         } onCancel: {
@@ -36,6 +37,17 @@ public actor MutationQueue {
     /// How many mutations of `scope` are running or waiting (tests: a second one has queued).
     func pending(in scope: Scope) -> Int {
         busy[scope, default: 0]
+    }
+
+    /// Isolated to this actor, so it cannot begin before `enqueue` suspends inside `withTaskCancellationHandler`,
+    /// whose handler runs at once for a caller cancelled before then and cancels this task: the check below sees
+    /// every cancellation that lands before the operation starts.
+    private func start<T: Sendable>(
+        after previous: Task<Void, Never>?, _ operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        await previous?.value
+        try Task.checkCancellation()
+        return try await operation()
     }
 
     private func finished(_ scope: Scope) {
