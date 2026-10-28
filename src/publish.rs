@@ -16,6 +16,8 @@ use crate::version::{Stability, Version};
 
 /// Tree hash of the published files, so a version stays verifiable without its zip.
 const TREE: &str = "ai-agent-skill-tree";
+/// The `requires:` of the version's `SKILL.md`, for `search` to show; resolution reads `SKILL.md` (D49).
+pub const REQUIRES: &str = "ai-agent-skill-requires";
 
 pub struct PublishArgs {
     pub vendor: String,
@@ -34,6 +36,7 @@ struct Found {
     normalized: Version,
     description: Option<String>,
     abandoned: Option<Value>,
+    requires: BTreeMap<String, String>,
     zip: Vec<u8>,
     files: Vec<FileEntry>,
 }
@@ -80,8 +83,9 @@ pub fn publish(args: &PublishArgs) -> Result<()> {
         };
         let at = dir.display();
         // Fails in the skill's own CI rather than at every consumer.
-        for (k, v) in crate::skill::requires(&text).map_err(|e| Error::new(MANIFEST, format!("{at}: {e}")))? {
-            crate::deps::check(&k, &v).map_err(|e| Error::new(MANIFEST, format!("{at}: requires: {e}")))?;
+        let requires = crate::skill::requires(&text).map_err(|e| Error::new(MANIFEST, format!("{at}: {e}")))?;
+        for (k, v) in &requires {
+            crate::deps::check(k, v).map_err(|e| Error::new(MANIFEST, format!("{at}: requires: {e}")))?;
         }
         if !valid_name(name) {
             bail!(MANIFEST, "{at}: invalid skill name {name:?}");
@@ -115,6 +119,7 @@ pub fn publish(args: &PublishArgs) -> Result<()> {
             normalized,
             description: fm.get("description").cloned(),
             abandoned,
+            requires,
         });
     }
 
@@ -187,6 +192,10 @@ pub fn publish(args: &PublishArgs) -> Result<()> {
                     // Versions published before the tree was recorded get it while their zip still matches.
                     if let Some(extra) = m.get_mut("extra").and_then(Value::as_object_mut) {
                         extra.entry(TREE).or_insert_with(|| tree.into());
+                        // Same content as published, so the same `requires:`.
+                        if !f.requires.is_empty() {
+                            extra.entry(REQUIRES).or_insert_with(|| json!(f.requires));
+                        }
                     }
                     ("unchanged", zip)
                 }
@@ -211,6 +220,9 @@ pub fn publish(args: &PublishArgs) -> Result<()> {
                     });
                     if let Some(d) = f.description {
                         m["description"] = d.into();
+                    }
+                    if !f.requires.is_empty() {
+                        m["extra"][REQUIRES] = json!(f.requires);
                     }
                     if let Some(a) = f.abandoned {
                         m["abandoned"] = a;
@@ -600,6 +612,23 @@ mod tests {
             let e = publish(&args(src.path(), out.path())).unwrap_err().msg;
             assert!(e.contains("requires"), "{bad}: {e}");
         }
+    }
+
+    #[test]
+    fn records_requires_in_the_metadata_and_backfills_it() {
+        let src = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join(SKILL_MD), "---\nname: alpha\nversion: 1.0.0\nrequires:\n  acme/beta: ^1.0\n---\n").unwrap();
+        publish(&args(src.path(), out.path())).unwrap();
+        let p2 = out.path().join("p2/acme/alpha.json");
+        let read = || serde_json::from_slice::<Value>(&std::fs::read(&p2).unwrap()).unwrap();
+        assert_eq!(read()["packages"]["acme/alpha"][0]["extra"][REQUIRES], json!({ "acme/beta": "^1.0" }));
+        // Published before requires were recorded: the next run adds them, the content is the same.
+        let mut meta = read();
+        meta["packages"]["acme/alpha"][0]["extra"].as_object_mut().unwrap().remove(REQUIRES);
+        std::fs::write(&p2, pretty(&meta)).unwrap();
+        publish(&args(src.path(), out.path())).unwrap();
+        assert_eq!(read()["packages"]["acme/alpha"][0]["extra"][REQUIRES], json!({ "acme/beta": "^1.0" }));
     }
 
     #[test]

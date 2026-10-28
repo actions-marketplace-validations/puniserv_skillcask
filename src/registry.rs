@@ -16,6 +16,16 @@ use crate::lock::Dist;
 use crate::manifest::Repository;
 use crate::version::{Constraint, Stability, Version};
 
+/// One `search` result. `skills`: how many skills the package lists; `requires`: what its
+/// `publish` recorded from `requires:` (D49). Packagist's search gives neither.
+pub struct Hit {
+    pub name: String,
+    pub description: String,
+    pub source: String,
+    pub skills: Option<usize>,
+    pub requires: std::collections::BTreeMap<String, String>,
+}
+
 #[derive(Clone, Debug)]
 pub struct Candidate {
     pub name: String,
@@ -256,13 +266,13 @@ impl<'a> Registry<'a> {
 
     /// (name, description, repository name) of skill packages whose name contains `query`, or that
     /// Packagist's search finds. A repository that fails is skipped with a warning; all failing is an error.
-    pub fn search(&self, repos: &[Repository], query: &str) -> Result<Vec<(String, String, String)>> {
+    pub fn search(&self, repos: &[Repository], query: &str) -> Result<Vec<Hit>> {
         let mut out = Vec::new();
         let (mut failed, mut errors) = (None, 0);
         for repo in repos {
             let found = if is_packagist(repo) { self.search_packagist(query) } else { self.search_names(repo, query) };
             match found {
-                Ok(f) => out.extend(f.into_iter().map(|(n, d)| (n, d, repo.name.clone()))),
+                Ok(f) => out.extend(f.into_iter().map(|h| Hit { source: repo.name.clone(), ..h })),
                 Err(e) => {
                     let prefix = format!("repository {}: ", repo.name);
                     crate::ui::warn(if e.msg.starts_with(&prefix) { e.msg.clone() } else { format!("{prefix}{}", e.msg) });
@@ -274,11 +284,11 @@ impl<'a> Registry<'a> {
             return Err(e);
         }
         let mut seen = std::collections::HashSet::new();
-        out.retain(|(n, _, _)| seen.insert(n.clone()));
+        out.retain(|h| seen.insert(h.name.clone()));
         Ok(out)
     }
 
-    fn search_packagist(&self, query: &str) -> Result<Vec<(String, String)>> {
+    fn search_packagist(&self, query: &str) -> Result<Vec<Hit>> {
         let mut out = Vec::new();
         let mut url = Url::parse_with_params("https://packagist.org/search.json", [("q", query), ("type", "ai-agent-skill")])
             .map_err(|e| Error::new(NETWORK, e.to_string()))?
@@ -287,7 +297,13 @@ impl<'a> Registry<'a> {
             let Some(page) = self.http.get_json(&url)? else { break };
             for r in page.get("results").and_then(Value::as_array).into_iter().flatten() {
                 if let Some(n) = r.get("name").and_then(Value::as_str) {
-                    out.push((n.to_string(), r.get("description").and_then(Value::as_str).unwrap_or("").to_string()));
+                    out.push(Hit {
+                        name: n.to_string(),
+                        description: r.get("description").and_then(Value::as_str).unwrap_or("").to_string(),
+                        source: String::new(),
+                        skills: None,
+                        requires: Default::default(),
+                    });
                 }
             }
             match page.get("next").and_then(Value::as_str) {
@@ -300,7 +316,7 @@ impl<'a> Registry<'a> {
 
     /// Names come from `available-packages`, inline `packages` or, on GitLab, `provider-includes`;
     /// each match's metadata is read to keep skill packages only.
-    fn search_names(&self, repo: &Repository, query: &str) -> Result<Vec<(String, String)>> {
+    fn search_names(&self, repo: &Repository, query: &str) -> Result<Vec<Hit>> {
         let root = self.root(repo)?;
         let q = query.to_lowercase();
         let mut names: Vec<String> = root
@@ -325,20 +341,50 @@ impl<'a> Registry<'a> {
         names.sort();
         names.dedup();
         names.retain(|n| n.contains(&q));
-        // ponytail: one metadata request per match, capped; a server-side search would lift the cap.
-        if names.len() > SEARCH_LIMIT {
-            crate::ui::warn(format!("repository {}: {} packages match; only the first {SEARCH_LIMIT} are checked", repo.name, names.len()));
-            names.truncate(SEARCH_LIMIT);
+        // A match after the vendor first: a query that is the vendor matches every package.
+        names.sort_by_key(|n| !n.split_once('/').map_or(n.as_str(), |(_, short)| short).contains(&q));
+        // ponytail: one metadata request per match not inline, capped; a server-side search would lift the cap.
+        let fetched = names.iter().filter(|n| inline(&root.1, n).is_none()).count();
+        if fetched > SEARCH_LIMIT {
+            crate::ui::warn(format!(
+                "repository {}: {fetched} packages match; only the first {SEARCH_LIMIT} are checked; narrow the query",
+                repo.name
+            ));
+            let mut left = SEARCH_LIMIT;
+            names.retain(|n| {
+                let keep = inline(&root.1, n).is_some() || left > 0;
+                if inline(&root.1, n).is_none() {
+                    left = left.saturating_sub(1);
+                }
+                keep
+            });
         }
         let mut out = Vec::new();
         for n in names {
             let Some((list, _)) = self.metadata(repo, &n)? else { continue };
-            let skill = list.iter().find(|m| {
-                m.get("type").and_then(Value::as_str) == Some("ai-agent-skill")
-                    || m.get("extra").and_then(|e| e.get("ai-agent-skill")).is_some()
-            });
-            if let Some(m) = skill {
-                out.push((n, m.get("description").and_then(Value::as_str).unwrap_or("").to_string()));
+            let newest = list
+                .iter()
+                .filter(|m| {
+                    m.get("type").and_then(Value::as_str) == Some("ai-agent-skill")
+                        || m.get("extra").and_then(|e| e.get("ai-agent-skill")).is_some()
+                })
+                .max_by_key(|m| {
+                    ["version_normalized", "version"].iter().find_map(|k| m.get(*k).and_then(Value::as_str).and_then(Version::parse))
+                });
+            if let Some(m) = newest {
+                let extra = m.get("extra");
+                out.push(Hit {
+                    name: n,
+                    description: m.get("description").and_then(Value::as_str).unwrap_or("").to_string(),
+                    source: String::new(),
+                    skills: Some(extra.and_then(|e| e.get("ai-agent-skill")?.as_array().map(Vec::len)).unwrap_or(1)),
+                    requires: extra
+                        .and_then(|e| e.get(crate::publish::REQUIRES)?.as_object())
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string())))
+                        .collect(),
+                });
             }
         }
         Ok(out)
