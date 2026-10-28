@@ -4,39 +4,34 @@ import SkillcaskCore
 import SkillcaskDomain
 
 /// The settings that live in the CLI, not in the app (S14): `[search] skills-sh` and the other keys of config.toml
-/// (Settings › Global, `-g config`, 0.9.4), the GitHub token in git's credential helper (the Keychain on macOS), and
+/// (Settings › Global, `-g config`), the GitHub token in git's credential helper (the Keychain on macOS), and
 /// the size of the adopted copies' folder. App-lifetime
 /// (`AppStore.cliSettings`), so what this session learnt survives closing the Settings window.
 ///
-/// skills.sh goes through `skillcask -g config` where the CLI has it (`Capabilities.Feature.config`, 0.9.4, D48):
-/// read as `{"value", "from"}`, written as `config -- search.skills-sh true|false`, nothing else run. An older CLI
-/// (0.9.1–0.9.3) has no such command: the app reads config.toml itself and writes through `search --remember`,
-/// which also runs one search.
+/// skills.sh goes through `skillcask -g config` (D48): read as `{"value", "from"}`, written as `config --
+/// search.skills-sh true|false`, nothing else run. The app never reads or writes config.toml itself.
 ///
 /// The token rules: it reaches the CLI only as the stdin of `auth set` (never argv, never the environment); the
 /// app never writes it anywhere, never reads it back, never shows it, and keeps no reference once the run is over.
 /// No command reports whether a token is stored without returning it (`credential::fill` prints the password), so
 /// `gitHub` starts `.unknown` and only this session's own Save or Sign Out changes it.
 @MainActor @Observable public final class CLISettingsStore {
-    /// What a command needs: the ready client and its capabilities, and the config.toml of the children's
-    /// environment. Built by `AppStore.cliContext`.
+    /// What a command needs: the ready client and its capabilities. Built by `AppStore.cliContext`.
     public struct Context: Sendable {
         public let client: any CLIClient
         public let capabilities: Capabilities
-        public let configFile: URL
 
-        public init(client: any CLIClient, capabilities: Capabilities, configFile: URL) {
+        public init(client: any CLIClient, capabilities: Capabilities) {
             self.client = client
             self.capabilities = capabilities
-            self.configFile = configFile
         }
     }
 
-    /// `[search] skills-sh` as config.toml has it.
+    /// `[search] skills-sh` as `-g config` reports it.
     public enum SkillsSh: Hashable, Sendable {
-        /// Not read yet.
+        /// Not read yet, or the read failed (a broken config.toml).
         case unknown
-        /// The file does not set it: Add Skill… asks (S8 consent).
+        /// Nothing sets it: Add Skill… asks (S8 consent).
         case notSet
         case on
         case off
@@ -62,28 +57,18 @@ import SkillcaskDomain
     /// The host the CLI keys GitHub API tokens by (`github::API`), and the username that makes it a Bearer token.
     public static let gitHubHost = "api.github.com"
     public static let gitHubUsername = "oauth2"
-    /// The query `search --remember` needs to write the switch on a CLI without `config`.
-    public nonisolated static let rememberQuery = "skillcask"
     /// The key `config` names the switch by (D48).
     public nonisolated static let skillsShKey = "search.skills-sh"
 
-    /// Whether flipping the switch on `capabilities` runs a search (no `config`, so `search --remember`).
-    public nonisolated static func flipRunsSearch(_ capabilities: Capabilities?) -> Bool {
-        capabilities?.supports(.config) != true
-    }
-
-    /// Reads a file's text off the main actor; nil when it is missing or unreadable.
-    public typealias Reader = @Sendable (URL) async -> String?
     /// Sums a folder off the main actor: `4 folders · 1.2 MB`, nil when it does not exist.
     public typealias Measurer = @Sendable (URL) async -> String?
 
-    private let read: Reader
     private let measure: Measurer
 
     // MARK: - State
 
     public private(set) var skillsSh: SkillsSh = .unknown
-    /// The value being written while `search --remember` runs.
+    /// The value being written while `config` runs.
     public private(set) var pendingSkillsSh: Bool?
     public private(set) var skillsShFailure: UserMessage?
     public private(set) var gitHub: GitHub = .unknown
@@ -127,16 +112,8 @@ import SkillcaskDomain
         pendingSkillsSh != nil || changingSetting != nil
     }
 
-    public init(
-        read: @escaping Reader = CLISettingsStore.readFile, measure: @escaping Measurer = CLISettingsStore.measureFolder
-    ) {
-        self.read = read
+    public init(measure: @escaping Measurer = CLISettingsStore.measureFolder) {
         self.measure = measure
-    }
-
-    /// The live reader: the file's UTF-8 text, nil when missing.
-    public static let readFile: Reader = { url in
-        await Task.detached { try? String(contentsOf: url, encoding: .utf8) }.value
     }
 
     // MARK: - skills.sh
@@ -154,22 +131,11 @@ import SkillcaskDomain
         self.tokenWarnings = tokenWarnings
     }
 
-    /// Reads `[search] skills-sh` from `configFile` (a CLI without `config`, or before the CLI is ready).
-    public func loadSkillsSh(from configFile: URL) async {
-        guard !isPreloaded else { return }
-        let text = await read(configFile)
-        skillsSh = Self.state(of: text)
-    }
-
-    /// Reads the switch through `-g config --json -- search.skills-sh` when the CLI has `config`, else from
-    /// `context.configFile`. A `config` that fails (a broken config.toml) falls back to the file as well.
+    /// Reads the switch through `-g config --json -- search.skills-sh`. A read that fails (a broken config.toml)
+    /// leaves it `.unknown`: the app does not read the file itself.
     public func loadSkillsSh(in context: Context) async {
         guard !isPreloaded else { return }
-        if context.capabilities.supports(.config), let state = await Self.configState(in: context) {
-            skillsSh = state
-            return
-        }
-        await loadSkillsSh(from: context.configFile)
+        skillsSh = await Self.configState(in: context) ?? .unknown
     }
 
     /// `config --json`'s answer as the switch's state; nil when it did not answer with a document.
@@ -193,27 +159,21 @@ import SkillcaskDomain
         }
     }
 
-    /// Writes the switch, then reads it again: what the CLI reads back decides. With `config`:
-    /// `-g config -- search.skills-sh true|false`, nothing else runs. Without: `search --skills-sh|--no-skills-sh
-    /// --remember -- skillcask` in the personal scope, then the file, so a search that failed after the CLI saved
-    /// the value (offline) still counts, and one that failed before shows why.
+    /// Writes the switch with `-g config -- search.skills-sh true|false` (nothing else runs), then reads it again:
+    /// what the CLI reads back decides.
     public func setSkillsSh(_ on: Bool, in context: Context) async {
         guard !isWritingConfig else { return }
         pendingSkillsSh = on
         skillsShFailure = nil
         defer { pendingSkillsSh = nil }
         var failure: CLIError?
-        let viaConfig = context.capabilities.supports(.config)
         do throws(CLIError) {
-            let command: Invocation.Command =
-                viaConfig
-                ? .configSet(key: Self.skillsShKey, values: [on ? "true" : "false"])
-                : .search(query: Self.rememberQuery, skillsSh: on ? .include : .exclude, remember: true)
-            let result = try await context.client.run(
-                Invocation(command, in: .personal, capabilities: context.capabilities))
-            if viaConfig {
-                failure = result.failure()
-            }
+            let command = Invocation.Command.configSet(key: Self.skillsShKey, values: [on ? "true" : "false"])
+            failure = try await context.client
+                .run(
+                    Invocation(command, in: .personal, capabilities: context.capabilities)
+                )
+                .failure()
         } catch {
             failure = error
         }
@@ -224,14 +184,6 @@ import SkillcaskDomain
             skillsShFailure = ErrorCopy.message(
                 for: failure ?? .launchFailed(SettingsCopy.skillsShNotSaved), title: SettingsCopy.couldNotSaveSkillsSh)
             skillsShFailure?.details = nil
-        }
-    }
-
-    static func state(of text: String?) -> SkillsSh {
-        switch text.flatMap(CLIConfig.skillsSh(in:)) {
-        case true?: .on
-        case false?: .off
-        case nil: .notSet
         }
     }
 
@@ -249,11 +201,10 @@ import SkillcaskDomain
         changingSetting = changing
     }
 
-    /// Reads every key through `-g config --json`. Nothing runs on a CLI without `config` (older than 0.9.4): the
-    /// pane says so instead. A cancelled read (the pane went away) changes nothing, and only the newest read
-    /// sets the state.
+    /// Reads every key through `-g config --json`. A cancelled read (the pane went away) changes nothing, and only
+    /// the newest read sets the state.
     public func loadGlobalSettings(in context: Context) async {
-        guard !isGlobalPreloaded, context.capabilities.supports(.config) else { return }
+        guard !isGlobalPreloaded else { return }
         globalGeneration += 1
         let generation = globalGeneration
         do throws(CLIError) {

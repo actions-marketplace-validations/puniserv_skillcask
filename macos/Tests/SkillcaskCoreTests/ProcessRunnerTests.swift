@@ -173,8 +173,8 @@ import os
 
     @Test func versionGateThroughTheClient() async throws {
         let version = try Fixture.invocation(.version, in: scope)
-        #expect(try await runner().capabilities(via: version) == Capabilities(version: Version(0, 9, 1)))
-        await #expect(throws: CLIError.tooOld(found: Version(0, 8, 0), needs: Version(0, 9, 1))) {
+        #expect(try await runner().capabilities(via: version) == Capabilities(version: Version(0, 9, 4)))
+        await #expect(throws: CLIError.tooOld(found: Version(0, 8, 0), needs: Version(0, 9, 4))) {
             try await runner(mode: "old").capabilities(via: version)
         }
         await #expect {

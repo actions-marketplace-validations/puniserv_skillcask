@@ -32,23 +32,15 @@ import Testing
         #expect(["modified", "not installed"].contains(bad[0].state))
     }
 
-    @Test func dependencyLabelSplitsIntoPackageAndVia() throws {
+    @Test func dependencyCarriesItsRequirersInVia() throws {
         let synthetic = #"""
-            {"entries":[{"adopt":null,"ok":true,"package":"acme/dep (via acme/one, acme/two)","skill":"d","state":"ok","version":"1.0.0"},{"adopt":null,"ok":false,"package":"acme/gone","skill":null,"state":"not in skills.lock","version":null}],"ok":false}
+            {"entries":[{"adopt":null,"ok":true,"package":"acme/dep","skill":"d","state":"ok","version":"1.0.0","via":["acme/one","acme/two"],"description":"Does d.","added-later":1},{"adopt":null,"ok":false,"package":"acme/gone","skill":null,"state":"not in skills.lock","version":null,"via":null}],"ok":false}
             """#
         let doc = try JSONDecoder().decode(StatusDocument.self, from: Data(synthetic.utf8))
-        #expect(doc.entries[0].package == "acme/dep")
+        #expect(doc.entries[0].package == "acme/dep" && doc.entries[0].description == "Does d.")
         #expect(doc.entries[0].via == ["acme/one", "acme/two"])
         #expect(doc.entries[1].package == "acme/gone" && doc.entries[1].via.isEmpty && doc.entries[1].skill == nil)
         #expect(doc.policy.isEmpty && doc.repositories.isEmpty && doc.targets == nil)
-    }
-
-    @Test func plannedViaKeyWinsOverTheLabel() throws {
-        let synthetic = #"""
-            {"entries":[{"ok":true,"package":"acme/dep","via":["acme/one"],"skill":"d","state":"ok","version":"1.0.0","description":"Does d.","added-later":1}],"ok":true}
-            """#
-        let entry = try JSONDecoder().decode(StatusDocument.self, from: Data(synthetic.utf8)).entries[0]
-        #expect(entry.via == ["acme/one"] && entry.description == "Does d.")
     }
 
     @Test func plannedSourceKeyIsOptional() throws {
@@ -65,17 +57,6 @@ import Testing
             """#
         let doc = try JSONDecoder().decode(StatusDocument.self, from: Data(synthetic.utf8))
         #expect(doc.entries.map(\.adopt) == ["github:JuliusBrussee/caveman/cavecrew", nil])
-    }
-
-    @Test(arguments: [
-        ("acme/dep (via acme/one)", "acme/dep", ["acme/one"]),
-        ("acme/dep (via acme/one, acme/two)", "acme/dep", ["acme/one", "acme/two"]),
-        ("acme/plain", "acme/plain", []),
-        ("odd (via", "odd (via", []),
-    ])
-    func splitVia(label: String, name: String, via: [String]) {
-        let split = StatusDocument.Entry.splitVia(label)
-        #expect(split.name == name && split.via == via)
     }
 }
 

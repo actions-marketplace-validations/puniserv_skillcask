@@ -8,7 +8,7 @@ extension PreviewRegistry {
     /// Overview-States panel: `attention` (api, the Overview board), `healthy` (website), `loading` (api before
     /// its first status), `noProjects` (My Skills with an empty sidebar), `notSetUp` (infra-playbooks) and
     /// `repaired` (api after Repair, Health-States "After Repair" as a card). `cli` comes first: `attention` over
-    /// api exactly as the 0.9.1 CLI prints it (`DesignFixtures.apiCLI`); `attention`, `loading` and `repaired`
+    /// api exactly as the 0.9.4 CLI prints it (`DesignFixtures.apiCLI`); `attention`, `loading` and `repaired`
     /// draw api's planned shape (`source`/`description` keys, caveman not managed in a project scope).
     static let overview: [Entry] = [
         entry("cli") { OverviewSample(.cli) },

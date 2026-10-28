@@ -9,7 +9,7 @@ import SkillcaskCore
 /// `puniserv/homebrew-tap` (README "Install": `brew install puniserv/tap/skillcask`). The upgrade command names the
 /// tap too (`brew upgrade puniserv/tap/skillcask`, a decision), where the board writes the bare
 /// `brew upgrade skillcask`, which would be ambiguous if a core formula of that name ever existed. Needed is
-/// `Capabilities.minimum` (0.9.1), where the board writes 0.9.0.
+/// `Capabilities.minimum` (0.9.4), where the board writes 0.9.0.
 ///
 /// Invented (no board source): `notATool`, `locatedTooOld(found:needs:)` (why Locate… refused a file) and
 /// `detecting` (the spinner's accessibility label while Try Again re-detects).
@@ -52,7 +52,7 @@ public enum OnboardingCopy {
         guard let path else { return "\(version)" }
         return "\(version) at \((path as NSString).abbreviatingWithTildeInPath)"
     }
-    /// `0.9.1 or newer`.
+    /// `0.9.4 or newer`.
     public static func neededValue(_ version: Version) -> String {
         "\(version) or newer"
     }
@@ -72,7 +72,7 @@ public enum OnboardingCopy {
 
     /// Locate… refused a file that is not the tool (not executable, or `--version` printed no version).
     public static let notATool = "That file isn’t the skillcask command-line tool."
-    /// Locate… refused a copy older than the app needs: `That copy is 0.8.0; Skillcask needs 0.9.1 or newer.`
+    /// Locate… refused a copy older than the app needs: `That copy is 0.8.0; Skillcask needs 0.9.4 or newer.`
     public static func locatedTooOld(found: Version, needs: Version) -> String {
         "That copy is \(found); Skillcask needs \(neededValue(needs))."
     }

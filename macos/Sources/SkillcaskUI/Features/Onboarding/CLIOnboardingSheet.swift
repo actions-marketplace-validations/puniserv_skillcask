@@ -15,7 +15,7 @@ import SwiftUI
 ///   Homebrew command on the pasteboard.
 ///
 /// Declared deviations from the boards: the command is `type.mono` (12 pt) where they draw 13 pt (no such token);
-/// Needed reads `Capabilities.minimum` (0.9.1), where the board writes 0.9.0; the upgrade command names the tap
+/// Needed reads `Capabilities.minimum` (0.9.4), where the board writes 0.9.0; the upgrade command names the tap
 /// (`OnboardingCopy.upgradeCommand`).
 struct CLIOnboardingSheet: View {
     @Environment(AppStore.self) private var app

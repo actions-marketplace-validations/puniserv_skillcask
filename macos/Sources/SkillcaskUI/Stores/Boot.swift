@@ -75,7 +75,7 @@ public enum Boot {
     /// live in their own defaults suite, reset on every boot, so demo runs never touch the user's settings.
     /// `manifestExists` replaces the board's check (every folder but infra-playbooks has a skills.toml). `api` is
     /// the api scope's snapshot: the boards' `DesignFixtures.api` (planned `status` keys), or `.apiCLI` for the
-    /// scope exactly as the 0.9.1 CLI prints it.
+    /// scope exactly as the 0.9.4 CLI prints it.
     @MainActor public static func fixtures(
         selecting scope: Scope? = apiScope, selection: SkillEntry.ID? = "pdf", sheet: AppStore.Sheet? = nil,
         manifestExists: (@Sendable (URL) -> Bool)? = nil, api: ScopeSnapshot = DesignFixtures.api

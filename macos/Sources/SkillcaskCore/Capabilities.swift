@@ -5,8 +5,6 @@ public struct Capabilities: Hashable, Sendable {
     public enum Feature: String, CaseIterable, Hashable, Sendable {
         /// `init`, `install`, `update`, `add` and `remove` print one JSON document with `--json`.
         case jsonMutations
-        /// `status --json` entries carry `via` instead of a `name (via requirer)` package label.
-        case statusVia
         /// `status --json` entries carry `description`.
         case statusDescription
         /// `outdated --json` packages carry `eligible` (RFC 3339) instead of a free-text `note`.
@@ -17,7 +15,7 @@ public struct Capabilities: Hashable, Sendable {
         /// `outdated --json` packages carry `released` (RFC 3339): when `latest` was published. Planned, not
         /// shipped: the Versions tab's release dates need it.
         case outdatedReleased
-        /// Planned: `audit --json` also lists not-managed skills with `kind: "not managed"`. At 0.9.1 `audit`
+        /// Planned: `audit --json` also lists not-managed skills with `kind: "not managed"`. At 0.9.4 `audit`
         /// builds its rows from the lock, the hand-written and the project skills only, so a not-managed skill
         /// has no findings and no reach until this ships.
         case auditNotManaged
@@ -29,18 +27,16 @@ public struct Capabilities: Hashable, Sendable {
         case addSkill
         /// `diff --json`.
         case diffJSON
-        /// `skillcask config [-g] [--json] <key> [<value>…]` (D48): reads a setting with its layer as
-        /// `{"value", "from"}` and writes it without running anything else. 0.9.4.
-        case config
     }
 
-    /// The oldest CLI the app drives: 0.9.1 has every `--json` document the app reads (D32, D40–D42).
-    public static let minimum = Version(0, 9, 1)
+    /// The oldest CLI the app drives: 0.9.4 has every `--json` document the app reads (D32, D40–D42), `status
+    /// --json` keeps `package` a bare name with the requirers in `via`, and `config` reads and writes settings
+    /// (D48).
+    public static let minimum = Version(0, 9, 4)
 
-    /// The release that shipped each feature. A feature that is only planned has no entry, so it stays off.
-    /// 0.9.4 (upstream `184fb5e`, `a9358da`): `status --json` keeps `package` a bare name with the requirers in
-    /// `via`, and `config` exists (D48).
-    static let shipped: [Feature: Version] = [.statusVia: Version(0, 9, 4), .config: Version(0, 9, 4)]
+    /// The release that shipped each feature beyond `minimum`. A feature that is only planned has no entry, so it
+    /// stays off; none has shipped yet.
+    static let shipped: [Feature: Version] = [:]
 
     public let version: Version
     public let features: Set<Feature>

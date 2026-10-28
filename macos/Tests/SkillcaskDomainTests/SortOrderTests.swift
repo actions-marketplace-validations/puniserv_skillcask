@@ -27,7 +27,7 @@ import Testing
     }
 
     @Test func sourceGroupsByKindThenName() {
-        // At 0.9.1 `status` prints no `source`, so only the adopt spec (z → GitHub), the project skill (notes)
+        // At 0.9.4 `status` prints no `source`, so only the adopt spec (z → GitHub), the project skill (notes)
         // and the hand-written skill (mine) have a kind; the four package rows have none and sort last, by name.
         let sorted = SortOrder.source.apply(entries).map(\.name)
         #expect(sorted == ["z", "notes", "mine", "acme/gone", "d", "jira-communication", "jira-syntax"])

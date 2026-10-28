@@ -174,7 +174,7 @@ public enum SecurityCopy {
 
     /// The bold lead of the not-audited strip. Invented: no board draws the state (Q7).
     public static let notAuditedTitle = "Not audited."
-    /// A not managed skill on a CLI whose `audit` lists only the skills it manages (0.9.1). Invented (Q7).
+    /// A not managed skill on a CLI whose `audit` lists only the skills it manages (0.9.4). Invented (Q7).
     public static let notAuditedNotManaged = "The command-line tool scans only the skills it manages."
     /// Any other row `audit` did not list (the audit failed or has not run). Invented.
     public static let notAuditedOther = "The last scan did not include this skill."

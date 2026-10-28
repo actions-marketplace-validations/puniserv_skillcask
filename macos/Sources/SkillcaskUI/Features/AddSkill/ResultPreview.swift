@@ -8,7 +8,7 @@ import SwiftUI
 /// (AddSkill-States failures), with the action the CLI's hint suggests.
 ///
 /// Gated on the CLI (`Capabilities`): the provided skills are checkboxes only with `add --skill`, read-only and all
-/// ticked otherwise; the name-clash rename field shows only with `add --rename` (on 0.9.1 the clash is the CLI's
+/// ticked otherwise; the name-clash rename field shows only with `add --rename` (on 0.9.4 the clash is the CLI's
 /// error and hint after Add).
 struct ResultPreview: View {
     @Bindable var search: SearchStore

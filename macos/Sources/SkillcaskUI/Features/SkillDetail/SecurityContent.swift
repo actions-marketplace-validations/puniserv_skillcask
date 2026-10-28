@@ -7,7 +7,7 @@ import SkillcaskDomain
 struct SecurityContent: Hashable {
     /// Which board state the tab is in.
     enum State: Hashable {
-        /// `audit` did not list the row (Q7: a not managed skill on 0.9.1, or no audit): a strip, nothing else.
+        /// `audit` did not list the row (Q7: a not managed skill on 0.9.4, or no audit): a strip, nothing else.
         case notAudited(notManaged: Bool)
         /// No findings and no reach: the all-clear sentence is the whole tab (Security-States "Clean").
         case clean

@@ -4,7 +4,7 @@ import SkillcaskCore
 ///
 /// Adopt is `skillcask -g add --adopt -- <spec>` (D38): `src/commands.rs` `adopt` refuses any scope but the
 /// personal one ("--adopt applies only with --global"), so in a project `isAvailable` is false and `command`
-/// builds nothing. On 0.9.1 `status` reports not managed rows only for `-g` (`not_managed` returns nothing for a
+/// builds nothing. On 0.9.4 `status` reports not managed rows only for `-g` (`not_managed` returns nothing for a
 /// project), so a project row reaches the sheet only from a newer CLI or the design fixtures; the sheet then says
 /// why it cannot adopt rather than offer a button that fails.
 ///

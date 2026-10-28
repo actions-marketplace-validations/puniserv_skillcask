@@ -64,7 +64,7 @@ private struct ActivitySample: View {
 
     /// The board's six rows as production records them, at the board's clock times (today, on this Mac) and
     /// durations (`DesignFixtures.activity`). Titles and commands come from the app's own Copy and `Invocation`,
-    /// not the board's sketch: the update has no `--json` at 0.9.1, and a window Sync fails as "Couldn’t sync"
+    /// not the board's sketch: the update has no `--json` at 0.9.4, and a window Sync fails as "Couldn’t sync"
     /// (the scope is the window's). Two runs (the update in its sheet, Sync and Check from the toolbar) and three
     /// reads the user started (Review Update's `diff`, Check for updates, opening api). The failed Sync carries
     /// the CLI's two stderr lines and the proxy name Settings gave it.

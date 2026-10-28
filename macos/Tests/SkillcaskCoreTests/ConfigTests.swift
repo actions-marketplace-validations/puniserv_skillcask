@@ -3,10 +3,10 @@ import Testing
 
 @testable import SkillcaskCore
 
-/// `-g config --json` and its refusals as 0.9.4 prints them (`Fixtures/config-0.9.4`, README there).
+/// `-g config --json` and its refusals as 0.9.4 prints them (`Fixtures/0.9.4`, README there).
 @Suite struct ConfigTests {
-    static let directory = "config-0.9.4"
-    let capabilities = Capabilities(version: Version(0, 9, 4))
+    static let directory = "0.9.4"
+    let capabilities = Capabilities(version: Capabilities.minimum)
 
     func list(_ name: String) throws -> ConfigListDocument {
         try Fixture.decode(ConfigListDocument.self, Self.directory, name)

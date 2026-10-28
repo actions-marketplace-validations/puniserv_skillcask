@@ -5,8 +5,8 @@ public struct StatusDocument: Decodable, Hashable, Sendable {
     public struct Entry: Decodable, Hashable, Sendable {
         /// The package name alone; nil for a project, hand-written or not managed skill.
         public let package: String?
-        /// The packages that require this one when it is a dependency rather than a manifest entry. Until
-        /// `Capabilities.Feature.statusVia`, parsed from the `name (via a, b)` label the CLI prints.
+        /// The packages that require this one when it is a dependency rather than a manifest entry (`via`, `null`
+        /// otherwise).
         public let via: [String]
         public let version: String?
         public let skill: String?
@@ -36,10 +36,8 @@ public struct StatusDocument: Decodable, Hashable, Sendable {
 
         public init(from decoder: any Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
-            let label = try c.decodeIfPresent(String.self, forKey: .package)
-            let split = label.map(Self.splitVia)
-            package = split?.name
-            via = try c.decodeIfPresent([String].self, forKey: .via) ?? split?.via ?? []
+            package = try c.decodeIfPresent(String.self, forKey: .package)
+            via = try c.decodeIfPresent([String].self, forKey: .via) ?? []
             version = try c.decodeIfPresent(String.self, forKey: .version)
             skill = try c.decodeIfPresent(String.self, forKey: .skill)
             state = try c.decode(String.self, forKey: .state)
@@ -47,13 +45,6 @@ public struct StatusDocument: Decodable, Hashable, Sendable {
             adopt = try c.decodeIfPresent(String.self, forKey: .adopt)
             description = try c.decodeIfPresent(String.self, forKey: .description)
             source = try c.decodeIfPresent(String.self, forKey: .source)
-        }
-
-        /// `acme/dep (via acme/one, acme/two)` → (`acme/dep`, [`acme/one`, `acme/two`]).
-        static func splitVia(_ label: String) -> (name: String, via: [String]) {
-            guard label.hasSuffix(")"), let range = label.range(of: " (via ") else { return (label, []) }
-            let list = label[range.upperBound..<label.index(before: label.endIndex)]
-            return (String(label[..<range.lowerBound]), list.split(separator: ", ").map(String.init))
         }
     }
 

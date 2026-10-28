@@ -62,7 +62,7 @@ public enum AdoptCopy {
     public static let change = "Change…"
 
     /// What adopting writes. Invented: the board's "with the rule “Up to next major” (^4.0) and pins v4.0.1" names a
-    /// constraint and a version the app cannot know before `add` resolves them (0.9.1 prints no document).
+    /// constraint and a version the app cannot know before `add` resolves them (0.9.4 prints no document).
     public static func knownNote(skill: String) -> String {
         "Adds \(skill) to your \(ShellCopy.personal) skills.toml and pins the version it installs in skills.lock."
     }

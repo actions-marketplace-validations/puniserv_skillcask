@@ -47,7 +47,7 @@ import UniformTypeIdentifiers
     }
 
     /// Settings › Advanced, `Open config.toml`: the file in its default app; Finder at its folder when it does not
-    /// exist yet (the CLI writes it on the first `--remember`), the nearest existing parent past that.
+    /// exist yet (the CLI writes it on the first setting it saves), the nearest existing parent past that.
     static func openOrReveal(_ file: URL) {
         if FileManager.default.fileExists(atPath: file.path) {
             NSWorkspace.shared.open(file)

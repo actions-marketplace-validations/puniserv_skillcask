@@ -5,7 +5,7 @@ extension PreviewRegistry {
     /// The Main board's list (the api scope's 14 rows, worst first, pdf selected) in a real `List` so the
     /// system draws the selection; the same list offline and stale; and the Components region: one row per
     /// trailing variant plus the project, dependency and not managed rows on the window surface. `cli` comes first:
-    /// the same list over `DesignFixtures.apiCLI`, the api scope as the 0.9.1 CLI prints it (no descriptions, no
+    /// the same list over `DesignFixtures.apiCLI`, the api scope as the 0.9.4 CLI prints it (no descriptions, no
     /// not managed row); the others draw api's planned shape.
     static let rows: [Entry] = [
         Entry(id: "P2-5", state: "cli", size: rowsListSize) { AnyView(RowsList(snapshot: DesignFixtures.apiCLI)) },
@@ -60,7 +60,7 @@ private struct RowsList: View {
 /// The Components board's "Skill row" region: installed, update, changed on disk, not installed, not managed,
 /// project skill (quiet), project with findings, dependency, cooldown, blocked by policy, then the selected row
 /// on the system accent. The rows come from `DesignFixtures.api`, a planned shape: their descriptions are the
-/// unshipped `status.description` key, and the not managed caveman row sits in a project scope, which 0.9.1 never
+/// unshipped `status.description` key, and the not managed caveman row sits in a project scope, which 0.9.4 never
 /// reports.
 private struct RowVariants: View {
     /// my-notes with a clean audit: the board's quiet "Project skill" row (ok dot, `.skills/my-notes` · Project).

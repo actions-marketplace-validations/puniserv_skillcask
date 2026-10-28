@@ -7,7 +7,7 @@ extension PreviewRegistry {
     /// panel: `findings` (my-notes, the Security board), `clean` (commit-message), `changedOnDisk` (jira-syntax
     /// with a `modified` finding: a package skill, so Reinstall from lock shows), `notInstalled` (sql-review with
     /// the CLI's `modified` / `not installed` finding; no board draws it), `reachOnly` (pdf), and `notAudited`
-    /// (caveman as a 0.9.1 `audit` leaves it: no row, Q7; the row itself is a planned shape, a not managed skill in
+    /// (caveman as a 0.9.4 `audit` leaves it: no row, Q7; the row itself is a planned shape, a not managed skill in
     /// a project scope). The CLI reports `modified` for locked skills only, so
     /// no hand-written changed-on-disk state is rendered.
     /// Composed from `DetailHeader` and `SecurityTab` as `SkillDetailView` composes them, so no store is needed.
@@ -46,7 +46,7 @@ private let notInstalledSqlReview: SkillEntry = {
         description: sql.description, reach: sql.reach)
 }()
 
-/// caveman as the 0.9.1 CLI reports it: `audit` lists no not managed skill, so the row has no reach and no findings.
+/// caveman as the 0.9.4 CLI reports it: `audit` lists no not managed skill, so the row has no reach and no findings.
 private let unauditedCaveman: SkillEntry = {
     let caveman = DesignFixtures.caveman
     return SkillEntry(

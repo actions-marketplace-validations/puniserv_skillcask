@@ -213,11 +213,11 @@ public struct RemovePlan: Hashable, Sendable {
     /// The skills.toml entry a row stands for, as `deps::wanted` roots its walk at every manifest entry: a package
     /// row, or a package-only row that `status` prints for a drifted manifest entry (`constraint changed …`,
     /// `not in skills.lock`, …). A `not in skills.toml` row is a lock-only package and a package-only row with a
-    /// `via` list is a drifted dependency (`src/commands.rs` status, the `(via …)` label): neither is a root.
+    /// `via` list is a drifted dependency (`src/commands.rs` status, its `via` key): neither is a root.
     static func manifestPackage(of entry: SkillEntry) -> String? {
         switch entry.kind {
         case .package(let package): return package
-        // A drifted dependency (`name (via a, b)` with no skill) is no manifest entry either.
+        // A drifted dependency (a `via` list and no skill) is no manifest entry either.
         case .packageOnly(let package): return entry.state == .notInManifest || !entry.via.isEmpty ? nil : package
         case .dependency, .project, .handWritten, .notManaged: return nil
         }

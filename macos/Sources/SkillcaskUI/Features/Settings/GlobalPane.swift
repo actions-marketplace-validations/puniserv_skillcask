@@ -2,34 +2,30 @@ import SkillcaskCore
 import SwiftUI
 
 /// Settings › Global (no board; after the maintainer's Settings window in upstream `eca0f53`): every key of
-/// config.toml that `skillcask -g config --json` lists (D48, 0.9.4), one Settings row each, with its value, the
+/// config.toml that `skillcask -g config --json` lists (D48), one Settings row each, with its value, the
 /// layer it comes from, and a system control to change it through `CLISettingsStore`. A boolean is a switch that
 /// writes at once; a list or a string is shown in mono and edited in place (Edit, then Save or Cancel); a key
 /// config.toml sets has Unset, except an enforced one (the CLI refuses to unset it while `policy.enforce` lists it). Read-only, with the reason under it: a key a `SKILLCASK_*` variable sets (the
 /// environment wins over the file) and `allow-sources` holding a URL (shown redacted, so writing it back would
 /// drop its credentials). An enforced key stays editable: with `-g` config.toml is the user's own file, the CLI
-/// accepts the change, and enforcement only stops projects from loosening it. A CLI older than 0.9.4 gets a
-/// sentence instead of the list.
+/// accepts the change, and enforcement only stops projects from loosening it.
 struct GlobalPane: View {
     @Environment(AppStore.self) private var app
 
     /// The key being edited and its text; previews seed it.
     @State private var editing: String?
     @State private var draft: String
-    /// Previews draw a CLI version the fixture boot does not have.
-    private let capabilitiesOverride: Capabilities?
 
-    init(editing: String? = nil, draft: String = "", capabilitiesOverride: Capabilities? = nil) {
+    init(editing: String? = nil, draft: String = "") {
         _editing = State(initialValue: editing)
         _draft = State(initialValue: draft)
-        self.capabilitiesOverride = capabilitiesOverride
     }
 
     var body: some View {
         SettingsPane {
             content
         }
-        .task(id: capabilities) {
+        .task(id: app.capabilities) {
             if let context = app.cliContext {
                 await store.loadGlobalSettings(in: context)
             }
@@ -40,14 +36,8 @@ struct GlobalPane: View {
         app.cliSettings
     }
 
-    private var capabilities: Capabilities? {
-        capabilitiesOverride ?? app.capabilities
-    }
-
     @ViewBuilder private var content: some View {
-        if let capabilities, !capabilities.supports(.config) {
-            MessageStrip(.warning, text: SettingsCopy.globalNeedsNewerCLI(capabilities.version), density: .strip)
-        } else if capabilities == nil {
+        if app.capabilities == nil {
             MessageStrip(.warning, text: SettingsCopy.globalNeedsCLI, density: .strip)
         } else if let failure = store.globalSettingsFailure {
             MessageStrip(.error, title: failure.title, text: failure.reason ?? failure.action ?? "", density: .compact)

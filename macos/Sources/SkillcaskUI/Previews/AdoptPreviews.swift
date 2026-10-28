@@ -9,7 +9,7 @@ extension PreviewRegistry {
     /// `unknownInvalid` (a typed source that is not one of the three shapes), `singleFailure` (the run failed, the
     /// sheet stays open), `batch` (the checklist, collapsed as the board draws it), `batchExpanded` (after "… 6 more"),
     /// `needsSource` (a "needs a source" row narrowed to, with Back), `batchProgress` (4 of 9 midway), `batchFailed` (a failure stopped
-    /// the rest) and `project` (the api project, where the CLI does not adopt; a planned shape: 0.9.1 reports no not
+    /// the rest) and `project` (the api project, where the CLI does not adopt; a planned shape: 0.9.4 reports no not
     /// managed row in a project scope, so this sheet is only reachable on a later CLI). The Remove alert is a system alert
     /// and is not rendered; `RemoveTests` pins its words. `singleProgress` ("Adopting caveman…" with the
     /// CLI's lines), `knownLatest` (Latest chosen; `known` shows the CLI's default rule) and `batchDone` (each row's version and "copy kept").

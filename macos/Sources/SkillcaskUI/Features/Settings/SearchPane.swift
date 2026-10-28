@@ -2,7 +2,7 @@ import SkillcaskCore
 import SwiftUI
 
 /// Settings › Search (Settings board, right window): the skills.sh switch, which reads and writes `[search]
-/// skills-sh` in config.toml through `CLISettingsStore`, the sources searched for the open project, and the
+/// skills-sh` in config.toml through `CLISettingsStore` (`-g config`), the sources searched for the open project, and the
 /// ranking footnote.
 struct SearchPane: View {
     @Environment(AppStore.self) private var app
@@ -20,9 +20,6 @@ struct SearchPane: View {
                             .disabled(app.cliContext == nil || store.isWritingConfig)
                         VStack(alignment: .leading, spacing: Spacing.xs) {
                             SettingsNote(note)
-                            if CLISettingsStore.flipRunsSearch(app.capabilities) {
-                                SettingsCaption(SettingsCopy.skillsShSideEffect)
-                            }
                             if let failure = store.skillsShFailure {
                                 MessageStrip(
                                     .error, title: failure.title, text: failure.reason ?? failure.action ?? "",
@@ -41,8 +38,6 @@ struct SearchPane: View {
         .task(id: app.capabilities) {
             if let context = app.cliContext {
                 await store.loadSkillsSh(in: context)
-            } else {
-                await store.loadSkillsSh(from: app.configFile())
             }
         }
     }
