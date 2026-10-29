@@ -77,30 +77,59 @@ struct ActivityDrawer: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    if let running = runner.current {
-                        ActivityRow(
-                            running: running, isFirst: true, isExpanded: runner.expandedActivity.contains(running.id),
-                            onToggle: { runner.toggleExpanded(running.id) }
-                        )
-                        .id(running.id)
-                    }
-                    ForEach(Array(runner.activity.enumerated()), id: \.element.id) { index, entry in
-                        ActivityRow(
-                            entry: entry, isFirst: index == 0 && runner.current == nil,
-                            isExpanded: runner.expandedActivity.contains(entry.id),
-                            onToggle: { runner.toggleExpanded(entry.id) },
-                            onCopy: { Self.copy(ActivityCopy.copyText(of: entry)) },
-                            onRevealLock: entry.mayHaveWrittenLock ? { revealLock(of: entry) } : nil
-                        )
-                        .id(entry.id)
+                    let items = Self.items(current: runner.current, activity: runner.activity)
+                    ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                        row(item, isFirst: index == 0)
+                            .id(item.id)
                     }
                 }
             }
             .onChange(of: runner.activityFocus, initial: true) {
                 guard let id = runner.activityFocus else { return }
-                proxy.scrollTo(id, anchor: .top)
+                proxy.scrollTo(Item.ID.finished(id), anchor: .top)
                 runner.clearActivityFocus()
             }
+        }
+    }
+
+    /// A row of the drawer: the run in flight on top, then the finished runs. The running row's identity never
+    /// equals its finished entry's, although both carry the run's UUID: when a run ends, `current` clears and its
+    /// entry is inserted in one turn, and a `LazyVStack` that saw one id move from the running row to the entry
+    /// kept drawing the stale running cell, its timer ticking, until the drawer was reopened.
+    enum Item: Identifiable {
+        case running(ActionRunner.RunningAction)
+        case finished(ActionRunner.ActivityEntry)
+
+        enum ID: Hashable {
+            case running(UUID)
+            case finished(UUID)
+        }
+
+        var id: ID {
+            switch self {
+            case .running(let action): .running(action.id)
+            case .finished(let entry): .finished(entry.id)
+            }
+        }
+    }
+
+    /// The drawer's rows, newest first.
+    static func items(current: ActionRunner.RunningAction?, activity: [ActionRunner.ActivityEntry]) -> [Item] {
+        (current.map { [.running($0)] } ?? []) + activity.map { .finished($0) }
+    }
+
+    @ViewBuilder private func row(_ item: Item, isFirst: Bool) -> some View {
+        switch item {
+        case .running(let running):
+            ActivityRow(
+                running: running, isFirst: isFirst, isExpanded: runner.expandedActivity.contains(running.id),
+                onToggle: { runner.toggleExpanded(running.id) })
+        case .finished(let entry):
+            ActivityRow(
+                entry: entry, isFirst: isFirst, isExpanded: runner.expandedActivity.contains(entry.id),
+                onToggle: { runner.toggleExpanded(entry.id) },
+                onCopy: { Self.copy(ActivityCopy.copyText(of: entry)) },
+                onRevealLock: entry.mayHaveWrittenLock ? { revealLock(of: entry) } : nil)
         }
     }
 
