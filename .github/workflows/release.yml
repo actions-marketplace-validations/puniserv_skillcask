@@ -373,6 +373,93 @@ jobs:
             npm publish --access public "./npm/${pkg}"
           done
 
+  # Hand edit: the macOS app with the released CLI inside, signed with a Developer ID, notarized and
+  # attached to the release (docs/specs/2026-10-28-macos-app-release.md). It runs for pre-releases
+  # too. The signing secrets live in the `release` environment, which waits for a reviewer and only
+  # deploys from `v*` tags.
+  publish-macos-app:
+    needs:
+      - plan
+      - host
+    runs-on: macos-26
+    timeout-minutes: 60
+    environment: release
+    permissions:
+      "contents": "write"
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ needs.plan.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The Xcode CI's macos-app job passes on.
+      - run: sudo xcode-select -s /Applications/Xcode_26.6.app
+      - name: Fetch the released CLI
+        run: |
+          cli="$RUNNER_TEMP/cli"
+          mkdir -p "$cli" && cd "$cli"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern 'skillcask-*-apple-darwin.tar.xz*'
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            shasum -a 256 -c "skillcask-$target.tar.xz.sha256"
+            tar -xJf "skillcask-$target.tar.xz"
+          done
+          lipo -create -output skillcask skillcask-aarch64-apple-darwin/skillcask skillcask-x86_64-apple-darwin/skillcask
+      - name: Import the signing certificate
+        env:
+          P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          P12_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        # `security import`, not OpenSSL: Keychain exports the .p12 with RC2-40, which OpenSSL 3+ reads
+        # only with -legacy.
+        run: |
+          kc="$RUNNER_TEMP/signing.keychain-db"
+          kp=$(openssl rand -hex 16)
+          (umask 077 && echo "$P12" | base64 --decode > "$RUNNER_TEMP/cert.p12")
+          security create-keychain -p "$kp" "$kc"
+          security set-keychain-settings -lut 21600 "$kc"
+          security unlock-keychain -p "$kp" "$kc"
+          security import "$RUNNER_TEMP/cert.p12" -k "$kc" -f pkcs12 -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$kp" "$kc" > /dev/null
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/cert.p12"
+      - name: Build and sign
+        env:
+          SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+        run: SKILLCASK_CLI="$RUNNER_TEMP/cli/skillcask" macos/bundle.sh
+      - name: Notarize and staple
+        env:
+          P8: ${{ secrets.APP_STORE_CONNECT_API_KEY_P8 }}
+          KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ISSUER: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          key="$RUNNER_TEMP/key.p8"
+          (umask 077 && echo "$P8" | base64 --decode > "$key")
+          cd macos/.build
+          zip=$(ls Skillcask-*-macos-universal.zip)
+          # --wait exits 0 on an Invalid submission too, so the status decides.
+          xcrun notarytool submit "$zip" --key "$key" --key-id "$KEY_ID" --issuer "$ISSUER" \
+            --wait --timeout 30m --output-format json > "$RUNNER_TEMP/notary.json"
+          cat "$RUNNER_TEMP/notary.json"
+          if [ "$(jq -r .status "$RUNNER_TEMP/notary.json")" != Accepted ]; then
+            xcrun notarytool log "$(jq -r .id "$RUNNER_TEMP/notary.json")" --key "$key" --key-id "$KEY_ID" --issuer "$ISSUER" || true
+            exit 1
+          fi
+          xcrun stapler staple Skillcask.app
+          xcrun stapler validate Skillcask.app
+          spctl -a -vv Skillcask.app 2>&1 | tee "$RUNNER_TEMP/spctl.txt"
+          grep -q 'source=Notarized Developer ID' "$RUNNER_TEMP/spctl.txt"
+          # bundle.sh zipped the app before the staple, so that zip carries no ticket.
+          rm "$zip"
+          ditto -c -k --keepParent Skillcask.app "$zip"
+          shasum -a 256 -b "$zip" > "$zip.sha256"
+      - name: Attach to the release
+        run: gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" macos/.build/Skillcask-*-macos-universal.zip*
+      - name: Remove the keychain and the API key
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
+          rm -f "$RUNNER_TEMP/key.p8" "$RUNNER_TEMP/cert.p12"
+
   announce:
     needs:
       - plan
