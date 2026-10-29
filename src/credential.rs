@@ -51,10 +51,14 @@ fn field(out: &str, key: &str) -> Option<String> {
     out.lines().find_map(|l| l.strip_prefix(key)?.strip_prefix('=')).filter(|v| !v.is_empty()).map(String::from)
 }
 
-/// (username, password) git's helper holds for `https://<host>`.
+/// (username, password) git's helper holds for `https://<host>`. The usernames `auth set` stores
+/// come first: without a username the Keychain returns the first entry for the host, often the
+/// user's own git login, which the GitLab API ignores and answers 404.
 pub fn fill(host: &str) -> Option<(String, String)> {
-    let out = git("fill", &describe(host, None, None), false)?;
-    Some((field(&out, "username")?, field(&out, "password")?))
+    [Some(PRIVATE_TOKEN), Some(OAUTH2), None].into_iter().find_map(|user| {
+        let out = git("fill", &describe(host, user, None), false)?;
+        Some((field(&out, "username")?, field(&out, "password")?))
+    })
 }
 
 /// Stores a token for `host` with git's helper. `token`: from a pipe; `None` lets git prompt

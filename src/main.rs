@@ -244,6 +244,8 @@ enum Cmd {
     },
     /// Browse, add, update and remove skills in a terminal UI; it runs this binary for every step.
     Ui,
+    /// Open the macOS app (brew install puniserv/tap/skillcask-app).
+    App,
     /// Any other command runs `skillcask-<command>` from PATH, like git and cargo plugins.
     #[command(external_subcommand)]
     External(Vec<OsString>),
@@ -271,7 +273,8 @@ fn run(cli: Cli) -> Result<(), Error> {
         unpacked: cli.max_unpacked.unwrap_or(d.unpacked),
         files: cli.max_files.unwrap_or(d.files),
     };
-    if cli.global && matches!(cli.cmd, Cmd::External(_) | Cmd::Publish { .. } | Cmd::Auth(_) | Cmd::Validate { .. } | Cmd::Projects { .. })
+    if cli.global
+        && matches!(cli.cmd, Cmd::External(_) | Cmd::Publish { .. } | Cmd::Auth(_) | Cmd::Validate { .. } | Cmd::Projects { .. } | Cmd::App)
     {
         return Err(Error::new(MANIFEST, "--global does not apply to this command"));
     }
@@ -289,6 +292,9 @@ fn run(cli: Cli) -> Result<(), Error> {
     }
     if let Cmd::Ui = cli.cmd {
         return tui::run(cli.global);
+    }
+    if let Cmd::App = cli.cmd {
+        return app();
     }
     let scope = if cli.global {
         Scope::global()?
@@ -335,7 +341,7 @@ fn run(cli: Cli) -> Result<(), Error> {
             commands::search(&ctx, query.as_deref(), json, choice, remember)
         }
         Cmd::Config { key, value, unset, json } => config::run(&ctx.s, key.as_deref(), &value, unset, json),
-        Cmd::External(_) | Cmd::Auth(_) | Cmd::Validate { .. } | Cmd::Projects { .. } | Cmd::Ui => unreachable!("handled above"),
+        Cmd::External(_) | Cmd::Auth(_) | Cmd::Validate { .. } | Cmd::Projects { .. } | Cmd::Ui | Cmd::App => unreachable!("handled above"),
         Cmd::Publish { vendor, base_url, dist_url, inline, out, paths } => {
             if vendor.is_empty() {
                 return Err(Error::new(MANIFEST, "--vendor must not be empty"));
@@ -364,6 +370,24 @@ fn auth(cmd: &AuthCmd) -> Result<(), Error> {
             ui::done("stored", format!("a {chars}-character token for {key} with git's credential helper ({helpers})"));
         }
         AuthCmd::Remove { .. } => credential::remove(&key, username)?,
+    }
+    Ok(())
+}
+
+/// Opens the macOS app through LaunchServices, wherever it is installed (D50).
+fn app() -> Result<(), Error> {
+    if !cfg!(target_os = "macos") {
+        return Err(Error::new(MANIFEST, "skillcask app is a macOS app").hint("use skillcask ui on this system"));
+    }
+    let out = std::process::Command::new("/usr/bin/open")
+        .args(["-b", "io.github.puniserv.skillcask"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| Error::new(error::IO, format!("open: {e}")))?;
+    if !out.status.success() {
+        return Err(Error::new(MANIFEST, "Skillcask.app is not installed").hint(
+            "brew install puniserv/tap/skillcask puniserv/tap/skillcask-app, or unzip Skillcask-<version>-macos-universal.zip from a release into /Applications",
+        ));
     }
     Ok(())
 }

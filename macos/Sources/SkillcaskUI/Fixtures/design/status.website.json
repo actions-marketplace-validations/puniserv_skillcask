@@ -1,0 +1,41 @@
+{
+  "ok": true,
+  "entries": [
+    {
+      "adopt": null,
+      "ok": true,
+      "package": "acme/commit",
+      "skill": "commit-message",
+      "state": "ok",
+      "version": "3.1.0",
+      "source": "packagist"
+    },
+    {
+      "adopt": null,
+      "ok": true,
+      "package": "acme/changelog",
+      "skill": "changelog",
+      "state": "ok",
+      "version": "0.4.0",
+      "source": "packagist"
+    },
+    {
+      "adopt": null,
+      "ok": true,
+      "package": "netresearch/german-technical-writing-skill",
+      "skill": "german-technical-writing",
+      "state": "ok",
+      "version": "1.0.0",
+      "source": "packagist"
+    }
+  ],
+  "policy": {
+    "min-release-age": { "value": "0h", "from": "default" },
+    "allow-sources": { "value": null, "from": "default" },
+    "allow-ranges": { "value": true, "from": "default" }
+  },
+  "targets": { "entries": ["claude"], "dirs": [".claude/skills"], "from": "skills.toml" },
+  "repositories": [
+    { "allowed": true, "name": "packagist", "type": "composer", "url": "https://repo.packagist.org/" }
+  ]
+}

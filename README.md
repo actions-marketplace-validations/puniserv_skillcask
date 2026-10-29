@@ -298,6 +298,7 @@ Every command except `publish`, `validate` and `projects` takes `-g, --global`.
 | `validate [paths…]` | Check `SKILL.md` files against the Agent Skills spec, see below. |
 | `projects [dirs…]` | Directories that hold `skills.toml` under the given ones (default: the current one), up to 6 levels down; hidden directories, `node_modules`, `vendor`, `target` and `Library` are skipped. |
 | `ui` | A terminal UI over the commands above: skills with their state and updates, `info`, SKILL.md and `audit` per skill, add, adopt (also offered when an add hits a skill skillcask does not manage), update (diff first), remove, doctor, a filter of the list, search of the registries (and skills.sh, asked once), the repositories in use (`R`, `S` turns skills.sh on or off) and a projects picker; `g` switches between the project and `--global`. |
+| `app` | Opens the macOS app (see [macOS app](#macos-app)); exits 1 when it is not installed, and on Linux and Windows. |
 | `<other>` | Runs `skillcask-<other>` from `PATH`, like git and cargo plugins. |
 
 `status`, `outdated`, `info`, `search`, `doctor`, `audit`, `projects` and `config` take `--json`: one JSON document on one line of
@@ -546,6 +547,31 @@ skillcask publish --inline --vendor acme --out composer/ skills/ \
 a repository. A repository `url` with a query string is used as given, so clients can read the
 file through the GitLab raw files API
 (`.../repository/files/composer%2Fpackages.json/raw?ref=main`) with a `gitlab-token`.
+
+## macOS app
+
+`macos/` holds a SwiftUI app for macOS 14+ over the CLI (D35): open My Skills (the `-g` scope) or a
+project folder, see each skill's state, updates and audit findings, read its SKILL.md and diffs,
+and run `add` (also `--adopt`), `update`, `remove`, `install` and `doctor --fix`; its Settings
+change every key `skillcask -g config` lists. It has no package logic of its own: it runs the
+`skillcask` binary, 0.9.4 or newer, and reads its `--json` output.
+
+Install it with Homebrew, then open it from Applications or with `skillcask app`. The cask depends
+on the formula; name both, since Homebrew loads from a third-party tap only what it was asked for
+or what `brew trust` lists:
+
+```sh
+brew install puniserv/tap/skillcask puniserv/tap/skillcask-app
+```
+
+Every release also has `Skillcask-X.Y.Z-macos-universal.zip`, signed with a Developer ID and
+notarized (D50): unzip it into `/Applications`.
+
+`macos/bundle.sh` builds a universal `Skillcask.app` that carries its own CLI at
+`Contents/Helpers/skillcask`. Run outside a bundle (`swift run` from `macos/`), the app uses the
+path set in its Settings, else looks on `PATH`, in `/opt/homebrew/bin`, `/usr/local/bin` and
+`~/.cargo/bin`. Building it needs Xcode 26.x with Swift 6.3 or newer, not only the Command Line
+Tools. Building, signing, Gatekeeper, tests and renders: [macos/README.md](macos/README.md).
 
 ## Design
 

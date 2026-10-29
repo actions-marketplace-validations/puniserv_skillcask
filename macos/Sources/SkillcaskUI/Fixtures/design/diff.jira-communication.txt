@@ -1,0 +1,12 @@
+netresearch/agent-jira-skill 4.2.0 -> 4.3.0
+--- a/jira-communication/SKILL.md
++++ b/jira-communication/SKILL.md
+@@ -3,6 +3,8 @@ Tone
+ ## Tone
+
+ Write comments for the reader who was not in the meeting.
++State the decision first, then the reason.
++Link the ticket that tracks the follow-up.
+
+ ## Status updates
+

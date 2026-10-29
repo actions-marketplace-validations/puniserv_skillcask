@@ -39,3 +39,17 @@ fn auth_set_stores_a_piped_token_with_git() {
     assert!(stored.contains("host=git.example.com\n") && stored.contains("username=PRIVATE-TOKEN\npassword=s3cret\n"), "{stored}");
     assert!(!p.run_input(&["auth", "set", "git.example.com"], "a\nb\n").status.success(), "a newline would inject fields");
 }
+
+#[test]
+fn a_token_from_auth_set_wins_over_the_users_own_git_login() {
+    let s = Server::start();
+    s.simple("acme/one", "1.0.0", "one");
+    s.require_auth(Some("Bearer t0ken"));
+    let p = Project::new(&s);
+    p.manifest(&s, "\"acme/one\" = \"^1.0\"\n");
+    // Like osxkeychain: a lookup without a username returns the first entry for the host, which
+    // was git's own login, so the token stored by `auth set` was never sent.
+    let script = "!f() { [ \"$1\" = get ] || return 0; case \"$(cat)\" in *username=oauth2*) printf 'username=oauth2\\npassword=t0ken\\n';; *username=*) ;; *) printf 'username=me\\npassword=git-login\\n';; esac; }; f";
+    std::fs::write(p.home().join(".gitconfig"), format!("[credential]\n\thelper = {script:?}\n")).unwrap();
+    p.ok(&["install"]);
+}

@@ -116,6 +116,22 @@ fn ui_refuses_to_start_without_a_terminal() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("skillcask ui needs a terminal"), "{out:?}");
 }
 
+// Only off macOS: there it would open a real Skillcask.app.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn app_is_refused_off_macos() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_skillcask")).arg("app").output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("skillcask app is a macOS app"), "{out:?}");
+}
+
+#[test]
+fn app_takes_no_global_scope() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_skillcask")).args(["-g", "app"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--global does not apply to this command"), "{out:?}");
+}
+
 #[test]
 fn install_confirms_what_is_installed_to_a_person_only() {
     let s = Server::start();

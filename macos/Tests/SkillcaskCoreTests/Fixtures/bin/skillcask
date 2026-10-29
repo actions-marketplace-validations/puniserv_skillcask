@@ -1,0 +1,25 @@
+#!/bin/sh
+# Fake skillcask for runner tests. Behaves per FAKE_MODE when set, else per the first non-flag argument.
+# FAKE_FIXTURES points at the Fixtures directory of the test bundle. Only the exit codes mirror the real CLI.
+set -eu
+cmd=${1:-}
+[ "$cmd" = "-g" ] && cmd=${2:-}
+case "${FAKE_MODE:-$cmd}" in
+    --version) echo "skillcask 0.9.4 (fake)" ;;
+    old) echo "skillcask 0.8.0 (fake)" ;;
+    status) cat "$FAKE_FIXTURES/0.9.4/status.json" ;;
+    problem) cat "$FAKE_FIXTURES/0.9.4/status.problem.json"; exit 1 ;;
+    fail) echo "error: package acme/none not found" >&2; echo "  hint: run skillcask init" >&2; exit 3 ;;
+    both) i=0; while [ $i -lt 2000 ]; do echo "out $i"; echo "err $i" >&2; i=$((i+1)); done ;;
+    big) head -c 300000 /dev/zero | tr '\0' 'x'; echo ;;
+    flood) head -c 2000000 /dev/zero | tr '\0' 'x'; echo ;;
+    env) env | sort ;;
+    args) printf '%s\n' "$@" ;;
+    cwd) pwd -P ;;
+    stdin) cat ;;
+    quit) exec 0<&-; exit 0 ;;
+    slow) sleep "${FAKE_SECONDS:-1}"; echo done ;;
+    sleep) trap 'exit 143' TERM; sleep 30 & wait $! ;;
+    stubborn) trap '' TERM; exec sleep 30 ;;
+    *) echo "error: unknown command \"$cmd\"" >&2; exit 1 ;;
+esac

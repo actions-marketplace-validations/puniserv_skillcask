@@ -257,3 +257,18 @@ fn more_than_five_redirects_fail() {
     assert!(out.contains("more than 5 redirects"), "{out}");
     assert_eq!(s.log().len(), 6, "{:?}", s.log());
 }
+
+#[test]
+fn composer_404_names_auth_set_once_when_no_token_is_set() {
+    let s = Server::start();
+    let p = Project::new(&s);
+    p.manifest(&s, "");
+    let host = s.base.trim_start_matches("https://").to_string();
+    let out = p.expect(&["search", "x"], 3);
+    assert!(out.contains(&format!("skillcask auth set {host}")), "{out}");
+    // search used to prefix the repository name a second time
+    assert!(!out.contains("repository fix: repository fix:"), "{out}");
+    p.write("auth.json", &json!({ "bearer": { host: "t0ken" } }).to_string());
+    let out = p.expect(&["add", "acme/one"], 3);
+    assert!(out.contains("not found") && !out.contains("auth set"), "{out}");
+}
