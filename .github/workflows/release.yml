@@ -460,6 +460,60 @@ jobs:
           security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
           rm -f "$RUNNER_TEMP/key.p8" "$RUNNER_TEMP/cert.p12"
 
+  # Hand edit: the cask skillcask-app in the tap, for the zip publish-macos-app attached. No signing
+  # secrets here. It waits for the formula job because both push to the tap.
+  publish-homebrew-cask:
+    needs:
+      - plan
+      - publish-homebrew-formula
+      - publish-macos-app
+    runs-on: "ubuntu-22.04"
+    permissions:
+      "contents": "read"
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ needs.plan.outputs.tag }}
+    if: ${{ !fromJson(needs.plan.outputs.val).announcement_is_prerelease || fromJson(needs.plan.outputs.val).publish_prereleases }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: true
+          repository: "puniserv/homebrew-tap"
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      - name: Commit the cask
+        run: |
+          version="${TAG#v}"
+          zip="Skillcask-$version-macos-universal.zip"
+          sha256=$(gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$zip.sha256" --output - | cut -d ' ' -f 1)
+          [[ "$sha256" =~ ^[0-9a-f]{64}$ ]]
+          mkdir -p Casks
+          cat > Casks/skillcask-app.rb <<EOF
+          cask "skillcask-app" do
+            version "$version"
+            sha256 "$sha256"
+
+            url "https://github.com/puniserv/skillcask/releases/download/v#{version}/Skillcask-#{version}-macos-universal.zip"
+            name "Skillcask"
+            desc "Desktop app for the skillcask package manager for agent skills"
+            homepage "https://github.com/puniserv/skillcask"
+
+            depends_on formula: "puniserv/tap/skillcask"
+            depends_on macos: :sonoma
+
+            app "Skillcask.app"
+
+            zap trash: [
+              "~/Library/Preferences/io.github.puniserv.skillcask.plist",
+              "~/Library/Saved Application State/io.github.puniserv.skillcask.savedState",
+            ]
+          end
+          EOF
+          git config --global user.name "axo bot"
+          git config --global user.email "admin+bot@axo.dev"
+          git add Casks/skillcask-app.rb
+          git commit -m "skillcask-app $version"
+          git push
+
   announce:
     needs:
       - plan

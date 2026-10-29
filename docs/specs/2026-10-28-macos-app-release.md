@@ -1,6 +1,6 @@
 # Spec: release the macOS app
 
-Date: 2026-10-28. Status: draft. Amends D35 once accepted (record the outcome as a new decision).
+Date: 2026-10-28. Status: accepted as D50 (2026-10-29), which amends D35.
 
 ## Problem
 
@@ -65,12 +65,15 @@ CLI release intact; rerun the job, or the whole run, once fixed.
 
 - Formula `skillcask` (unchanged, from dist): the CLI on macOS and Linux.
 - Cask `skillcask-app` in `puniserv/homebrew-tap`: installs `Skillcask.app` into `/Applications`,
-  `depends_on formula: "puniserv/tap/skillcask"`, `auto_updates false`, `zap` for the app's
-  preferences. The publish job from step 1 writes `version` and `sha256` and pushes it with the
-  existing `HOMEBREW_TAP_TOKEN`.
+  `depends_on formula: "puniserv/tap/skillcask"`, `depends_on macos: :sonoma`, `zap` for the app's
+  preferences. Job `publish-homebrew-cask` (after `publish-homebrew-formula`, which pushes to the
+  same tap, and `publish-macos-app`; skipped on pre-releases like the formula) reads the zip's
+  `.sha256` from the release, writes the whole cask and pushes it with the existing
+  `HOMEBREW_TAP_TOKEN`. It gets no signing secrets.
 
-`brew install puniserv/tap/skillcask-app` then gives both. Users who install only the formula get no
-app.
+`brew install puniserv/tap/skillcask puniserv/tap/skillcask-app` then gives both. Both names, because
+Homebrew refuses to load anything from a third-party tap that is not named on the command line or
+listed by `brew trust`, and a dependency is neither. Users who install only the formula get no app.
 
 ### 3. `skillcask app`
 
@@ -129,27 +132,31 @@ signing and notarizing use `security` and `xcrun` directly, with no third-party 
       admin role) already exists.
 - [x] Environment `release` with reviewers and tag rule, and the secrets above.
 - [x] Job `publish-macos-app` in `release.yml`: steps 1–7 above.
-- [ ] First run on a pre-release tag (e.g. `v0.10.1-rc.1`, which skips Homebrew and npm); the
-      certificate owner checks the downloaded app on a clean account.
-- [ ] Cask update in the tap (a follow-up job without the signing secrets).
-- [ ] Cask template `skillcask-app.rb` in the tap.
-- [ ] `skillcask app` with a test that it is refused off macOS.
-- [ ] Decision in `docs/specs/2026-10-19-skillcask-v1.md` (amend D35: the app is a release artifact).
-- [ ] README and `macos/README.md`: install via the cask, drop the quarantine instructions.
-- [ ] AGENTS.md release steps: the new job, and what to do when notarization is slow or rejected.
+- [x] First run on `v0.10.1-rc.1` (2026-10-29): notarized, `spctl` accepted, `stapler validate`
+      ok; the certificate owner checked the downloaded app on another Mac.
+- [x] Cask update in the tap: job `publish-homebrew-cask`, without the signing secrets.
+- [x] No cask template in the tap: the job writes the whole cask, so its shape lives in this repo.
+- [x] `skillcask app` with a test that it is refused off macOS.
+- [x] Decision D50 in `docs/specs/2026-10-19-skillcask-v1.md` (amends D35).
+- [x] README and `macos/README.md`: install via the cask; the quarantine instructions stay for
+      local ad-hoc builds only.
+- [x] AGENTS.md release steps: the new jobs, and what to do when notarization is slow or rejected.
+- [ ] First stable release with the cask, on a Mac without the tap:
+      `brew install puniserv/tap/skillcask puniserv/tap/skillcask-app`, then `skillcask app`; also
+      the cask alone, to see whether Homebrew refuses the formula it depends on.
 
 ## Testing
 
 - `spctl -a -vv` and `xcrun stapler validate` on the uploaded zip, in the job.
 - Manual, once per change to the job: download the zip in a browser on a Mac that never built
   skillcask, open it, expect the single "downloaded from the internet" prompt;
-  `brew install puniserv/tap/skillcask-app`, then `skillcask app`.
+  `brew install puniserv/tap/skillcask puniserv/tap/skillcask-app`, then `skillcask app`.
 - `macos/Scripts/smoke-app.sh` against the notarized bundle.
 
-## Open questions
+## Resolved questions
 
-- Cask name: `skillcask-app`, or a separate `skillcask` cask with the CLI formula renamed.
-- Should the app keep preferring its bundled CLI when a Homebrew CLI is on `PATH`? Bundled keeps
-  the versions matched; Homebrew avoids two copies.
-- Notarization time on CI: Apple's queue sometimes takes many minutes; set a timeout and decide
-  whether a late notarization blocks the release or follows it.
+- Cask name: `skillcask-app`, next to the formula `skillcask`.
+- The app keeps preferring its bundled CLI: it stays at the version it was built and tested with.
+- Notarization time: `notarytool --wait --timeout 30m`. A late or rejected notarization fails only
+  `publish-macos-app`; the CLI release is already out, and a rerun of the failed jobs attaches the
+  app later.

@@ -42,7 +42,10 @@ Conventional Commits with a lowercase subject that states the outcome, e.g.
    `chore: release X.Y.Z`, push.
 2. `git tag vX.Y.Z && git push origin vX.Y.Z`. `release.yml` builds all targets and publishes the
    GitHub Release, Homebrew formula and npm package. Approve `publish-macos-app` under "Review
-   deployments" (environment `release`); it attaches the signed, notarized macOS app zip.
+   deployments" (environment `release`); it attaches the signed, notarized macOS app zip, and
+   `publish-homebrew-cask` then updates the cask `skillcask-app`. When the macOS arm64 runner is
+   not acquired or notarization fails or times out, the CLI release stands: rerun the failed jobs
+   (`gh run rerun <id> --failed`); for a rejection read the printed `notarytool log` first.
 3. `cargo publish --locked` from the tag (manual).
 4. Edit the GitHub Release in the browser, tick "Publish this Action to the GitHub Marketplace" and
    save (manual: GitHub has no API for it, and releases made by `release.yml` are not listed).
@@ -55,6 +58,6 @@ regenerating:
   `NODE_AUTH_TOKEN` that breaks OIDC with E404).
 - `publish-macos-app` is written by hand, not a dist custom publish job: dist skips those on
   pre-releases and gives them no `contents: write`. It keeps `environment: release`, where the
-  signing secrets live.
+  signing secrets live. `publish-homebrew-cask` is hand-written too and writes the whole cask.
 - Supply chain: every action pinned to a commit sha, the dist installer checked against a pinned
   sha256, and `GH_TOKEN: ""` on the steps that install tools.
