@@ -33,6 +33,21 @@ powershell -ExecutionPolicy Bypass -c "irm https://github.com/puniserv/skillcask
 The two installer scripts download the binary for your platform from the latest release and put
 it in `~/.cargo/bin` (`%USERPROFILE%\.cargo\bin` on Windows).
 
+**Desktop app (macOS 14+ only for now)**
+
+```sh
+brew install puniserv/tap/skillcask puniserv/tap/skillcask-app
+skillcask app                   # or open Skillcask from Applications
+```
+
+Install with the full names: Homebrew loads a third-party tap's cask only when it is named in full
+(or listed by `brew trust`); after that, `brew upgrade` takes the short name.
+
+Without Homebrew, download `Skillcask-X.Y.Z-macos-universal.zip` from the
+[latest release](https://github.com/puniserv/skillcask/releases/latest) and move `Skillcask.app`
+to `/Applications`; it is signed and notarized and carries its own CLI. Linux and Windows have the
+terminal UI, `skillcask ui`. More in [macOS app](#macos-app).
+
 **npm, bun**
 
 ```sh
