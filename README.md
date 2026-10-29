@@ -43,10 +43,20 @@ skillcask app                   # or open Skillcask from Applications
 Install with the full names: Homebrew loads a third-party tap's cask only when it is named in full
 (or listed by `brew trust`); after that, `brew upgrade` takes the short name.
 
-Without Homebrew, download `Skillcask-X.Y.Z-macos-universal.zip` from the
-[latest release](https://github.com/puniserv/skillcask/releases/latest) and move `Skillcask.app`
-to `/Applications`; it is signed and notarized and carries its own CLI. Linux and Windows have the
-terminal UI, `skillcask ui`. More in [macOS app](#macos-app).
+Without Homebrew, take `Skillcask-X.Y.Z-macos-universal.zip` from the
+[latest release](https://github.com/puniserv/skillcask/releases/latest), signed and notarized, with
+its own CLI inside:
+
+```sh
+v=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/puniserv/skillcask/releases/latest | sed 's|.*/tag/v||')
+zip="Skillcask-$v-macos-universal.zip"
+curl -fsSLO "https://github.com/puniserv/skillcask/releases/download/v$v/$zip"
+curl -fsSLO "https://github.com/puniserv/skillcask/releases/download/v$v/$zip.sha256"
+shasum -a 256 -c "$zip.sha256"
+rm -rf /Applications/Skillcask.app && ditto -x -k "$zip" /Applications   # not over a Homebrew install
+```
+
+Linux and Windows have the terminal UI, `skillcask ui`. More in [macOS app](#macos-app).
 
 **npm, bun**
 
