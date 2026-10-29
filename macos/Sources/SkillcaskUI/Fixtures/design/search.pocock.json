@@ -1,0 +1,181 @@
+{
+  "results": [
+    {
+      "name": "kolya/pocock-prd-template",
+      "description": "Write a PRD the way the Total TypeScript skills do, then split it into issues.",
+      "source": "packagist",
+      "installs": null,
+      "skills": 1,
+      "requires": {}
+    },
+    {
+      "name": "dev-tools/tdd-red-green",
+      "description": "Red, green, refactor: one failing test at a time.",
+      "source": "packagist",
+      "installs": null,
+      "skills": 2,
+      "requires": {}
+    },
+    {
+      "name": "github:mattpocock/skills/improve-codebase-architecture",
+      "description": null,
+      "source": "skills.sh",
+      "installs": 12840,
+      "skills": null,
+      "requires": {}
+    },
+    {
+      "name": "github:mattpocock/skills/tdd",
+      "description": null,
+      "source": "skills.sh",
+      "installs": 9310,
+      "skills": null,
+      "requires": {}
+    },
+    {
+      "name": "github:mattpocock/skills/write-a-prd",
+      "description": null,
+      "source": "skills.sh",
+      "installs": 7425,
+      "skills": null,
+      "requires": {}
+    },
+    {
+      "name": "github:mattpocock/skills/prd-to-issues",
+      "description": null,
+      "source": "skills.sh",
+      "installs": 6080,
+      "skills": null,
+      "requires": {}
+    },
+    {
+      "name": "github:mattpocock/skills/diagnosing-bugs",
+      "description": null,
+      "source": "skills.sh",
+      "installs": 5214,
+      "skills": null,
+      "requires": {}
+    },
+    {
+      "name": "github:mattpocock/skills/grill-me",
+      "description": null,
+      "source": "skills.sh",
+      "installs": 4987,
+      "skills": null,
+      "requires": {}
+    },
+    {
+      "name": "github:mattpocock/skills/domain-modeling",
+      "description": null,
+      "source": "skills.sh",
+      "installs": 3650,
+      "skills": null,
+      "requires": {}
+    },
+    {
+      "name": "github:mattpocock/skills/design-an-interface",
+      "description": null,
+      "source": "skills.sh",
+      "installs": 2731,
+      "skills": null,
+      "requires": {}
+    },
+    {
+      "name": "github:mattpocock/skills/triage-issue",
+      "description": null,
+      "source": "skills.sh",
+      "installs": 2104,
+      "skills": null,
+      "requires": {}
+    },
+    {
+      "name": "github:mattpocock/skills/ubiquitous-language",
+      "description": null,
+      "source": "skills.sh",
+      "installs": 1876,
+      "skills": null,
+      "requires": {}
+    },
+    {
+      "name": "github:mattpocock/skills/setup-pre-commit",
+      "description": null,
+      "source": "skills.sh",
+      "installs": 1552,
+      "skills": null,
+      "requires": {}
+    },
+    {
+      "name": "github:mattpocock/skills/git-guardrails-claude-code",
+      "description": null,
+      "source": "skills.sh",
+      "installs": 1320,
+      "skills": null,
+      "requires": {}
+    },
+    {
+      "name": "github:mattpocock/skills/refactor-plan",
+      "description": null,
+      "source": "skills.sh",
+      "installs": 1105,
+      "skills": null,
+      "requires": {}
+    },
+    {
+      "name": "github:mattpocock/skills/writing-for-agents",
+      "description": null,
+      "source": "skills.sh",
+      "installs": 987,
+      "skills": null,
+      "requires": {}
+    },
+    {
+      "name": "github:mattpocock/skills/edit-article",
+      "description": null,
+      "source": "skills.sh",
+      "installs": 640,
+      "skills": null,
+      "requires": {}
+    },
+    {
+      "name": "github:mattpocock/skills/prototype",
+      "description": null,
+      "source": "skills.sh",
+      "installs": 512,
+      "skills": null,
+      "requires": {}
+    },
+    {
+      "name": "github:mattpocock/skills/code-review",
+      "description": null,
+      "source": "skills.sh",
+      "installs": 388,
+      "skills": null,
+      "requires": {}
+    },
+    {
+      "name": "github:mattpocock/skills/research",
+      "description": null,
+      "source": "skills.sh",
+      "installs": 245,
+      "skills": null,
+      "requires": {}
+    },
+    {
+      "name": "github:mattpocock/skills/wizard",
+      "description": null,
+      "source": "skills.sh",
+      "installs": 97,
+      "skills": null,
+      "requires": {}
+    },
+    {
+      "name": "github:mattpocock/skills/pr",
+      "description": null,
+      "source": "skills.sh",
+      "installs": 12,
+      "skills": null,
+      "requires": {}
+    }
+  ],
+  "skills-sh": true
+}

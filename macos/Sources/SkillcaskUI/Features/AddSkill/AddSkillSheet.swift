@@ -143,32 +143,29 @@ struct AddSkillSheet: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// `7 results from Packagist acme GitHub · blocked by policy … Sorted by installs`, once results are in.
+    /// `3 of 20 results`, the source chips and blocked pills (`SourceFilterBar`), `Sorted by installs`: once results
+    /// are in, or while a source filter is active (so its chip stays even when the new query found nothing).
     @ViewBuilder private var summary: some View {
-        let results = search.sortedResults
-        if !results.isEmpty {
+        if Self.showsSummary(results: search.results, filter: search.sourceFilter) {
             HStack(spacing: Spacing.s) {
-                Text(AddSkillCopy.resultsFrom(results.count))
-                ForEach(search.repositories, id: \.name) { repository in
-                    if repository.allowed {
-                        Pill(source: repository.kind)
-                    } else {
-                        Pill(AddSkillCopy.blockedByPolicy(SourceCopy.label(repository.kind)))
-                            .opacity(ResultsColumn.blockedOpacity)
-                    }
-                }
-                if search.skillsSh == .enabled {
-                    Pill(source: .skillsSh)
-                }
-                Spacer(minLength: Spacing.s)
+                Text(AddSkillCopy.results(shown: search.filteredResults.count, total: search.totalResultCount))
+                    .fixedSize()
+                SourceFilterBar(search: search)
                 if search.isSortedByInstalls {
                     Text(AddSkillCopy.sortedByInstalls)
+                        .fixedSize()
                 }
             }
             .font(Font.Token.callout)
             .foregroundStyle(Color.textSecondary)
             .lineLimit(1)
         }
+    }
+
+    /// The summary row shows for a loaded document with results, or with a source filter set.
+    nonisolated static func showsSummary(results: SearchStore.Results, filter: String?) -> Bool {
+        guard case .loaded(let document) = results else { return false }
+        return !document.results.isEmpty || filter != nil
     }
 
     private var footer: some View {

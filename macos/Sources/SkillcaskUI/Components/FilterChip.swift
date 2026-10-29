@@ -4,7 +4,8 @@ import SwiftUI
 /// One filter chip of the list header (Components board, "Filter chips and buttons"): a 22 pt capsule
 /// (`Size.chip`, `Radius.pill`) in `calloutMedium`. Idle it is `textSecondary` on a transparent fill with a
 /// `separatorStrong` hairline; active it is `accent` on `accentSoft` with no border. An optional count sits
-/// in the small `CountBadge` (`Size.badgeSmall`, 16 pt) filled with the severity's dot colour.
+/// in the small `CountBadge` (`Size.badgeSmall`, 16 pt) filled with the severity's dot colour, and an optional SF
+/// Symbol before the title (the Add Skill sheet's source glyphs, `Pill.symbol(of:)`).
 ///
 /// It is a `Button` with a custom style, so the focus ring, keyboard activation and the accessibility
 /// button trait come from the system; only the drawing is custom.
@@ -15,13 +16,16 @@ public struct FilterChip: View {
     /// The badge fill: `.error` for "Needs attention", `.update` for "Updates", `.neutral` otherwise.
     public let countSeverity: Severity
     public let isActive: Bool
+    /// The glyph before the title; nil draws none (the list's filter chips).
+    public let symbol: String?
     public let action: () -> Void
 
     public init(
-        _ title: String, count: Int? = nil, countSeverity: Severity = .neutral, isActive: Bool,
-        action: @escaping () -> Void
+        _ title: String, symbol: String? = nil, count: Int? = nil, countSeverity: Severity = .neutral,
+        isActive: Bool, action: @escaping () -> Void
     ) {
         self.title = title
+        self.symbol = symbol
         self.count = count
         self.countSeverity = countSeverity
         self.isActive = isActive
@@ -37,6 +41,11 @@ public struct FilterChip: View {
     public var body: some View {
         Button(action: action) {
             HStack(spacing: Spacing.xs) {
+                if let symbol {
+                    Image(systemName: symbol)
+                        .imageScale(.small)
+                        .accessibilityHidden(true)
+                }
                 Text(title)
                 if let count {
                     CountBadge(count, severity: countSeverity, variant: .small)

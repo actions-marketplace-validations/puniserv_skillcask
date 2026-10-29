@@ -3,8 +3,9 @@ import SkillcaskDomain
 import SwiftUI
 
 /// The Add Skill sheet's left column (AddSkill board, 440 pt): the skills.sh consent card once, then the results
-/// in a system `List` whose selection is the preview's, or what stands in for them: the idle hint, the spinner,
-/// the network failure with Retry, "No results", or the note that a typed source skips search (AddSkill-States).
+/// of the header's source filter in a system `List` whose selection is the preview's, or what stands in for them: the
+/// idle hint, the spinner, the network failure with Retry, "No results", "No results from <source>" with Show All, or
+/// the note that a typed source skips search (AddSkill-States).
 struct ResultsColumn: View {
     @Bindable var search: SearchStore
 
@@ -53,7 +54,11 @@ struct ResultsColumn: View {
                     sources: search.repositories.filter(\.allowed).map(\.name),
                     skillsShOn: Self.skillsShOn(document.skillsSh)))
         case .loaded:
-            list
+            if let filter = search.sourceFilter, search.isFilterEmpty {
+                filterEmptyState(filter)
+            } else {
+                list
+            }
         }
     }
 
@@ -68,7 +73,7 @@ struct ResultsColumn: View {
 
     private var list: some View {
         List(selection: $search.selection) {
-            ForEach(search.sortedResults, id: \.name) { result in
+            ForEach(search.filteredResults, id: \.name) { result in
                 ResultRow(
                     result: result, installedAs: search.installedSkills(of: result),
                     isBlocked: search.isBlocked(result), isSelected: result.name == search.selection,
@@ -81,6 +86,15 @@ struct ResultsColumn: View {
         .listStyle(.inset)
         .scrollContentBackground(.hidden)
         .accessibilityLabel(AddSkillCopy.fieldLabel)
+    }
+
+    /// The source filter hides every result: what the other sources found, and Show All (as the Skills list's
+    /// "Nothing in <filter>").
+    private func filterEmptyState(_ filter: String) -> some View {
+        EmptyState(
+            icon: nil, title: AddSkillCopy.noResultsFrom(SourceFilterBar.label(of: filter, in: search.sourceChips)),
+            body: AddSkillCopy.resultsElsewhere(search.totalResultCount),
+            actions: [.secondary(EmptyCopy.showAll) { search.sourceFilter = nil }])
     }
 
     /// AddSkill-States: the accent-soft note that a typed source opens the preview without a search.
