@@ -572,7 +572,6 @@ import Testing
         #expect(
             AddSkillCopy.noResultsBody(sources: ["packagist", "acme"], skillsShOn: false)
                 == "in packagist and acme. skills.sh is off; turn it on in Settings › Search to include it.")
-        #expect(AddSkillCopy.resultsFrom(7) == "7 results from")
         #expect(AddSkillSheet.toast(package: "a/b", skills: [], version: nil) == "Added a/b")
     }
 

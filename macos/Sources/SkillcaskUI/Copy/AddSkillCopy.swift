@@ -30,9 +30,35 @@ public enum AddSkillCopy {
     public static let sourceHint = "or a source:"
     /// The three source shapes, in mono.
     public static let sourceShapes = "vendor/name · github:owner/repo · git:https://…"
-    /// `7 results from` (one result reads `1 result from`).
-    public static func resultsFrom(_ count: Int) -> String {
-        count == 1 ? "1 result from" : "\(count) results from"
+    /// Invented: the header's count: `20 results` (`1 result`) unfiltered, `3 of 20 results` while a source filter
+    /// hides some.
+    public static func results(shown: Int, total: Int) -> String {
+        if shown == total {
+            return total == 1 ? "1 result" : "\(total) results"
+        }
+        return "\(shown) of \(total) " + (total == 1 ? "result" : "results")
+    }
+
+    /// Invented: the source chips' accessibility group label.
+    public static let filterLabel = "Filter by source"
+
+    /// Invented: a source chip's accessibility hint: `Shows only results from skills.sh`.
+    public static func filterHint(_ source: String) -> String {
+        "Shows only results from \(source)"
+    }
+
+    /// Invented: the empty filter's title: `No results from Packagist`.
+    public static func noResultsFrom(_ source: String) -> String {
+        "No results from \(source)"
+    }
+
+    /// Invented: the empty filter's body: what the other sources found (`20 results from other sources.`).
+    public static func resultsElsewhere(_ count: Int) -> String {
+        switch count {
+        case 0: "Nothing matched in any source."
+        case 1: "1 result from another source."
+        default: "\(count) results from other sources."
+        }
     }
 
     /// `GitHub · blocked by policy`: a repository the scope's policy does not allow.

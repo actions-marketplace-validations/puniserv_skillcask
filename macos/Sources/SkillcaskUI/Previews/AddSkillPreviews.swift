@@ -9,7 +9,10 @@ extension PreviewRegistry {
     /// preview); `name-clash` is the 0.9.4 path (the CLI's error after Add); `capable-name-clash` and
     /// `capable-skills` run against a CLI with the planned `add --rename` and `add --skill` (not shipped at 0.9.4).
     /// `success` is the window after the sheet closed: the toast in the list column, the first new skill selected.
-    /// `rule-branch` and `rule-latest` show Flow-F2's Branch and Latest rules on the rule button.
+    /// `rule-branch` and `rule-latest` show Flow-F2's Branch and Latest rules on the rule button. The source
+    /// filter's states search My Skills for "pocock": `filter-source` narrows to skills.sh (GitHub dimmed at 0),
+    /// `filter-empty` keeps a GitHub filter from an earlier query ("No results from GitHub", Show All), and
+    /// `installs-column` is the unfiltered list whose long `github:` names truncate before the 4- and 5-digit counts.
     static let addSkill: [Entry] = [
         sheet("preview", boardScope: true) {
             $0.preload(
@@ -78,13 +81,29 @@ extension PreviewRegistry {
                 selection: AddSkillSamples.jiraPackage, info: AddSkillSamples.jiraInfo)
             $0.rule = .latest
         },
+        sheet("filter-source", personal: true) {
+            $0.preload(
+                query: DesignFixtures.pocockQuery, results: .loaded(DesignFixtures.pocockSearch), skillsSh: .enabled)
+            $0.sourceFilter = "skills.sh"
+        },
+        sheet("filter-empty", personal: true) {
+            $0.preload(
+                query: DesignFixtures.pocockQuery, results: .loaded(DesignFixtures.pocockSearch), skillsSh: .enabled)
+            $0.sourceFilter = "github"
+        },
+        sheet("installs-column", personal: true) {
+            $0.preload(
+                query: DesignFixtures.pocockQuery, results: .loaded(DesignFixtures.pocockSearch), skillsSh: .enabled,
+                selection: AddSkillSamples.pocockSelection)
+        },
         Entry(id: "P3-9", state: "success", size: CGSize(width: 1280, height: 800)) {
             AnyView(AddSkillSuccessSample())
         },
     ]
 
+    /// A sheet over api (`boardScope`: the AddSkill board's variant), or over My Skills when `personal`.
     private static func sheet(
-        _ state: String, capable: Bool = false, boardScope: Bool = false,
+        _ state: String, capable: Bool = false, boardScope: Bool = false, personal: Bool = false,
         previewState: AddSkillSamples.State? = nil,
         _ setUp: @escaping @MainActor @Sendable (SearchStore) -> Void
     ) -> Entry {
@@ -92,7 +111,10 @@ extension PreviewRegistry {
             AnyView(
                 AddSkillSample(
                     capable: capable, previewState: previewState?.sheetState,
-                    snapshot: boardScope ? AddSkillSamples.boardScope : DesignFixtures.api, setUp: setUp))
+                    scope: personal ? .personal : Boot.apiScope,
+                    snapshot: personal
+                        ? DesignFixtures.personal : boardScope ? AddSkillSamples.boardScope : DesignFixtures.api,
+                    setUp: setUp))
         }
     }
 }
@@ -114,6 +136,8 @@ enum AddSkillSamples {
 
     static let jiraPackage = "netresearch/agent-jira-skill"
     static let kolyaPackage = "kolya/pdf-tools"
+    /// The selected row of `installs-column`: the longest name, so its count shows in the selected style too.
+    static let pocockSelection = "github:mattpocock/skills/improve-codebase-architecture"
     /// A GitHub source for the Branch rule.
     static let githubJira = "github:netresearch/agent-jira-skill"
 
@@ -238,14 +262,15 @@ private struct AddSkillSample: View {
     private let previewState: AddSkillSheet.PreviewState?
 
     @MainActor init(
-        capable: Bool, previewState: AddSkillSheet.PreviewState?, snapshot: ScopeSnapshot, setUp: (SearchStore) -> Void
+        capable: Bool, previewState: AddSkillSheet.PreviewState?, scope: Scope, snapshot: ScopeSnapshot,
+        setUp: (SearchStore) -> Void
     ) {
         let version = Capabilities.minimum
         let capabilities =
             capable
             ? Capabilities(version: version, features: [.addSkill, .addRename]) : Capabilities(version: version)
         let store = ScopeStore(
-            scope: Boot.apiScope, client: FixtureCLIClient(), capabilities: capabilities, textReader: Boot.fixtureText)
+            scope: scope, client: FixtureCLIClient(), capabilities: capabilities, textReader: Boot.fixtureText)
         store.preload(snapshot: snapshot)
         let search = SearchStore(store: store)
         setUp(search)

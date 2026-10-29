@@ -28,7 +28,7 @@ struct ResultRow: View {
                     .foregroundStyle(primaryColor)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                    // The name wins the row's width (AddSkill board): the install count gives way first.
+                    // The name gives way to the pills and the install count, which never truncate.
                     .layoutPriority(2)
                 if let source {
                     Pill(source: source)
@@ -44,7 +44,7 @@ struct ResultRow: View {
                         .font(Font.Token.caption)
                         .foregroundStyle(secondaryColor)
                         .lineLimit(1)
-                        .truncationMode(.tail)
+                        .fixedSize()
                 }
             }
             if let description {

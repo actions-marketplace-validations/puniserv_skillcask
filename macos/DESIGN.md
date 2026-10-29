@@ -22,7 +22,7 @@ change fails until both are updated.
 | S5 | Security tab: audit findings grouped by rule, reach as chip groups, changed-on-disk actions |
 | S6 | Versions tab: installed, within range, latest, cooldown, tag moved |
 | S7 | Review Update sheet: per-file diff before `update`; Update All |
-| S8 | Add Skill sheet: search, consent for skills.sh, preview of the provided skills, progress, failures |
+| S8 | Add Skill sheet: search, source filter, consent for skills.sh, preview of the provided skills, progress, failures |
 | S9 | Adopt sheet: single (known or unknown source) and batch |
 | S10 | Remove alert: single and multi |
 | S11 | Running: progress in the list header or the sheet, toast, failure banner, integrity failure |
@@ -151,6 +151,15 @@ them by number; the numbers have gaps.
   CLI's hint. Exit 4 (integrity) has its own variant and is never retried automatically.
 - Activity (⌥⌘L) is a drawer in the list column with one row per run this session: title, command,
   exit word, duration and the full transcript. It opens by itself only from a failure's Details.
+- Add Skill's source filter is client-side over one `search` document: All, then one chip per
+  allowed repository, skills.sh when searched and any other source the results name, each with its
+  count. Single select; clicking the active chip goes back to All. The filter persists across
+  queries within a sheet; a new sheet starts on All. A chip with no results is dimmed and disabled
+  unless it is the active one. The Skills list's `FilterChipBar` dims Updates offline but keeps it
+  clickable; this difference is on purpose, since a dead chip here could only show an empty list.
+  Blocked repositories stay non-interactive pills after the chips; their results, and results
+  without a source, count only in All. A filter with no results shows "No results from <source>"
+  with Show All.
 - Settings (⌘,) is the standard Settings window: CLI path and version, the skills.sh switch, GitHub
   sign-in (`auth set` / `auth remove`), the environment table, and the size of the adopted copies.
   Global (no board) lists every key of `-g config --json` with its layer and changes it through

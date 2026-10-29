@@ -45,6 +45,14 @@ import SkillcaskDomain
         let suggestion: String
     }
 
+    /// A source the results can be narrowed to, and how many of the loaded results it has.
+    struct SourceChip: Hashable {
+        /// The repository or source name, the value of `sourceFilter`.
+        let name: String
+        let kind: SourceKind
+        let count: Int
+    }
+
     static let defaultDebounce: Duration = .milliseconds(300)
 
     let store: ScopeStore
@@ -70,6 +78,15 @@ import SkillcaskDomain
         didSet {
             if selection != oldValue, !isPreloading {
                 selectionChanged()
+            }
+        }
+    }
+    /// The results' source filter: a chip's `name`, nil for All. A new query keeps it; a filter that hides the
+    /// selected result clears the selection.
+    var sourceFilter: String? {
+        didSet {
+            if sourceFilter != oldValue, !isPreloading {
+                clearHiddenSelection()
             }
         }
     }
@@ -140,9 +157,52 @@ import SkillcaskDomain
             .map(\.element)
     }
 
-    /// Whether any result carries an install count, so the header can say what it is sorted by.
+    /// The sorted results of `sourceFilter`'s source; every result for All. A blocked repository's results show only
+    /// in All.
+    var filteredResults: [SearchDocument.Result] {
+        guard let sourceFilter else { return sortedResults }
+        return sortedResults.filter { isInChip($0, named: sourceFilter) }
+    }
+
+    /// Every loaded result, whatever the filter.
+    var totalResultCount: Int {
+        guard case .loaded(let document) = results else { return 0 }
+        return document.results.count
+    }
+
+    /// A filter whose source has none of the loaded results: the empty state that offers Show All.
+    var isFilterEmpty: Bool {
+        guard case .loaded = results else { return false }
+        return sourceFilter != nil && filteredResults.isEmpty
+    }
+
+    /// The header's filter chips: the allowed repositories in their order, skills.sh when it is searched, the other
+    /// sources the results name (first seen first), then the active filter when nothing else matches it, so its
+    /// chip stays. A blocked repository's results, and results without a source, count only in All.
+    var sourceChips: [SourceChip] {
+        guard case .loaded(let document) = results else { return [] }
+        var chips: [(name: String, kind: SourceKind)] = repositories.filter(\.allowed).map { ($0.name, $0.kind) }
+        func isChip(_ source: String) -> Bool {
+            chips.contains { Self.source(source, matches: $0.name) }
+        }
+        if skillsSh == .enabled, !isChip("skills.sh") {
+            chips.append(("skills.sh", .skillsSh))
+        }
+        for source in document.results.compactMap(\.source) where !isChip(source) && !isBlocked(source) {
+            chips.append((source, SourceKind(parsing: source)))
+        }
+        if let sourceFilter, !isChip(sourceFilter) {
+            chips.append((sourceFilter, SourceKind(parsing: sourceFilter)))
+        }
+        return chips.map { chip in
+            SourceChip(
+                name: chip.name, kind: chip.kind, count: document.results.count { isInChip($0, named: chip.name) })
+        }
+    }
+
+    /// Whether any shown result carries an install count, so the header can say what it is sorted by.
     var isSortedByInstalls: Bool {
-        sortedResults.contains { $0.installs != nil }
+        filteredResults.contains { $0.installs != nil }
     }
 
     /// The consent card: the CLI has no `[search] skills-sh` yet and the card was not answered here.
@@ -169,11 +229,25 @@ import SkillcaskDomain
 
     /// A result from a repository this scope's policy does not allow (`status.repositories[].allowed`).
     func isBlocked(_ result: SearchDocument.Result) -> Bool {
+        result.source.map(isBlocked) ?? false
+    }
+
+    private func isBlocked(_ source: String) -> Bool {
+        blockedRepositories.contains { Self.source(source, matches: $0) }
+    }
+
+    /// The result counts in the chip `name`: its source matches and is not blocked. A result without a source
+    /// belongs to no chip.
+    private func isInChip(_ result: SearchDocument.Result, named name: String) -> Bool {
         guard let source = result.source else { return false }
-        let kind = SourceKind(parsing: source)
-        return blockedRepositories.contains {
-            $0.name.caseInsensitiveCompare(source) == .orderedSame || kind == $0.kind
-        }
+        return Self.source(source, matches: name) && !isBlocked(source)
+    }
+
+    /// A source belongs to the repository or chip of the same name ignoring case, and to nothing else: the CLI
+    /// stamps each result's `source` with the repository's `name` or `skills.sh`, so there are no aliases to
+    /// resolve, and a repository named `composer` stays apart from `packagist`.
+    private static func source(_ source: String, matches name: String) -> Bool {
+        name.caseInsensitiveCompare(source) == .orderedSame
     }
 
     /// The scope's repositories as the header's pills: allowed first in the CLI's order, then the blocked ones.
@@ -183,14 +257,14 @@ import SkillcaskDomain
             .map { ($0.name, SourceKind(parsing: $0.name), $0.allowed) }
     }
 
-    private var blockedRepositories: [(name: String, kind: SourceKind)] {
-        repositories.filter { !$0.allowed }.map { ($0.name, $0.kind) }
+    private var blockedRepositories: [String] {
+        repositories.filter { !$0.allowed }.map(\.name)
     }
 
-    /// The selected search result; nil for a typed source.
+    /// The selected search result among the shown ones; nil for a typed source.
     var selectedResult: SearchDocument.Result? {
         guard let selection else { return nil }
-        return sortedResults.first { $0.name == selection }
+        return filteredResults.first { $0.name == selection }
     }
 
     /// The selection as a spec `add` takes; nil when nothing is selected or the name has no spec shape.
@@ -485,6 +559,7 @@ import SkillcaskDomain
         case .success(let document):
             results = .loaded(document)
             skillsSh = document.skillsSh
+            clearHiddenSelection()
         case .failure(.cancelled):
             break
         case .failure(let error):
@@ -518,6 +593,14 @@ import SkillcaskDomain
                     personal: store.scope.isPersonal)
             }
         }
+    }
+
+    /// Drops a selected result the filter or a new document no longer shows; never selects one. A typed source
+    /// (`results == .idle`) is left alone.
+    private func clearHiddenSelection() {
+        guard case .loaded = results, let selection, !filteredResults.contains(where: { $0.name == selection })
+        else { return }
+        self.selection = nil
     }
 
     private func prefillRename() {

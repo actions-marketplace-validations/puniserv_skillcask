@@ -160,6 +160,11 @@ public enum DesignFixtures {
     /// board's `api` list does not.
     public static let jiraSearch = decode(SearchDocument.self, "search.jira")
     public static let noResultsQuery = "kubernetes rollout"
+    /// The source filter's search, as the CLI prints it for the personal scope (Packagist and GitHub allowed,
+    /// skills.sh on): 2 Packagist packages (no install count, `installs` is skills.sh's), nothing from GitHub, and
+    /// skills.sh's 20 (its API's cap) with 4- and 5-digit counts behind long `github:` names.
+    public static let pocockQuery = "pocock"
+    public static let pocockSearch = decode(SearchDocument.self, "search.pocock")
     public static let noResults = decode(SearchDocument.self, "search.empty")
     /// `List-States` filtered, no matches: a query, not a document.
     public static let noMatchesQuery = "postgres"

@@ -21,7 +21,7 @@ import Testing
 
     @Test func everyJSONFileDecodesThroughItsDocumentType() throws {
         let names = try Self.files(withExtension: "json")
-        #expect(names.count == 33)
+        #expect(names.count == 34)
         for name in names {
             let data = try Data(contentsOf: Self.designDirectory.appending(path: name))
             let decoder = JSONDecoder()
@@ -349,6 +349,11 @@ import Testing
         #expect(DesignFixtures.noResults.results.isEmpty && DesignFixtures.noResults.skillsSh == .disabled)
         #expect(DesignFixtures.noResultsQuery == "kubernetes rollout")
         #expect(DesignFixtures.sourceQuery.hasPrefix("git:https://"))
+        let pocock = DesignFixtures.pocockSearch
+        #expect(pocock.skillsSh == .enabled && pocock.results.count == 22)
+        #expect(pocock.results.count { $0.source == "packagist" && $0.installs == nil } == 2)
+        #expect(pocock.results.count { $0.source == "skills.sh" && $0.name.hasPrefix("github:") } == 20)
+        #expect(DesignFixtures.personal.repositories.map(\.name) == ["packagist", "github"])
     }
 
     // MARK: - Adopt and Remove
