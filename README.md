@@ -43,18 +43,16 @@ skillcask app                   # or open Skillcask from Applications
 Install with the full names: Homebrew loads a third-party tap's cask only when it is named in full
 (or listed by `brew trust`); after that, `brew upgrade` takes the short name.
 
-Without Homebrew, take `Skillcask-X.Y.Z-macos-universal.zip` from the
-[latest release](https://github.com/puniserv/skillcask/releases/latest), signed and notarized, with
-its own CLI inside:
+Without Homebrew:
 
 ```sh
-v=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/puniserv/skillcask/releases/latest | sed 's|.*/tag/v||')
-zip="Skillcask-$v-macos-universal.zip"
-curl -fsSLO "https://github.com/puniserv/skillcask/releases/download/v$v/$zip"
-curl -fsSLO "https://github.com/puniserv/skillcask/releases/download/v$v/$zip.sha256"
-shasum -a 256 -c "$zip.sha256"
-rm -rf /Applications/Skillcask.app && ditto -x -k "$zip" /Applications   # not over a Homebrew install
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/puniserv/skillcask/releases/latest/download/skillcask-app-installer.sh | sh
 ```
+
+The installer downloads `Skillcask-X.Y.Z-macos-universal.zip` (signed and notarized, with its own
+CLI inside) from the latest release, checks its sha256 and Gatekeeper's verdict, and moves the app
+to `/Applications`; an earlier copy goes to the Trash. It leaves a Homebrew install alone.
+`SKILLCASK_VERSION=X.Y.Z` picks a release, `SKILLCASK_APP_DIR` another folder.
 
 Linux and Windows have the terminal UI, `skillcask ui`. More in [macOS app](#macos-app).
 
