@@ -35,8 +35,8 @@ set.
 
 ## Signing and Gatekeeper
 
-The bundle is signed ad hoc with the hardened runtime, inside-out (the helper, then the app), not
-notarized: it opens on the machine that built it. Gatekeeper blocks a downloaded copy ("cannot be
+A local build is signed ad hoc with the hardened runtime, inside-out (the helper, then the app),
+not notarized: it opens on the machine that built it. Gatekeeper blocks a downloaded copy ("cannot be
 opened" / "damaged"). On macOS 14, right-click the app and choose Open. On macOS 15 and later, try
 to open it once, then choose Open Anyway in System Settings › Privacy & Security. Clearing the
 quarantine flag after unzipping also works, but do it only for a copy you built yourself or got from
@@ -46,9 +46,11 @@ a source you trust:
 xattr -dr com.apple.quarantine Skillcask.app
 ```
 
-Distributing the app needs a Developer ID Application certificate (`SIGN_IDENTITY="Developer ID
-Application: …" macos/bundle.sh`) and notarization with the maintainer's Apple Developer account
-(`xcrun notarytool submit <zip> --wait`, then `xcrun stapler staple` on the app, and zip again).
+Releases do not have this problem: `publish-macos-app` in `.github/workflows/release.yml` builds the
+app with the released CLI, signs it with a Developer ID (`SIGN_IDENTITY="Developer ID Application:
+…"`), notarizes and staples it, and attaches the zip to the GitHub Release; the cask
+`skillcask-app` in `puniserv/homebrew-tap` installs that zip (D50,
+`docs/specs/2026-10-28-macos-app-release.md`).
 
 ## Test
 
