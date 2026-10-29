@@ -104,6 +104,22 @@ x64), checks its sha256 and its build provenance attestation, puts `skillcask` o
 it with `args`. It runs no other action. Used at a tag (`@vX.Y.Z`) it takes the version from the
 tag.
 
+### Update
+
+Update the same way you installed; skillcask does not update itself.
+
+```sh
+brew update && brew upgrade skillcask skillcask-app    # Homebrew (skillcask alone without the app)
+npm install -g skillcask@latest                        # npm (bun: bun add -g skillcask@latest)
+cargo install --locked skillcask                       # Cargo
+```
+
+The installer scripts (`skillcask-installer.sh`, `skillcask-installer.ps1`,
+`skillcask-app-installer.sh`) install the latest release when run again; the app's installer moves
+the earlier copy to the Trash. The app's own CLI updates with the app; Homebrew updates the app and
+the CLI on your `PATH` separately, which is why `brew upgrade` names both. For the GitHub Action,
+bump the pinned commit and `version`. `skillcask --version` prints what you have.
+
 ## Use
 
 ```sh
