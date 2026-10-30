@@ -13,7 +13,8 @@ import SwiftUI
 public struct MainWindow: View {
     /// The window's minimum height; the boards are 800 tall, 600 keeps the Overview grid readable.
     public static let minHeight: CGFloat = 600
-    /// The scene's id, so Settings › Advanced "Show Activity" can open the window when none is open.
+    /// The scene's id, so Settings and the app menu can open the window when none is open; SwiftUI starts its
+    /// windows' identifiers with it (`Workspace.isMainScene`).
     public static let sceneID = "main"
 
     @Environment(AppStore.self) private var app
@@ -187,8 +188,6 @@ private struct AppUpdateHost: ViewModifier {
         content
             .background { appUpdateSheet }
             .background { appUpdateAlert }
-            .onAppear { updates.hostAppeared() }
-            .onDisappear { updates.hostDisappeared() }
             .onChange(of: app.isReady, initial: true) { updates.cliChanged(isReady: app.isReady) }
             .onChange(of: updates.isPresenting, initial: true) { app.isAppUpdatePresenting = updates.isPresenting }
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in

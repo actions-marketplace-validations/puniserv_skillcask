@@ -326,19 +326,31 @@ import Testing
         #expect(UpdateDefaults(suite).load() == UpdateState(consent: .granted), "the attempt is not persisted")
     }
 
-    /// Final review B2: the menu opens a main window when none hosts the sheet and alert.
-    @Test func hostsAreCounted() {
-        let store = makeStore()
-        #expect(!store.hasHost)
-        store.hostAppeared()
-        store.hostAppeared()
-        store.hostDisappeared()
-        #expect(store.hasHost)
-        store.hostDisappeared()
-        store.hostDisappeared()
-        #expect(!store.hasHost)
-        store.hostAppeared()
-        #expect(store.hasHost)
+    /// Final review B3: Check for Updates… shows its answer on a main window and never raises Settings over it.
+    @Test func theMenuKeepsItsAnswerOnAMainWindow() {
+        typealias Info = Workspace.WindowInfo
+        let main = Info(isMainScene: true, isKey: false, canBeMain: true)
+        let settings = Info(isMainScene: false, isKey: false, canBeMain: true)
+        var keyMain = main
+        keyMain.isKey = true
+        var keySettings = settings
+        keySettings.isKey = true
+        // The key window is a main window: it stays, even with Settings open behind it.
+        #expect(Workspace.mainWindowChoice([settings, keyMain]) == .keep)
+        // Settings is key with a main window behind: the main window comes forward, not Settings.
+        #expect(Workspace.mainWindowChoice([keySettings, main]) == .raise(1))
+        // No main window: one opens, whatever else is on screen.
+        #expect(Workspace.mainWindowChoice([keySettings]) == .open)
+        #expect(Workspace.mainWindowChoice([settings]) == .open)
+        #expect(Workspace.mainWindowChoice([]) == .open)
+        // A closed main window (not visible, not in the Dock) does not count.
+        let closed = Info(isMainScene: true, isKey: false, canBeMain: false)
+        #expect(Workspace.mainWindowChoice([keySettings, closed]) == .open)
+        // SwiftUI names the scene's windows `main-AppWindow-<n>`.
+        #expect(Workspace.isMainScene("main-AppWindow-1"))
+        #expect(!Workspace.isMainScene("com_apple_SwiftUI_Settings_window"))
+        #expect(!Workspace.isMainScene("mainly"))
+        #expect(!Workspace.isMainScene(nil))
     }
 
     /// `Update to X…` re-checks with the sheet open: a newer answer replaces the version it offers.

@@ -80,21 +80,63 @@ import UniformTypeIdentifiers
         return panel.runModal() == .OK ? panel.url : nil
     }
 
-    /// Settings › Advanced "Show Activity": activates the app and brings a main window (any window that can be main
-    /// other than the key one, which is Settings) to the front, unminimizing it. False when there is none, so the
-    /// caller opens one.
+    /// Settings › Advanced "Show Activity", Settings › Updates and Check for Updates…: activates the app and makes
+    /// sure a main window is in front, unminimizing it (`mainWindowChoice`). False when there is none, so the caller
+    /// opens one.
     static func bringMainWindowForward() -> Bool {
+        let windows = NSApp.windows
         let key = NSApp.keyWindow
-        guard
-            let window = NSApp.windows.first(where: {
-                $0 !== key && $0.canBecomeMain && ($0.isVisible || $0.isMiniaturized)
-            })
-        else { return false }
-        NSApp.activate()
-        if window.isMiniaturized {
-            window.deminiaturize(nil)
+        let infos = windows.map {
+            WindowInfo(
+                isMainScene: isMainScene($0.identifier?.rawValue), isKey: $0 === key,
+                canBeMain: $0.canBecomeMain && ($0.isVisible || $0.isMiniaturized))
         }
-        window.makeKeyAndOrderFront(nil)
-        return true
+        switch mainWindowChoice(infos) {
+        case .keep:
+            NSApp.activate()
+            return true
+        case .raise(let index):
+            let window = windows[index]
+            NSApp.activate()
+            if window.isMiniaturized {
+                window.deminiaturize(nil)
+            }
+            window.makeKeyAndOrderFront(nil)
+            return true
+        case .open:
+            return false
+        }
+    }
+
+    /// What `mainWindowChoice` needs of a window: whether the main scene made it, is key, and is on screen or in the
+    /// Dock and can be main.
+    struct WindowInfo: Equatable {
+        var isMainScene: Bool
+        var isKey: Bool
+        var canBeMain: Bool
+    }
+
+    /// Which window shows the main window's answers: `keep` when the key window is already a main window (the menu
+    /// is used from it), else the first main window behind (never Settings, which would cover it), else `open` one.
+    enum MainWindowChoice: Equatable {
+        case keep
+        case raise(Int)
+        case open
+    }
+
+    static func mainWindowChoice(_ windows: [WindowInfo]) -> MainWindowChoice {
+        if windows.contains(where: { $0.isKey && $0.isMainScene && $0.canBeMain }) {
+            return .keep
+        }
+        if let index = windows.firstIndex(where: { !$0.isKey && $0.isMainScene && $0.canBeMain }) {
+            return .raise(index)
+        }
+        return .open
+    }
+
+    /// SwiftUI names a `WindowGroup`'s windows `<scene id>-AppWindow-<n>`.
+    static func isMainScene(_ identifier: String?) -> Bool {
+        guard let identifier else { return false }
+        return identifier == MainWindow.sceneID || identifier.hasPrefix(MainWindow.sceneID + "-")
     }
 }

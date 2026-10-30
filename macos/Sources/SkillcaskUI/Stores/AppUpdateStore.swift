@@ -160,12 +160,10 @@ import SkillcaskUpdates
     /// The daily loop while consent is granted and the CLI is ready; internal so tests can await it.
     @ObservationIgnored var schedule: Task<Void, Never>?
     @ObservationIgnored private var scheduleID = UUID()
-    /// The check running now: the loop, an activation, the menu and the known-update re-check share it, so they
-    /// never send two requests at once.
     /// When the last automatic check started, whatever its answer; in memory only, so nothing new is persisted.
     @ObservationIgnored private(set) var lastAttemptAt: Date?
-    /// The main windows' `AppUpdateHost`s on screen.
-    @ObservationIgnored private var hosts = 0
+    /// The check running now: the loop, an activation, the menu and the known-update re-check share it, so they
+    /// never send two requests at once.
     @ObservationIgnored private var inFlight: Task<Result<SelfCheckOutcome, CLIError>, Never>?
 
     /// - Parameters:
@@ -278,20 +276,6 @@ import SkillcaskUpdates
             UpdateSchedule.isDue(lastCheckAt: lastAttemptAt, now: now())
         else { return }
         await automaticCheck()
-    }
-
-    /// A main window's `AppUpdateHost` appeared or went away: the sheet and the alert need one to show.
-    public func hostAppeared() {
-        hosts += 1
-    }
-
-    public func hostDisappeared() {
-        hosts = max(0, hosts - 1)
-    }
-
-    /// A main window is open to present the sheet or the alert; the app menu item opens one when not.
-    public var hasHost: Bool {
-        hosts > 0
     }
 
     // MARK: - Consent

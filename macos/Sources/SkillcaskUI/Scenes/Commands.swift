@@ -35,12 +35,11 @@ public struct SkillcaskCommands: Commands {
     /// The snapshot the Skill and Scope menus act on: none for a folder without skills.toml.
     private var snapshot: ScopeSnapshot? { isSetUp ? store?.snapshot : nil }
 
-    /// Check for Updates… / Update to X…: the answer shows on a main window, so one comes forward first, or opens
-    /// when every main window is closed (the app keeps running without one); then the check runs.
+    /// Check for Updates… / Update to X…: the answer shows on a main window, so the key one stays, another comes
+    /// forward, or one opens when every main window is closed (the app keeps running without one); then the check
+    /// runs.
     private func checkForUpdates(_ updates: AppUpdateStore) {
-        if updates.hasHost {
-            _ = Workspace.bringMainWindowForward()
-        } else {
+        if !Workspace.bringMainWindowForward() {
             openWindow(id: MainWindow.sceneID)
         }
         Task { await updates.checkForUpdates() }
