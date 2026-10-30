@@ -59,8 +59,8 @@ public struct InstallMethodDetector: Sendable {
         if resolved == Self.applicationPath, Self.caskrooms.contains(where: fileExists) {
             return .homebrew
         }
-        // Beyond D35's two checks, kept on purpose: a bundle path that resolves to a copy inside the Caskroom (a
-        // symlink to it) belongs to the cask too, and `brew upgrade` replaces it.
+        // A bundle path that resolves to a copy inside the Caskroom (a symlink to it) belongs to the cask too, and
+        // `brew upgrade` replaces it (D35).
         if Self.caskrooms.contains(where: { resolved.hasPrefix($0 + "/") }) {
             return .homebrew
         }

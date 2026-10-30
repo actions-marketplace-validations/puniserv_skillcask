@@ -338,7 +338,7 @@ Every command except `publish`, `validate` and `projects` takes `-g, --global`.
 | `projects [dirs…]` | Directories that hold `skills.toml` under the given ones (default: the current one), up to 6 levels down; hidden directories, `node_modules`, `vendor`, `target` and `Library` are skipped. |
 | `ui` | A terminal UI over the commands above: skills with their state and updates, `info`, SKILL.md and `audit` per skill, add, adopt (also offered when an add hits a skill skillcask does not manage), update (diff first), remove, doctor, a filter of the list, search of the registries (and skills.sh, asked once), the repositories in use (`R`, `S` turns skills.sh on or off) and a projects picker; `g` switches between the project and `--global`. |
 | `app` | Opens the macOS app (see [macOS app](#macos-app)); exits 1 when it is not installed, and on Linux and Windows. |
-| `self-check [--json]` | Whether a newer skillcask is released, from the `skillcask-app` cask file of the tap; one anonymous request, only when run. |
+| `self-check [--json]` | Whether a newer skillcask is released, from the `skillcask-app` cask file of the tap; one anonymous request, only when run; writes nothing. |
 | `<other>` | Runs `skillcask-<other>` from `PATH`, like git and cargo plugins. |
 
 `status`, `outdated`, `info`, `search`, `doctor`, `audit`, `projects`, `config` and
@@ -611,6 +611,11 @@ brew install puniserv/tap/skillcask puniserv/tap/skillcask-app
 
 Every release also has `Skillcask-X.Y.Z-macos-universal.zip`, signed with a Developer ID and
 notarized (D50): unzip it into `/Applications`.
+
+The app does not update itself. Its app menu has Check for Updates…, which runs `skillcask
+self-check`; it checks daily only after you say yes once (it asks in the sidebar; Settings ›
+Updates switches it). A newer version gets a card and a sheet with the Homebrew command to copy, or
+the release page for a download (D51); it never installs anything.
 
 `macos/bundle.sh` builds a universal `Skillcask.app` that carries its own CLI at
 `Contents/Helpers/skillcask`. Run outside a bundle (`swift run` from `macos/`), the app uses the
