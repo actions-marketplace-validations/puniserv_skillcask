@@ -30,6 +30,37 @@ public struct Version: Hashable, Sendable {
         self.init(major, minor, patch, prerelease: prerelease)
     }
 
+    /// Exactly `^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$` in ASCII, as `self-check` (D51) reads the cask: no `v`, no
+    /// sign, no `+build`, no whitespace; nil for anything else, and for a number too large for `Int`. For versions
+    /// that come from the network, where the lenient `init?(_:)` would let `+1` or a `v` through.
+    public init?(strict text: String) {
+        let (core, prerelease): (Substring, Substring?) =
+            if let dash = text.firstIndex(of: "-") {
+                (text[..<dash], text[text.index(after: dash)...])
+            } else {
+                (Substring(text), nil)
+            }
+        let isDigit = { (byte: UInt8) in (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(byte) }
+        let parts = core.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 3, parts.allSatisfy({ !$0.isEmpty && $0.utf8.allSatisfy(isDigit) }) else { return nil }
+        if let prerelease {
+            let allowed = { (byte: UInt8) in
+                isDigit(byte) || (UInt8(ascii: "a")...UInt8(ascii: "z")).contains(byte)
+                    || (UInt8(ascii: "A")...UInt8(ascii: "Z")).contains(byte) || byte == UInt8(ascii: ".")
+                    || byte == UInt8(ascii: "-")
+            }
+            guard !prerelease.isEmpty, prerelease.utf8.allSatisfy(allowed) else { return nil }
+        }
+        guard let major = Int(parts[0]), let minor = Int(parts[1]), let patch = Int(parts[2]) else { return nil }
+        self.init(major, minor, patch, prerelease: prerelease.map(String.init))
+    }
+
+    /// Whether `description` reads back through `init?(strict:)`: false for a value built with a prerelease the
+    /// cask could not hold (`rc_1`, empty).
+    public var isStrict: Bool {
+        Version(strict: description) == self
+    }
+
     /// The version in `skillcask 0.9.1 (1afcd7c81d2e)`; nil when the output is not the CLI's.
     public init?(cliOutput: String) {
         let words = cliOutput.split(whereSeparator: \.isWhitespace)

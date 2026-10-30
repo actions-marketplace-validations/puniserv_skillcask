@@ -9,7 +9,8 @@ import Foundation
 ///   Checked at every spawn, so a folder whose skills.toml went away since the sidebar's check is refused too.
 /// - A read-only command (`Invocation.isReadOnly`) that has not answered within its limit is cancelled (the runner
 ///   terminates the child) and fails with `CLIError.timedOut`. Two limits: `readTimeout` (2 min) for the
-///   reads that stay on disk (`status`, `audit`, `doctor`, `info <skill>`, `projects`, `config`), and
+///   reads that stay on disk (`status`, `audit`, `doctor`, `info <skill>`, `projects`, `config`) and for
+///   `self-check` (one small file, D35), and
 ///   `networkReadTimeout` (15 min) for the ones that talk to registries (`Invocation.needsNetwork`: `outdated`
 ///   queries every registry, `diff` and `diff --to` download the archives they compare, `info <package>` downloads
 ///   the dist, `search` asks every source). Those can legitimately take minutes on a slow link or a large
@@ -42,6 +43,10 @@ public struct GuardedClient: CLIClient {
     /// The limit `invocation` runs under; nil for a mutation (no limit).
     public func limit(for invocation: Invocation) -> Duration? {
         guard invocation.isReadOnly else { return nil }
+        // `self-check` makes one request for one small file: D35 gives it the 2 minutes of a read on disk.
+        if invocation.command == .selfCheck {
+            return readTimeout
+        }
         return invocation.needsNetwork ? networkReadTimeout : readTimeout
     }
 

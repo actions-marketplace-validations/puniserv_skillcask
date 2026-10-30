@@ -163,7 +163,7 @@ import Testing
             .status, .audit, .outdated, .doctor(fix: false), .info(.skill("a")), .info(.package("a/b")),
             .search(query: "q", skillsSh: nil, remember: false), .diff(package: nil),
             .diffTo(package: "a/b", version: "1.0"), .projects(roots: [URL(fileURLWithPath: "/tmp")]),
-            .config(key: "search.skills-sh"), .configList,
+            .config(key: "search.skills-sh"), .configList, .selfCheck,
         ]
         for command in reads {
             #expect(try Invocation(command, in: project, capabilities: all).isReadOnly, "\(command)")
