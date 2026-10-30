@@ -7,10 +7,11 @@ import Testing
 /// `UpdateDefaults`: every field round-trips under `appUpdates.*`, unset fields leave no key, and the launch hook
 /// clears the waiting card for good.
 @Suite struct UpdateDefaultsTests {
-    let suite = "skillcask.tests.updates.\(UUID().uuidString)"
+    /// In memory: no plist is left behind.
+    let memory = MemoryDefaults()!
 
     func defaults() throws -> UserDefaults {
-        try #require(UserDefaults(suiteName: suite))
+        memory
     }
 
     @Test func aFreshSuiteIsUndecidedAndEmpty() throws {
@@ -19,7 +20,6 @@ import Testing
 
     @Test func everyFieldRoundTrips() throws {
         let defaults = try defaults()
-        defer { defaults.removePersistentDomain(forName: suite) }
         let state = UpdateState(
             consent: .granted, lastCheckAt: Date(timeIntervalSince1970: 1_800_000_000),
             latestSeen: Version(1, 3, 0, prerelease: "rc.2"), skippedVersion: Version(1, 2, 9),
@@ -40,7 +40,6 @@ import Testing
 
     @Test func unsetFieldsLeaveNoKey() throws {
         let defaults = try defaults()
-        defer { defaults.removePersistentDomain(forName: suite) }
         UpdateDefaults(defaults)
             .save(UpdateState(consent: .granted, skippedVersion: Version(1, 0, 0), awaitingRelaunch: true))
         UpdateDefaults(defaults).save(UpdateState())
@@ -52,7 +51,6 @@ import Testing
     /// A value edited by hand that is not a plain version or a known consent reads as unset.
     @Test func handEditedValuesReadStrictly() throws {
         let defaults = try defaults()
-        defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set("yes", forKey: "appUpdates.consent")
         defaults.set("v1.3.0", forKey: "appUpdates.latestSeen")
         defaults.set("1.3", forKey: "appUpdates.skippedVersion")
@@ -63,7 +61,6 @@ import Testing
     /// The launch hook clears `awaitingRelaunch` and writes it, so the next load agrees; the rest stays.
     @Test func theLaunchHookClearsAwaitingRelaunch() throws {
         let defaults = try defaults()
-        defer { defaults.removePersistentDomain(forName: suite) }
         let before = UpdateState(consent: .granted, skippedVersion: Version(1, 3, 0), awaitingRelaunch: true)
         UpdateDefaults(defaults).save(before)
         let after = UpdateDefaults(defaults).launched()

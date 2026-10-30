@@ -63,6 +63,23 @@ import SkillcaskUpdates
         }
     }
 
+    /// What Settings › Updates' `Check Now` found, shown under Last checked in Settings: the window that asked shows
+    /// the answer, never the main window's alert or sheet (it may be closed, or behind Settings).
+    public enum SettingsCheckResult: Hashable, Sendable {
+        case upToDate(Version)
+        case available(Version)
+        /// The CLI's error line, the unreadable-answer line or the too-old-CLI line.
+        case failed(String)
+
+        public var message: String {
+            switch self {
+            case .upToDate: AppUpdateCopy.upToDateTitle
+            case .available(let version): AppUpdateCopy.availableTitle(version)
+            case .failed(let line): line
+            }
+        }
+    }
+
     /// The update sheet on screen, for `.sheet(item:)`: one identity per presentation.
     public struct SheetRequest: Identifiable, Hashable, Sendable {
         public let id: UUID
@@ -123,6 +140,8 @@ import SkillcaskUpdates
     public private(set) var isChecking = false
     /// The manual check's alert; any button or Esc clears it.
     public var alert: Alert?
+    /// The last answer of a check started in Settings (`checkFromSettings()`); nil while one runs.
+    public private(set) var settingsCheckResult: SettingsCheckResult?
     /// The update sheet's presentation; `presentSheet(for:)` and `dismissSheet()` set it.
     public private(set) var sheet: SheetRequest?
 
@@ -368,6 +387,45 @@ import SkillcaskUpdates
         case .failure(let error):
             alert = .failed(AppUpdateCopy.failedMessage(error))
         }
+    }
+
+    /// Settings › Updates' `Check Now`: a check that ignores the schedule, skip, × and Remind like the menu's, but
+    /// answers in Settings (`settingsCheckResult`) and never sets `alert` or `sheet`, so nothing pops up later on
+    /// the main window. `See What’s New…` there opens the sheet (`seeWhatsNew()`).
+    public func checkFromSettings() async {
+        guard let installed, !isChecking else { return }
+        isChecking = true
+        settingsCheckResult = nil
+        defer { isChecking = false }
+        let result = await run()
+        record(result)
+        switch result {
+        case .success(.checked(let document)):
+            switch UpdateDecision.manual(installed: installed, document: document) {
+            case .available(let version): settingsCheckResult = .available(version)
+            case .upToDate(let version): settingsCheckResult = .upToDate(version)
+            case .unknown: settingsCheckResult = .failed(AppUpdateCopy.unknownMessage)
+            }
+        case .success(.unsupported):
+            settingsCheckResult = .failed(
+                AppUpdateCopy.unsupportedMessage(context()?.capabilities.version ?? installed))
+        case .failure(.cancelled):
+            break
+        case .failure(let error):
+            settingsCheckResult = .failed(AppUpdateCopy.failedMessage(error))
+        }
+    }
+
+    /// Settings' `See What’s New…`: the sheet on the known update (the caller brings the main window forward).
+    public func seeWhatsNew() {
+        if let knownUpdate {
+            presentSheet(for: knownUpdate)
+        }
+    }
+
+    /// The store's clock, for "Today at …" in Settings.
+    public var currentDate: Date {
+        now()
     }
 
     /// The alert's Try Again.

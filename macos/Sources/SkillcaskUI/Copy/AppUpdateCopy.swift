@@ -64,10 +64,11 @@ public enum AppUpdateCopy {
 
     public static let howToUpdateTitle = "How to update"
 
-    /// The direct-download steps, naming the release's zip.
-    public static func howToUpdate(zip: String) -> String {
-        "Download \(zip) from the release page, quit Skillcask, unzip it and drag Skillcask into Applications, "
-            + "replacing the old copy."
+    /// The direct-download steps, naming the release's zip; nil (a version that is not strict, so no zip name) says
+    /// the macOS zip.
+    public static func howToUpdate(zip: String?) -> String {
+        "Download \(zip ?? "the macOS zip") from the release page, quit Skillcask, unzip it and drag Skillcask into "
+            + "Applications, replacing the old copy."
     }
 
     /// The temporary-copy callout: the bold lead, then why it matters.
@@ -137,9 +138,9 @@ public enum AppUpdateCopy {
         }
     }
 
-    /// After the last-checked time while an update is known.
-    public static func availableSuffix(_ version: Version) -> String {
-        " · \(version) available"
+    /// After the last-checked time while an update is known; `(skipped)` when it is the skipped version.
+    public static func availableSuffix(_ version: Version, skipped: Bool = false) -> String {
+        " · \(version) available" + (skipped ? " (skipped)" : "")
     }
 
     /// `None` or the skipped version.

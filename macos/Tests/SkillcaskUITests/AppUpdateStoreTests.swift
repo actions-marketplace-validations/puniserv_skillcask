@@ -30,7 +30,8 @@ import Testing
     static let same = #"{"version":"0.10.2","latest":"0.10.2","newer":false}"#
     static let unknown = #"{"version":"0.10.2","latest":null,"newer":false}"#
 
-    let suite = UserDefaults(suiteName: "AppUpdateStoreTests-\(UUID().uuidString)")!
+    /// In memory: no plist is left behind.
+    let suite = MemoryDefaults()!
     let client = FakeCLIClient()
     let clock = Clock()
 
@@ -286,33 +287,24 @@ import Testing
         #expect(!stores.updates.isEnabled, "fixtures: the check is off")
     }
 
-    /// B1 of phase 4a: `-appUpdates.consent declined` (smoke) must not become permanent. A suite of its own, searched
-    /// after the store's (`addSuite(named:)`), stands in for the argument domain: read by `load()`, never written.
-    /// Not `register(defaults:)`: the registration domain is process-wide and would leak into parallel tests.
+    /// B1 of phase 4a: `-appUpdates.consent declined` (smoke) must not become permanent. A read-only layer behind
+    /// the store's values stands in for the argument domain: read by `load()`, never written. Not
+    /// `register(defaults:)`: the registration domain is process-wide and would leak into parallel tests.
     @Test func launchArgumentsAreNeverPersisted() {
-        let arguments = "AppUpdateStoreTests-args-\(UUID().uuidString)"
-        let name = "AppUpdateStoreTests-store-\(UUID().uuidString)"
-        let seeded = UserDefaults(suiteName: arguments)!
-        let defaults = UserDefaults(suiteName: name)!
-        defer {
-            seeded.removePersistentDomain(forName: arguments)
-            defaults.removePersistentDomain(forName: name)
-        }
-        seeded.set("declined", forKey: UpdateDefaults.Key.consent)
-        seeded.set("0.10.3", forKey: UpdateDefaults.Key.latestSeen)
-        defaults.addSuite(named: arguments)
+        let defaults = MemoryDefaults(readOnly: [
+            UpdateDefaults.Key.consent: "declined", UpdateDefaults.Key.latestSeen: "0.10.3",
+        ])!
         let clock = clock
         let store = AppUpdateStore(
             installed: Self.installed, defaults: UpdateDefaults(defaults), now: { clock.now }, context: { nil })
         #expect(store.state.consent == .declined)
         store.launch()
-        #expect(defaults.persistentDomain(forName: name)?.isEmpty ?? true, "launch writes nothing")
+        #expect(defaults.values.isEmpty, "launch writes nothing")
         #expect(store.card == .available(Version(0, 10, 3)))
         store.hideCard()
-        let written = defaults.persistentDomain(forName: name) ?? [:]
-        #expect(written[UpdateDefaults.Key.consent] == nil)
-        #expect(written[UpdateDefaults.Key.latestSeen] == nil)
-        #expect(written[UpdateDefaults.Key.hiddenUntil] != nil)
+        #expect(defaults.values[UpdateDefaults.Key.consent] == nil)
+        #expect(defaults.values[UpdateDefaults.Key.latestSeen] == nil)
+        #expect(defaults.values[UpdateDefaults.Key.hiddenUntil] != nil)
     }
 
     /// The consent card needs a CLI the gate lets through: none for a configured 0.10.1.

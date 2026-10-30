@@ -8,9 +8,10 @@ struct AppUpdateSheetContent: Equatable {
     enum Body: Equatable {
         /// `Run in Terminal` and the one command row.
         case homebrew(command: String)
-        /// `How to update`, naming the release's zip.
-        case direct(zip: String)
-        /// The temporary-copy callout and `Do this first`; the path row only when the original is known.
+        /// `How to update`, naming the release's zip; nil for a version that is not strict (`UpdateLinks.zipName`).
+        case direct(zip: String?)
+        /// The temporary-copy callout and `Do this first`; the path row only when the original is known (its
+        /// `Show in Finder` is the primary button, not a second one in the row).
         case translocated(original: URL?)
     }
 
@@ -32,7 +33,7 @@ struct AppUpdateSheetContent: Equatable {
             secondary = [.remindTomorrow, .copyAndOpenTerminal]
             primary = .copyCommand
         case .direct:
-            body = .direct(zip: UpdateLinks.zipName(for: version) ?? "Skillcask-\(version)-macos-universal.zip")
+            body = .direct(zip: UpdateLinks.zipName(for: version))
             offersSkip = true
             secondary = [.remindTomorrow]
             primary = .openReleasePage
@@ -50,9 +51,7 @@ struct AppUpdateSheetContent: Equatable {
 /// on GitHub), the steps for the install method and the footer. Every footer button acts through
 /// `AppUpdateStore.perform(_:on:)` and closes the sheet; Esc closes it with no state change.
 ///
-/// Declared deviations from the handoff (the brief wins): no release notes box (a button opens the release page),
-/// one Homebrew command, a zip instead of a dmg, no CLI-only or CLI-blocking variant; the title is `sheetTitle`
-/// (20 pt bold) where the handoff draws 17 pt, as on the onboarding sheet; the footer is one row.
+/// Deviations from the handoff (the brief wins): DESIGN.md G14.
 struct AppUpdateSheet: View {
     let version: Version
     let installed: Version
@@ -168,10 +167,10 @@ struct AppUpdateSheet: View {
     }
 
     /// `Download <zip> from the release page, …` with the zip name in mono.
-    private func howToUpdate(zip: String) -> some View {
+    private func howToUpdate(zip: String?) -> some View {
         let sentence = AppUpdateCopy.howToUpdate(zip: zip)
         let text: Text =
-            if let range = sentence.range(of: zip) {
+            if let zip, let range = sentence.range(of: zip) {
                 Text(sentence[..<range.lowerBound]) + Text(zip).font(Font.Token.mono)
                     + Text(sentence[range.upperBound...])
             } else {
@@ -199,7 +198,7 @@ struct AppUpdateSheet: View {
         }
     }
 
-    /// Where the user's copy lies, with Show in Finder.
+    /// Where the user's copy lies; the footer's primary shows it in Finder.
     private func pathRow(_ original: URL) -> some View {
         boxedRow {
             Text((original.path as NSString).abbreviatingWithTildeInPath)
@@ -209,10 +208,6 @@ struct AppUpdateSheet: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Button(AppUpdateCopy.title(for: .showInFinder(original))) {
-                updates.perform(.showInFinder(original), on: version)
-            }
-            .controlSize(.small)
         }
     }
 

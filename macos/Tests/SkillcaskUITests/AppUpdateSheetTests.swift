@@ -33,7 +33,8 @@ import Testing
         URL(fileURLWithPath: "/Applications/Skillcask.app/Contents/Helpers/skillcask"))
     static let original = URL(fileURLWithPath: "/Users/me/Downloads/Skillcask.app")
 
-    let suite = UserDefaults(suiteName: "AppUpdateSheetTests-\(UUID().uuidString)")!
+    /// In memory: no plist is left behind.
+    let suite = MemoryDefaults()!
     let client = FakeCLIClient()
     let log = SystemLog()
     let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -85,6 +86,12 @@ import Testing
             AppUpdateCopy.howToUpdate(zip: "Skillcask-0.10.3-macos-universal.zip")
                 == "Download Skillcask-0.10.3-macos-universal.zip from the release page, quit Skillcask, unzip it "
                 + "and drag Skillcask into Applications, replacing the old copy.")
+    }
+
+    @Test func aVersionThatIsNotStrictNamesNoZip() {
+        let content = AppUpdateSheetContent(method: .direct, version: Version(0, 10, 3, prerelease: "rc 1"))
+        #expect(content.body == .direct(zip: nil))
+        #expect(AppUpdateCopy.howToUpdate(zip: nil).hasPrefix("Download the macOS zip from the release page"))
     }
 
     @Test func translocatedShowsInFinderOnlyWhenTheOriginalIsKnown() {
@@ -222,6 +229,7 @@ import Testing
             AppUpdateCopy.lastChecked(at, now: at.addingTimeInterval(3 * 24 * 3600), timeZone: .gmt)
                 == "15 Jan at 08:00")
         #expect(AppUpdateCopy.availableSuffix(Self.latest) == " · 0.10.3 available")
+        #expect(AppUpdateCopy.availableSuffix(Self.latest, skipped: true) == " · 0.10.3 available (skipped)")
     }
 
     @Test func dailySwitchGrantsAndDeclines() {
@@ -248,14 +256,45 @@ import Testing
         #expect(store.card == .available(Self.latest))
     }
 
-    @Test func checkNowRunsTheManualCheck() async {
+    /// B1 of phase 4b: Check Now answers in Settings and leaves no alert or sheet pending for the main window.
+    @Test func checkNowAnswersInSettingsOnly() async {
         await client.json(.selfCheck, in: .personal, #"{"version":"0.10.2","latest":"0.10.2","newer":false}"#)
         let store = makeStore(state: UpdateState())
         #expect(store.checkNowBlocker == nil)
-        await store.checkForUpdates()
+        await store.checkFromSettings()
         #expect(await client.commands == [.selfCheck])
         #expect(store.state.lastCheckAt == now)
-        #expect(store.alert == .upToDate(Self.installed))
+        #expect(store.settingsCheckResult == .upToDate(Self.installed))
+        #expect(store.settingsCheckResult?.message == "You’re up to date")
+        #expect(store.alert == nil && store.sheet == nil)
+        #expect(!store.isChecking)
+    }
+
+    @Test func checkNowFindingAnUpdateOpensNothingUntilAsked() async {
+        await client.json(.selfCheck, in: .personal, #"{"version":"0.10.2","latest":"0.10.3","newer":true}"#)
+        let store = makeStore(state: UpdateState(consent: .declined, latestSeen: Self.latest))
+        await store.checkFromSettings()
+        #expect(store.settingsCheckResult == .available(Self.latest))
+        #expect(store.settingsCheckResult?.message == "Skillcask 0.10.3 is available")
+        #expect(store.alert == nil && store.sheet == nil, "a known update still runs the check, no sheet")
+        store.seeWhatsNew()
+        #expect(store.sheet?.version == Self.latest)
+    }
+
+    @Test func checkNowFailureShowsTheErrorLineInSettings() async {
+        let error = CLIError.binaryMissing(searched: [])
+        await client.script(.selfCheck, in: .personal, .error(error))
+        let store = makeStore(state: UpdateState())
+        await store.checkFromSettings()
+        #expect(store.settingsCheckResult == .failed(AppUpdateCopy.failedMessage(error)))
+        #expect(store.alert == nil && store.sheet == nil)
+        #expect(store.state.lastCheckAt == nil)
+    }
+
+    @Test func seeWhatsNewWithoutAKnownUpdateOpensNothing() {
+        let store = makeStore(state: UpdateState())
+        store.seeWhatsNew()
+        #expect(store.sheet == nil)
     }
 
     @Test func checkNowSaysWhyItCannotRun() {

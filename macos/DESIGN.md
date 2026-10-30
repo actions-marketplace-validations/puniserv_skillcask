@@ -114,6 +114,14 @@ Code comments cite these by number.
 - **G11** The boards use a Medium (500) weight the base scale lacked: the `…Medium` and `…Semibold`
   variants carry it.
 - **G13** Mono line heights outside the scale: 18 pt for the diff grid, 15 pt for the transcript.
+- **G14** App update (U1–U5, D51) follows the brief where the handoff differs: no release notes box
+  (a `Release Notes on GitHub` button opens the tag page built from the version), one Homebrew
+  command (`brew update && brew upgrade skillcask skillcask-app`, Copy Command and Copy and Open
+  Terminal), a zip not a dmg (`Open Release Page`, not `Download X`), no CLI-only or CLI-blocking
+  variant and no release date. The sheet is 680 wide (U2 draws 740, with notes), its title is
+  `sheetTitle` 20 pt (U2: 17), footers are one row, a temporary copy has no Skip and shows in
+  Finder only from the primary. Settings' group is `Skillcask app` with no command-line tool line
+  and no pre-release switch; Check Now answers inline there, never as a main-window alert.
 - The toast's shadow (`0 8pt 24pt`, black at 0.16 light / 0.5 dark) lives in `Toast.Shadow`; no
   shadow token exists yet. Cards never have a shadow.
 

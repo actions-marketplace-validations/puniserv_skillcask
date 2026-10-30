@@ -2,8 +2,7 @@ import SkillcaskCore
 import SwiftUI
 
 /// Settings › Updates (Settings-States board, left window): the `Skillcask app` group (U5, D51) while the update check
-/// is on, then check-on-open, the GitHub sign-in state with the rate
-/// limit note, and the token field.
+/// is on, then check-on-open, the GitHub sign-in state with the rate limit note, and the token field.
 ///
 /// The token lives only in this view's `token` while it is typed: Save copies it into the `auth set` run's stdin,
 /// empties the field before the run starts, and the field is emptied again when the tab goes away. It is never
