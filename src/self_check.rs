@@ -15,6 +15,9 @@ const RUNNING: &str = env!("CARGO_PKG_VERSION");
 pub fn run(verbose: bool, json: bool) -> Result<()> {
     let url = std::env::var("SKILLCASK_SELF_CHECK_URL").ok().filter(|u| !u.is_empty()).unwrap_or_else(|| URL.into());
     let shown = crate::http::shown_url(&url);
+    if url::Url::parse(&url).map_or(true, |u| u.scheme() != "https") {
+        return Err(Error::new(NETWORK, format!("refusing non-HTTPS URL {shown}")).hint("SKILLCASK_SELF_CHECK_URL must be an https:// URL"));
+    }
     let hint = "check the connection; releases are listed at https://github.com/puniserv/skillcask/releases";
     let body = crate::http::Http::anonymous(verbose)?
         .get(&url, LIMIT)
@@ -73,7 +76,7 @@ fn strict(v: &str) -> bool {
         && pre.is_none_or(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-'))
 }
 
-/// SemVer 2.0.0 precedence of two `strict` versions. Numbers compare by value without parsing,
+/// `SemVer` 2.0.0 precedence of two `strict` versions. Numbers compare by value without parsing,
 /// so any length is fine.
 fn semver_cmp(a: &str, b: &str) -> Ordering {
     let split = |v: &'_ str| -> (Vec<String>, Option<String>) {
@@ -85,7 +88,8 @@ fn semver_cmp(a: &str, b: &str) -> Ordering {
         x.len().cmp(&y.len()).then_with(|| x.cmp(y))
     };
     let ident = |x: &str, y: &str| {
-        let n = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+        // A leading zero is not a SemVer number (`01`), so it compares as text, as in the app.
+        let n = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) && (s == "0" || !s.starts_with('0'));
         match (n(x), n(y)) {
             (true, true) => num(x, y),
             (true, false) => Ordering::Less,
@@ -185,5 +189,10 @@ mod tests {
         }
         assert_eq!(semver_cmp("0.10.1", "0.9.9"), Ordering::Greater);
         assert_eq!(semver_cmp("01.0.0", "1.0.0"), Ordering::Equal);
+        // `01` is text: after every number, and in ASCII order among text.
+        assert_eq!(semver_cmp("1.0.0-rc.01", "1.0.0-rc.2"), Ordering::Greater);
+        assert_eq!(semver_cmp("1.0.0-rc.01", "1.0.0-rc.1"), Ordering::Greater);
+        assert_eq!(semver_cmp("1.0.0-rc.01", "1.0.0-rc.a"), Ordering::Less);
+        assert_eq!(semver_cmp("1.0.0-rc.0", "1.0.0-rc.1"), Ordering::Less);
     }
 }

@@ -347,7 +347,8 @@ warnings and errors stay on stderr. Package text in it is escaped as in the term
 (`<U+202E>`). `status --json` has `repositories`
 (`[{"name", "type", "url", "allowed"}]`) and `skills-sh`; `search --json` results carry `source` (the repository
 name, or `skills.sh`) and `installs`, and the document has `"skills-sh": true|false|null` (`null`:
-never decided). For example `skillcask outdated --json | jq
+never decided). `self-check --json` is `{"version", "latest", "newer"}` (`latest` is `null` when
+the cask holds no readable version). For example `skillcask outdated --json | jq
 '.packages[] | select(.within != .locked)'`.
 
 Exit codes: 0 ok, 1 manifest/lock/status problems, 2 authentication, 3 network, 4 hash mismatch,
@@ -492,7 +493,7 @@ too young falls back to an older commit when the server supports partial fetches
 - No package code runs, ever. No telemetry.
 - `self-check` and the app's "Check for Updates…" send nothing but the request for the tap's cask
   file: no token, account, project or skill data; GitHub sees your IP address. The app checks
-  daily only after you say yes.
+  daily only after you say yes. `SKILLCASK_SELF_CHECK_URL` points it at a mirror (HTTPS only).
 - `add` and `update` (and `install` when it resolves) warn about characters a reviewer cannot
   see in the text files of new content: bidi controls (`U+202A`-`U+202E`, `U+2066`-`U+2069`,
   `U+200E`, `U+200F`, `U+061C`), zero-width characters (`U+200B`-`U+200D`, `U+2060`, `U+FEFF`) and

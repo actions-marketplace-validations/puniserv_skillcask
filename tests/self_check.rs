@@ -79,10 +79,15 @@ fn http_errors_exit_3_with_a_hint() {
     assert!(out.contains("skillcask-app.rb: not found") && out.contains("hint:"), "{out}");
     s.respond(CASK, 503, &[("Retry-After", "0")], "");
     let out = p.expect(&["self-check", "--json"], 3);
-    assert!(out.contains("HTTP 503") && !out.contains('{'), "{out}");
+    assert!(out.contains("HTTP 503") && out.contains("hint: check the connection") && !out.contains('{'), "{out}");
     s.respond(CASK, 403, &[], "");
     let out = p.expect(&["self-check"], 3);
-    assert!(out.contains("HTTP 403") && !out.contains("auth.json"), "{out}");
+    assert!(out.contains("HTTP 403") && out.contains("hint: check the connection") && !out.contains("auth.json"), "{out}");
+    let mut p = p;
+    p.env.push(("SKILLCASK_SELF_CHECK_URL".into(), s.url(CASK).replace("https:", "http:")));
+    let out = p.expect(&["self-check"], 3);
+    assert!(out.contains("refusing non-HTTPS URL") && out.contains("hint: SKILLCASK_SELF_CHECK_URL must be an https:// URL"), "{out}");
+    assert!(!out.contains("check the connection") && s.requests().iter().all(|r| r.path == CASK), "{out}");
 }
 
 #[test]
