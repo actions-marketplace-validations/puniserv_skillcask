@@ -76,6 +76,23 @@ fn gitlab_token_string_and_object_forms() {
 }
 
 #[test]
+fn userinfo_in_a_repository_url_is_sent_as_basic_auth() {
+    let s = Server::start();
+    s.simple("acme/one", "1.0.0", "one");
+    let p = Project::new(&s);
+    p.manifest(&s, "\"acme/one\" = \"^1.0\"\n");
+    let toml = p.read("skills.toml").replace("https://", "https://u:p@");
+    p.write("skills.toml", &toml);
+    p.ok(&["install"]);
+    let reqs = s.requests();
+    let basic = |r: &Request| r.headers.get("authorization").map(String::as_str) == Some("Basic dTpw");
+    assert!(reqs.iter().any(|r| r.path == "/packages.json" && basic(r)), "{reqs:?}");
+    // The dist URL loses the userinfo (registry.rs), so the zip goes without it.
+    let zips: Vec<_> = reqs.iter().filter(|r| r.path.ends_with(".zip")).collect();
+    assert!(!zips.is_empty() && zips.iter().all(|r| !r.headers.contains_key("authorization")), "{reqs:?}");
+}
+
+#[test]
 fn github_token_goes_to_the_api_host_only() {
     let gh = Server::start();
     let repo = Server::start();

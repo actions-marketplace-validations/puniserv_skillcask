@@ -30,6 +30,7 @@ change fails until both are updated.
 | S13 | Onboarding: CLI missing or too old, first launch hints |
 | S14 | Settings: General, Search, Updates, Global, Advanced |
 | S15 | Activity drawer: one row per run this session with its transcript |
+| U1–U5 | App update (D51): sidebar card (consent, available, waiting), update sheet per install method (Homebrew, download, temporary copy), app menu Check for Updates…, check alerts, Settings › Updates app group |
 
 Flows, walked end to end through the screens: F1 first launch, F2 add a skill, F3 update with
 review, F4 adopt, F5 fix problems.
@@ -53,6 +54,7 @@ colour always uses the `.text` variant; the dot colours are only for the 8 pt do
 | `textTertiary` | `#8A8A8F` | `#7C7C82` | Icons and placeholders only |
 | `controlFill` / `controlBorder` | `#FFFFFF` / `#CFCFD4` | `#333336` / `#48484C` | Buttons, fields |
 | `accent` / `accentSoft` | `#6D4AFF` / `#EEE9FF` | `#8B74FF` / `#2E2750` | Primary, links; active chip |
+| `accentLine` | `#CFC3FF` | `#4A3F86` | App-update card border (never `statusUpdate`) |
 | `statusOk` dot · text · tint | `#34C759` · `#1B7A35` · `#E9F8EC` | `#30D158` · `#4CD964` · `#17301D` | Ok |
 | `statusUpdate` dot · text · tint | `#0A7AFF` · `#0A5FCC` · `#E6F1FF` | `#409CFF` · `#6EB2FF` · `#172A44` | Update |
 | `statusWarning` dot · text · tint | `#F5A623` · `#8A5A00` · `#FFF5DF` | `#FFB340` · `#FFC24A` · `#3A2C10` | Warning |
@@ -95,7 +97,7 @@ The diff grid draws `monoSmall` on an 18 pt line, the Activity transcript on a 1
 | Badge (small) · button (small) · tab · search · mini progress | 18 (16) · 24 (22) · 22 · 26 · 3 |
 | Icons: toolbar · sidebar · inline | 13 · 16 · 12 |
 | Window min width · sidebar ideal / min · list ideal / min · detail min | 960 · 220 / 180 · 360 / 300 · 400 |
-| Sheets: Review Update · Add Skill · Adopt | 960×700 · 900×660 · 592×340 |
+| Sheets: Review Update · Add Skill · Adopt · App Update | 960×700 · 900×660 · 592×340 · 680 wide |
 | Settings width · label column · env remove column · env row | 600 · 200 · 40 · 28 |
 
 ### Decisions and deviations
@@ -112,6 +114,14 @@ Code comments cite these by number.
 - **G11** The boards use a Medium (500) weight the base scale lacked: the `…Medium` and `…Semibold`
   variants carry it.
 - **G13** Mono line heights outside the scale: 18 pt for the diff grid, 15 pt for the transcript.
+- **G14** App update (U1–U5, D51) deviates from the U1–U5 boards: no release notes box
+  (a `Release Notes on GitHub` button opens the tag page built from the version), one Homebrew
+  command (`brew update && brew upgrade skillcask skillcask-app`, Copy Command and Copy and Open
+  Terminal), a zip not a dmg (`Open Release Page`, not `Download X`), no CLI-only or CLI-blocking
+  variant and no release date. The sheet is 680 wide (U2 draws 740, with notes), its title is
+  `sheetTitle` 20 pt (U2: 17), footers are one row, a temporary copy has no Skip and shows in
+  Finder only from the primary. Settings' group is `Skillcask app` with no command-line tool line
+  and no pre-release switch; Check Now answers inline there, never as a main-window alert.
 - The toast's shadow (`0 8pt 24pt`, black at 0.16 light / 0.5 dark) lives in `Toast.Shadow`; no
   shadow token exists yet. Cards never have a shadow.
 

@@ -338,14 +338,17 @@ Every command except `publish`, `validate` and `projects` takes `-g, --global`.
 | `projects [dirs…]` | Directories that hold `skills.toml` under the given ones (default: the current one), up to 6 levels down; hidden directories, `node_modules`, `vendor`, `target` and `Library` are skipped. |
 | `ui` | A terminal UI over the commands above: skills with their state and updates, `info`, SKILL.md and `audit` per skill, add, adopt (also offered when an add hits a skill skillcask does not manage), update (diff first), remove, doctor, a filter of the list, search of the registries (and skills.sh, asked once), the repositories in use (`R`, `S` turns skills.sh on or off) and a projects picker; `g` switches between the project and `--global`. |
 | `app` | Opens the macOS app (see [macOS app](#macos-app)); exits 1 when it is not installed, and on Linux and Windows. |
+| `self-check [--json]` | Whether a newer skillcask is released, from the `skillcask-app` cask file of the tap; one anonymous request, only when run; writes nothing. |
 | `<other>` | Runs `skillcask-<other>` from `PATH`, like git and cargo plugins. |
 
-`status`, `outdated`, `info`, `search`, `doctor`, `audit`, `projects` and `config` take `--json`: one JSON document on one line of
-stdout, with the same exit code; warnings and errors stay on stderr. Package text in it is
-escaped as in the terminal (`<U+202E>`). `status --json` has `repositories`
+`status`, `outdated`, `info`, `search`, `doctor`, `audit`, `projects`, `config` and
+`self-check` take `--json`: one JSON document on one line of stdout, with the same exit code;
+warnings and errors stay on stderr. Package text in it is escaped as in the terminal
+(`<U+202E>`). `status --json` has `repositories`
 (`[{"name", "type", "url", "allowed"}]`) and `skills-sh`; `search --json` results carry `source` (the repository
 name, or `skills.sh`) and `installs`, and the document has `"skills-sh": true|false|null` (`null`:
-never decided). For example `skillcask outdated --json | jq
+never decided). `self-check --json` is `{"version", "latest", "newer"}` (`latest` is `null` when
+the cask holds no readable version). For example `skillcask outdated --json | jq
 '.packages[] | select(.within != .locked)'`.
 
 Exit codes: 0 ok, 1 manifest/lock/status problems, 2 authentication, 3 network, 4 hash mismatch,
@@ -488,6 +491,10 @@ too young falls back to an older commit when the server supports partial fetches
   and paths that collide by case or Unicode form fail a skill that contains them, and are
   skipped outside the selected skills.
 - No package code runs, ever. No telemetry.
+- `self-check` and the app's "Check for Updates…" send nothing but the request for the tap's cask
+  file, which carries the skillcask version in its User-Agent (`skillcask/<version>`): no token,
+  account, project or skill data; GitHub sees your IP address. The app checks
+  daily only after you say yes. `SKILLCASK_SELF_CHECK_URL` points it at a mirror (HTTPS only).
 - `add` and `update` (and `install` when it resolves) warn about characters a reviewer cannot
   see in the text files of new content: bidi controls (`U+202A`-`U+202E`, `U+2066`-`U+2069`,
   `U+200E`, `U+200F`, `U+061C`), zero-width characters (`U+200B`-`U+200D`, `U+2060`, `U+FEFF`) and
@@ -605,6 +612,11 @@ brew install puniserv/tap/skillcask puniserv/tap/skillcask-app
 
 Every release also has `Skillcask-X.Y.Z-macos-universal.zip`, signed with a Developer ID and
 notarized (D50): unzip it into `/Applications`.
+
+The app tells you about a newer release but installs nothing ([Update](#update)). Its app menu
+has Check for Updates…, which runs `skillcask self-check`; it checks daily only after you say yes
+once (it asks in the sidebar; Settings › Updates switches it). A newer version gets a card and a
+sheet with the Homebrew command to copy, or the release page for a download (D51).
 
 `macos/bundle.sh` builds a universal `Skillcask.app` that carries its own CLI at
 `Contents/Helpers/skillcask`. Run outside a bundle (`swift run` from `macos/`), the app uses the

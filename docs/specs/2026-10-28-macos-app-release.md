@@ -94,7 +94,8 @@ and starts no process besides `open`.
 - **One cask `skillcask` with `app` and `binary` stanzas** replacing the formula on macOS: it splits
   macOS and Linux installs and clashes with the formula name.
 - **Sparkle or another in-app updater**: Homebrew and the release zip cover updates; an updater adds
-  network code to an app that has none (D35).
+  network code to an app that has none (D35). A notice that a release exists is not an updater:
+  D51 asks through the CLI and leaves the update to Homebrew or the zip.
 
 ## Secrets
 

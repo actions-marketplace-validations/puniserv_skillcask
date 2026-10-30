@@ -82,6 +82,9 @@ public struct FixtureCLIClient: CLIClient {
             return answer(invocation, text: #"{"from":null,"value":null}"#, exit: 1)
         case .configList:
             return answer(invocation, fixture: "config.global")
+        case .selfCheck:
+            // Never asked: the update check is off in fixture runs. Up to date, should a preview ever ask.
+            return answer(invocation, text: #"{"latest":"0.9.4","newer":false,"version":"0.9.4"}"#)
         }
     }
 

@@ -18,6 +18,12 @@ path set in Settings, else `PATH`, `/opt/homebrew/bin`, `/usr/local/bin` and `~/
 `SKILLCASK_UI_FIXTURES=1 swift run Skillcask` starts it on the built-in sample data and runs no CLI.
 The app needs skillcask 0.9.4 or newer and asks to upgrade an older one.
 
+Update check (D51): app menu › Check for Updates… runs `skillcask self-check --json` (a CLI that
+lacks it, older than 0.10.2 and not the bundled one, is never asked). The daily check is off until
+the user says yes once in the sidebar card; Settings › Updates switches it and shows the last
+check. The app shows the Homebrew command or the release page; it never installs anything. A run
+without a bundle version (`swift run`), the sample data and `smoke-app.sh` check nothing.
+
 ## Build the app
 
 `bundle.sh` builds the app (one universal SwiftPM build) and the CLI (one cargo build per
@@ -66,7 +72,8 @@ warnings in unchanged files, so trust a count of 0 only after `swift package cle
 
 `smoke-app.sh` needs a logged-in GUI session. It checks the app's `--version` refusal, then starts
 the built app on the sample data and live (with a fresh `SKILLCASK_HOME` and a `PATH` without
-skillcask), signals only the processes it started, and restores the app's defaults afterwards.
+skillcask; `-appUpdates.consent declined`, so no update check), signals only the processes it
+started, and restores the app's defaults afterwards.
 
 ## Render the previews
 

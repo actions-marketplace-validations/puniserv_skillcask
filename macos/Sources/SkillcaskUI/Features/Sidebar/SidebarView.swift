@@ -57,8 +57,10 @@ struct SidebarView: View {
     }
 
     /// The board's bottom line: a plus glyph and "Open Folder… ⌘O" in secondary 11 pt, over a hairline.
+    /// U1's app-update card sits above it, inside the sidebar's padding (`AppUpdateCardSlot`).
     private var footer: some View {
         VStack(spacing: 0) {
+            AppUpdateCardSlot()
             Rectangle()
                 .fill(Color.separator)
                 .frame(height: Size.hairline)
