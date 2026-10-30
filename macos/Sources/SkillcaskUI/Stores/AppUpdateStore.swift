@@ -72,7 +72,9 @@ import SkillcaskUpdates
 
     /// The app's own version (`AppVersion.main()`); nil turns everything off.
     public let installed: Version?
-    public private(set) var state: UpdateState
+    public private(set) var state: UpdateState {
+        didSet { defaults.save(state, changedFrom: oldValue) }
+    }
     /// A manual check is running: the menu item is disabled meanwhile.
     public private(set) var isChecking = false
     /// The manual check's alert; any button or Esc clears it.
@@ -87,6 +89,9 @@ import SkillcaskUpdates
     /// The daily loop while consent is granted and the CLI is ready; internal so tests can await it.
     @ObservationIgnored var schedule: Task<Void, Never>?
     @ObservationIgnored private var scheduleID = UUID()
+    /// The check running now: the loop, an activation, the menu and the known-update re-check share it, so they
+    /// never send two requests at once.
+    @ObservationIgnored private var inFlight: Task<Result<SelfCheckOutcome, CLIError>, Never>?
 
     /// - Parameters:
     ///   - installed: The app's version; nil (no `.app`, fixtures) turns the feature off.
@@ -124,9 +129,16 @@ import SkillcaskUpdates
         context() != nil
     }
 
-    /// What the sidebar card slot shows now (`UpdateDecision.card`).
+    /// The ready CLI may be asked `self-check` (`SelfCheckGate`): the bundled helper, or a CLI that ships it.
+    public var canCheck: Bool {
+        context().map { SelfCheckGate.allows(binary: $0.binary, capabilities: $0.capabilities) } ?? false
+    }
+
+    /// What the sidebar card slot shows now (`UpdateDecision.card`); no consent prompt for a CLI the gate refuses,
+    /// since no daily check could run on it.
     public var card: UpdateCard {
-        UpdateDecision.card(installed: installed, state: state, now: now())
+        let card = UpdateDecision.card(installed: installed, state: state, now: now())
+        return card == .consentPrompt && !canCheck ? .none : card
     }
 
     /// The version the menu offers and the sheet opens on, whatever the card hides.
@@ -179,7 +191,6 @@ import SkillcaskUpdates
     /// Settings › Updates' switch (phase 4b) and the consent card.
     public func setDailyCheck(_ on: Bool) {
         state.consent = on ? .granted : .declined
-        save()
         if on {
             startSchedule()
         } else {
@@ -193,31 +204,26 @@ import SkillcaskUpdates
     public func hideCard() {
         guard case .available(let version) = card else { return }
         state.hide(version, at: now())
-        save()
     }
 
     /// `Skip This Version`.
     public func skip(_ version: Version) {
         state.skip(version)
-        save()
     }
 
     /// `Remind Me Tomorrow`.
     public func remindTomorrow() {
         state.remindTomorrow(at: now())
-        save()
     }
 
     /// `Copy Command` / `Copy and Open Terminal` for a Homebrew install: the waiting card until the next launch.
     public func copiedCommand() {
         state.copiedCommand()
-        save()
     }
 
     /// Settings › Updates `Reset`.
     public func resetSkipped() {
         state.resetSkipped()
-        save()
     }
 
     /// Opens the update sheet on `version` (the card's `See What’s New…`, `Update to X…`, a manual check's find).
@@ -273,7 +279,19 @@ import SkillcaskUpdates
         record(await run())
     }
 
+    /// Joins the check in flight, or starts one.
     private func run() async -> Result<SelfCheckOutcome, CLIError> {
+        if let inFlight {
+            return await inFlight.value
+        }
+        let task = Task { await self.selfCheck() }
+        inFlight = task
+        let result = await task.value
+        inFlight = nil
+        return result
+    }
+
+    private func selfCheck() async -> Result<SelfCheckOutcome, CLIError> {
         guard let context = context() else { return .failure(.binaryMissing(searched: [])) }
         do {
             return .success(
@@ -285,11 +303,6 @@ import SkillcaskUpdates
 
     private func record(_ result: Result<SelfCheckOutcome, CLIError>) {
         state.record(result, at: now())
-        save()
-    }
-
-    private func save() {
-        defaults.save(state)
     }
 
     // MARK: - Schedule

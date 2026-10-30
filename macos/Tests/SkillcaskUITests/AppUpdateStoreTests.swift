@@ -285,4 +285,54 @@ import Testing
         #expect(!stores.app.request(.addSkill(query: nil)))
         #expect(!stores.updates.isEnabled, "fixtures: the check is off")
     }
+
+    /// B1 of phase 4a: `-appUpdates.consent declined` (smoke) must not become permanent. The registration domain
+    /// stands in for the argument domain: read by `load()`, never written.
+    @Test func launchArgumentsAreNeverPersisted() {
+        let name = "AppUpdateStoreTests-args-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        defaults.register(defaults: [UpdateDefaults.Key.consent: "declined", UpdateDefaults.Key.latestSeen: "0.10.3"])
+        let clock = clock
+        let store = AppUpdateStore(
+            installed: Self.installed, defaults: UpdateDefaults(defaults), now: { clock.now }, context: { nil })
+        store.launch()
+        #expect(defaults.persistentDomain(forName: name)?.isEmpty ?? true, "launch writes nothing")
+        #expect(store.card == .available(Version(0, 10, 3)))
+        store.hideCard()
+        let written = defaults.persistentDomain(forName: name) ?? [:]
+        #expect(written[UpdateDefaults.Key.consent] == nil)
+        #expect(written[UpdateDefaults.Key.latestSeen] == nil)
+        #expect(written[UpdateDefaults.Key.hiddenUntil] != nil)
+    }
+
+    /// The consent card needs a CLI the gate lets through: none for a configured 0.10.1.
+    @Test func noConsentPromptForACLIThatCannotSelfCheck() {
+        let old = Locator.Choice.configured(URL(fileURLWithPath: "/opt/homebrew/bin/skillcask"))
+        let refused = makeStore(binary: old, cli: Version(0, 10, 1)).card
+        let unready = makeStore(ready: false).card
+        let bundled = makeStore().card
+        #expect(refused == UpdateCard.none)
+        #expect(unready == UpdateCard.none)
+        #expect(bundled == .consentPrompt)
+    }
+
+    /// The loop, an activation and the menu share one request.
+    @Test func overlappingChecksShareOneRequest() async {
+        let gate = Gate()
+        await client.json(.selfCheck, in: .personal, Self.same, gate: gate)
+        let store = makeStore(state: UpdateState(consent: .granted))
+        let automatic = Task { await store.checkIfDue() }
+        await gate.arrived()
+        let manual = Task { await store.checkForUpdates() }
+        // `isChecking` is set in the same synchronous step that joins the check in flight.
+        while !store.isChecking {
+            await Task.yield()
+        }
+        await gate.open()
+        await automatic.value
+        await manual.value
+        #expect(await client.commands == [.selfCheck])
+        #expect(store.alert == .upToDate(Self.installed))
+    }
 }

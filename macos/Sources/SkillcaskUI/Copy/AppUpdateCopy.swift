@@ -56,10 +56,10 @@ public enum AppUpdateCopy {
 
     public static let failedTitle = "Couldn’t check for updates"
     /// `latest: null`: the CLI reached the tap but its cask named no version it could read.
-    public static let unknownMessage =
-        "GitHub answered, but the release list named no version Skillcask could read. Try again later."
+    public static let unknownMessage = "GitHub answered, but named no version Skillcask could read. Try again later."
 
-    /// The CLI set in Settings › General predates `self-check` (0.10.2).
+    /// The CLI set in Settings › General predates `self-check` (`Capabilities.Feature.selfCheck`; the release is
+    /// `Capabilities.shipped`).
     public static func unsupportedMessage(_ version: Version) -> String {
         "The command-line tool Skillcask uses (\(version)) is too old to check for updates. In Settings › General, "
             + "use the detected one or choose a newer one."

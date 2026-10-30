@@ -33,12 +33,13 @@ enum AppUpdateSample {
     static let installed = Version(0, 10, 2)
     static let latest = Version(0, 10, 3)
 
-    /// A store over its own throwaway defaults suite holding `state`, enabled, asking `app` for the CLI.
-    @MainActor static func store(_ state: UpdateState, app: AppStore) -> AppUpdateStore {
-        let suite = "skillcask.ui.previews.updates"
-        let defaults = UserDefaults(suiteName: suite) ?? .standard
-        defaults.removePersistentDomain(forName: suite)
-        UpdateDefaults(defaults).save(state)
+    /// A store whose state is only registered (the in-memory registration domain), so a render never writes a
+    /// plist; enabled, asking `app` for the CLI.
+    @MainActor static func store(consent: UpdateConsent, latestSeen: Version, app: AppStore) -> AppUpdateStore {
+        let defaults = UserDefaults(suiteName: "skillcask.ui.previews.updates") ?? .standard
+        defaults.register(defaults: [
+            UpdateDefaults.Key.consent: consent.rawValue, UpdateDefaults.Key.latestSeen: latestSeen.description,
+        ])
         return AppUpdateStore(
             installed: installed, defaults: UpdateDefaults(defaults), context: { [weak app] in app?.updateContext })
     }
@@ -53,8 +54,8 @@ private struct AppUpdateWindowSample: View {
         let stores = Boot.fixtures(selecting: Boot.websiteScope, selection: nil)
         _stores = State(initialValue: stores)
         _updates = State(
-            initialValue: AppUpdateSample.store(
-                UpdateState(consent: .declined, latestSeen: AppUpdateSample.latest), app: stores.app))
+            initialValue: AppUpdateSample.store(consent: .declined, latestSeen: AppUpdateSample.latest, app: stores.app)
+        )
     }
 
     var body: some View {

@@ -23,6 +23,8 @@ struct AppUpdateCard: View {
     static let iconSize: CGFloat = 22
     static let iconRadius: CGFloat = 6
     static let iconGlyph: CGFloat = 13
+    /// U1's small full-width buttons: 22 pt tall on the board, a small control with its label stretched.
+    static let buttonHeight: CGFloat = 18
 
     var body: some View {
         content
@@ -46,12 +48,18 @@ struct AppUpdateCard: View {
             VStack(alignment: .leading, spacing: Self.gap) {
                 heading(AppUpdateCopy.consentTitle, AppUpdateCopy.consentBody, icon: false)
                 HStack(spacing: Spacing.inline) {
-                    Button(AppUpdateCopy.notNow) { onConsent(false) }
-                        .frame(maxWidth: .infinity)
-                    Button(AppUpdateCopy.checkDaily) { onConsent(true) }
-                        .buttonStyle(.borderedProminent)
-                        .tint(Color.accent)
-                        .frame(maxWidth: .infinity)
+                    Button {
+                        onConsent(false)
+                    } label: {
+                        Text(AppUpdateCopy.notNow).frame(maxWidth: .infinity, minHeight: Self.buttonHeight)
+                    }
+                    Button {
+                        onConsent(true)
+                    } label: {
+                        Text(AppUpdateCopy.checkDaily).frame(maxWidth: .infinity, minHeight: Self.buttonHeight)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color.accent)
                 }
                 .controlSize(.small)
             }
@@ -64,7 +72,7 @@ struct AppUpdateCard: View {
                     onSeeWhatsNew(version)
                 } label: {
                     Text(AppUpdateCopy.seeWhatsNew)
-                        .frame(maxWidth: .infinity)
+                        .frame(maxWidth: .infinity, minHeight: Self.buttonHeight)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(Color.accent)

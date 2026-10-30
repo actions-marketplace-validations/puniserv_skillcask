@@ -41,25 +41,53 @@ public struct UpdateDefaults {
             awaitingRelaunch: defaults.bool(forKey: Key.awaitingRelaunch))
     }
 
-    /// Writes every key; a nil value (and `undecided`, `false`) removes it.
+    /// Writes every key; a nil value (and `undecided`, `false`) removes it. For seeding a suite (tests, previews);
+    /// the app writes through `save(_:changedFrom:)`.
     public func save(_ state: UpdateState) {
-        set(state.consent == .undecided ? nil : state.consent.rawValue, Key.consent)
-        set(state.lastCheckAt, Key.lastCheckAt)
-        set(state.latestSeen?.description, Key.latestSeen)
-        set(state.skippedVersion?.description, Key.skippedVersion)
-        set(state.hiddenUntil, Key.hiddenUntil)
-        set(state.hiddenForVersion?.description, Key.hiddenForVersion)
-        set(state.remindAfter, Key.remindAfter)
-        set(state.awaitingRelaunch ? true : nil, Key.awaitingRelaunch)
+        save(state, keys: Key.all)
     }
 
-    /// The launch hook: loads, clears `awaitingRelaunch` (`UpdateState.launched`), saves, and returns the state.
+    /// Writes only the keys whose values differ between `old` and `state`. `load()` reads the argument domain too
+    /// (`-appUpdates.consent declined` from `smoke-app.sh`, or a one-off `--args`), so writing a key nobody changed
+    /// would make a launch argument permanent.
+    public func save(_ state: UpdateState, changedFrom old: UpdateState) {
+        var keys: [String] = []
+        if state.consent != old.consent { keys.append(Key.consent) }
+        if state.lastCheckAt != old.lastCheckAt { keys.append(Key.lastCheckAt) }
+        if state.latestSeen != old.latestSeen { keys.append(Key.latestSeen) }
+        if state.skippedVersion != old.skippedVersion { keys.append(Key.skippedVersion) }
+        if state.hiddenUntil != old.hiddenUntil { keys.append(Key.hiddenUntil) }
+        if state.hiddenForVersion != old.hiddenForVersion { keys.append(Key.hiddenForVersion) }
+        if state.remindAfter != old.remindAfter { keys.append(Key.remindAfter) }
+        if state.awaitingRelaunch != old.awaitingRelaunch { keys.append(Key.awaitingRelaunch) }
+        save(state, keys: keys)
+    }
+
+    /// The launch hook: loads and clears `awaitingRelaunch` (`UpdateState.launched`), removing that one key when it
+    /// was set and writing nothing otherwise; returns the state.
     @discardableResult
     public func launched() -> UpdateState {
-        var state = load()
+        let old = load()
+        var state = old
         state.launched()
-        save(state)
+        save(state, changedFrom: old)
         return state
+    }
+
+    private func save(_ state: UpdateState, keys: [String]) {
+        for key in keys {
+            switch key {
+            case Key.consent: set(state.consent == .undecided ? nil : state.consent.rawValue, key)
+            case Key.lastCheckAt: set(state.lastCheckAt, key)
+            case Key.latestSeen: set(state.latestSeen?.description, key)
+            case Key.skippedVersion: set(state.skippedVersion?.description, key)
+            case Key.hiddenUntil: set(state.hiddenUntil, key)
+            case Key.hiddenForVersion: set(state.hiddenForVersion?.description, key)
+            case Key.remindAfter: set(state.remindAfter, key)
+            case Key.awaitingRelaunch: set(state.awaitingRelaunch ? true : nil, key)
+            default: break
+            }
+        }
     }
 
     private func version(_ key: String) -> Version? {
