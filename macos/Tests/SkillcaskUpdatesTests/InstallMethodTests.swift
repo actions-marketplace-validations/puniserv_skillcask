@@ -3,7 +3,7 @@ import Testing
 
 @testable import SkillcaskUpdates
 
-/// `InstallMethodDetector` with a fake disk: Homebrew, translocated, direct (AC 4 and the brief's rules).
+/// `InstallMethodDetector` with a fake disk: Homebrew, translocated, direct (AC 4 and D35's rules).
 @Suite struct InstallMethodTests {
     func detect(
         _ path: String, exists: Set<String> = [], links: [String: String] = [:], original: String? = nil

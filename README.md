@@ -492,7 +492,8 @@ too young falls back to an older commit when the server supports partial fetches
   skipped outside the selected skills.
 - No package code runs, ever. No telemetry.
 - `self-check` and the app's "Check for Updates…" send nothing but the request for the tap's cask
-  file: no token, account, project or skill data; GitHub sees your IP address. The app checks
+  file, which carries the skillcask version in its User-Agent (`skillcask/<version>`): no token,
+  account, project or skill data; GitHub sees your IP address. The app checks
   daily only after you say yes. `SKILLCASK_SELF_CHECK_URL` points it at a mirror (HTTPS only).
 - `add` and `update` (and `install` when it resolves) warn about characters a reviewer cannot
   see in the text files of new content: bidi controls (`U+202A`-`U+202E`, `U+2066`-`U+2069`,

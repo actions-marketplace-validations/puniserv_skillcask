@@ -147,7 +147,12 @@ fn works_anywhere_and_writes_nothing() {
 #[test]
 #[ignore]
 fn live_cask_has_a_version() {
-    let o = std::process::Command::new(env!("CARGO_BIN_EXE_skillcask")).args(["self-check", "--json"]).env_remove("CI").output().unwrap();
+    let o = std::process::Command::new(env!("CARGO_BIN_EXE_skillcask"))
+        .args(["self-check", "--json"])
+        .env_remove("CI")
+        .env_remove("SKILLCASK_SELF_CHECK_URL")
+        .output()
+        .unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     let doc: Value = serde_json::from_slice(&o.stdout).unwrap();
     assert_eq!(doc["version"], json!(RUNNING));

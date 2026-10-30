@@ -4,7 +4,7 @@ import Testing
 
 @testable import SkillcaskUpdates
 
-/// The card rules of D51 and the handoff's acceptance criteria that hold without a view (6, 7, 8, 9).
+/// The card rules of D51 and the U1–U5 boards' acceptance cases (AC) that hold without a view (6, 7, 8, 9).
 @Suite struct UpdateDecisionTests {
     let installed = Version(1, 2, 1)
     let v130 = Version(1, 3, 0)

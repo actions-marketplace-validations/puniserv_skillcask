@@ -2,7 +2,7 @@ import SkillcaskCore
 import SkillcaskUpdates
 import SwiftUI
 
-/// What the update sheet shows for an install method (U2/U3, the brief's version): the body, the pill and the
+/// What the update sheet shows for an install method (U2/U3 as D51 changes them): the body, the pill and the
 /// footer's buttons. Pure, so tests pick the body without drawing it.
 struct AppUpdateSheetContent: Equatable {
     enum Body: Equatable {
@@ -51,7 +51,7 @@ struct AppUpdateSheetContent: Equatable {
 /// on GitHub), the steps for the install method and the footer. Every footer button acts through
 /// `AppUpdateStore.perform(_:on:)` and closes the sheet; Esc closes it with no state change.
 ///
-/// Deviations from the handoff (the brief wins): DESIGN.md G14.
+/// Deviations from the U2/U3 boards: DESIGN.md G14.
 struct AppUpdateSheet: View {
     let version: Version
     let installed: Version

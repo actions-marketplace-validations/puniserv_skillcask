@@ -3,8 +3,8 @@ import SkillcaskCore
 import SkillcaskUpdates
 
 /// The words of the app-update check (D51): the sidebar card (U1), the app menu item and the manual check's alerts
-/// (U4). The brief's copy wins where the handoff differs: no release date (the cask has none), no command-line tool
-/// card, the consent prompt of decision 3.
+/// (U4). It differs from the boards (DESIGN.md G14): no release date (the cask has none), no command-line tool
+/// card, and the consent prompt of D51.
 public enum AppUpdateCopy {
     // MARK: - Card (U1)
 

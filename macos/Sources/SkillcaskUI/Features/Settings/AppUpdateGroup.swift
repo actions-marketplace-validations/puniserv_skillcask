@@ -2,7 +2,7 @@ import SkillcaskCore
 import SkillcaskUpdates
 import SwiftUI
 
-/// Settings › Updates' `Skillcask app` group (U5, the brief's version): the installed version and how, the daily
+/// Settings › Updates' `Skillcask app` group (U5 as D51 changes it): the installed version and how, the daily
 /// check switch with its privacy line, the last check with `Check Now` (its answer shown here, never as the main
 /// window's alert) and `See What’s New…`, and the skipped version with `Reset`. Absent
 /// while the update check is off (`swift run`, fixtures). No pre-release switch and no command-line tool line: the

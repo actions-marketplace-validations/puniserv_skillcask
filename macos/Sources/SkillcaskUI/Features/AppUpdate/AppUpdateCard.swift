@@ -134,7 +134,7 @@ struct AppUpdateCard: View {
         }
     }
 
-    /// HANDOFF §10: the available card announces itself once when it appears.
+    /// VoiceOver: the available card announces itself once when it appears.
     private func announce() {
         guard case .available(let version) = card, announced != card else { return }
         announced = card
