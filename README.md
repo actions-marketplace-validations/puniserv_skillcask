@@ -341,9 +341,10 @@ Every command except `publish`, `validate` and `projects` takes `-g, --global`.
 | `self-check [--json]` | Whether a newer skillcask is released, from the `skillcask-app` cask file of the tap; one anonymous request, only when run. |
 | `<other>` | Runs `skillcask-<other>` from `PATH`, like git and cargo plugins. |
 
-`status`, `outdated`, `info`, `search`, `doctor`, `audit`, `projects`, `config` and `self-check` take `--json`: one JSON document on one line of
-stdout, with the same exit code; warnings and errors stay on stderr. Package text in it is
-escaped as in the terminal (`<U+202E>`). `status --json` has `repositories`
+`status`, `outdated`, `info`, `search`, `doctor`, `audit`, `projects`, `config` and
+`self-check` take `--json`: one JSON document on one line of stdout, with the same exit code;
+warnings and errors stay on stderr. Package text in it is escaped as in the terminal
+(`<U+202E>`). `status --json` has `repositories`
 (`[{"name", "type", "url", "allowed"}]`) and `skills-sh`; `search --json` results carry `source` (the repository
 name, or `skills.sh`) and `installs`, and the document has `"skills-sh": true|false|null` (`null`:
 never decided). For example `skillcask outdated --json | jq

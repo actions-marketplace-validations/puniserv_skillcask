@@ -203,6 +203,8 @@ pub struct Http {
     verbose: bool,
     /// First retry delay without `Retry-After`; doubles per retry.
     backoff: Duration,
+    /// No credential of any kind, on every hop (D51).
+    anonymous: bool,
 }
 
 /// Failures worth another attempt: the connection broke, not the request. ureq 3 reports TLS
@@ -232,6 +234,12 @@ fn retry_delay(retry: u32, retry_after: Option<&str>, backoff: Duration) -> Opti
 
 impl Http {
     pub fn new(config: &Path, verbose: bool) -> Result<Http> {
+        Ok(Http { auth: Auth::load(config)?, anonymous: false, ..Http::anonymous(verbose)? })
+    }
+
+    /// Sends no credential at all: no `auth.json`, `COMPOSER_AUTH`, `GITHUB_TOKEN`, git credential
+    /// helper or userinfo in the URL, also after a redirect. A 401 or 403 is a network error here.
+    pub fn anonymous(verbose: bool) -> Result<Http> {
         let roots = match std::env::var_os("SKILLCASK_CA_FILE") {
             None => RootCerts::PlatformVerifier,
             Some(path) => {
@@ -259,7 +267,7 @@ impl Http {
             .user_agent(concat!("skillcask/", env!("CARGO_PKG_VERSION")))
             .build()
             .into();
-        Ok(Http { agent, auth: Auth::load(config)?, verbose, backoff: Duration::from_secs(1) })
+        Ok(Http { agent, auth: Auth::default(), verbose, backoff: Duration::from_secs(1), anonymous: true })
     }
 
     /// `Ok(None)` on 404/410. Connection failures, 429 and 5xx are retried: every request is a GET
@@ -282,11 +290,11 @@ impl Http {
                 bail!(NETWORK, "refusing non-HTTPS URL {}", redact(&cur));
             }
             let shown = redact(&cur);
-            let inline =
-                (!cur.username().is_empty()).then(|| Cred::Basic(cur.username().to_string(), cur.password().unwrap_or("").to_string()));
+            let inline = (!self.anonymous && !cur.username().is_empty())
+                .then(|| Cred::Basic(cur.username().to_string(), cur.password().unwrap_or("").to_string()));
             let _ = cur.set_username("");
             let _ = cur.set_password(None);
-            let cred = inline.or_else(|| self.auth.lookup(&cur));
+            let cred = if self.anonymous { None } else { inline.or_else(|| self.auth.lookup(&cur)) };
             let mut retry = 0;
             let mut resp = loop {
                 if self.verbose {
@@ -326,7 +334,8 @@ impl Http {
             let status = resp.status().as_u16();
             match status {
                 200..=299 => {
-                    return match resp.body_mut().with_config().limit(max_bytes).read_to_vec() {
+                    // ureq fails a body that reaches its limit; `max_bytes` itself is allowed.
+                    return match resp.body_mut().with_config().limit(max_bytes.saturating_add(1)).read_to_vec() {
                         Ok(b) => Ok(Some(b)),
                         Err(ureq::Error::BodyExceedsLimit(_)) => {
                             Err(Error::new(IO, format!("{shown}: response exceeds the limit of {max_bytes} bytes")))
@@ -344,6 +353,7 @@ impl Http {
                     cur = cur.join(loc).map_err(|e| Error::new(NETWORK, format!("{shown}: bad redirect: {e}")))?;
                 }
                 404 | 410 => return Ok(None),
+                401 | 403 | 429 if self.anonymous => bail!(NETWORK, "{shown}: HTTP {status}"),
                 403 | 429 if rate_limited(&resp) => {
                     bail!(AUTH, "{shown}: HTTP {status}: GitHub API rate limit reached; set {}", crate::github::token_hint())
                 }
