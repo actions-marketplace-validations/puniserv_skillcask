@@ -106,7 +106,9 @@ tag.
 
 ### Update
 
-Update the same way you installed; skillcask does not update itself.
+`skillcask self-update` reruns the release's installer when `skillcask-installer.sh` installed
+this binary (Linux, macOS); for any other install it prints the one command to run and exits 1.
+`SKILLCASK_SELF_UPDATE=0` makes it print the installer command too. By hand:
 
 ```sh
 brew update && brew upgrade skillcask skillcask-app    # Homebrew (skillcask alone without the app)
@@ -339,6 +341,7 @@ Every command except `publish`, `validate` and `projects` takes `-g, --global`.
 | `ui` | A terminal UI over the commands above: skills with their state and updates, `info`, SKILL.md and `audit` per skill, add, adopt (also offered when an add hits a skill skillcask does not manage), update (diff first), remove, doctor, a filter of the list, search of the registries (and skills.sh, asked once), the repositories in use (`R`, `S` turns skills.sh on or off) and a projects picker; `g` switches between the project and `--global`. |
 | `app` | Opens the macOS app (see [macOS app](#macos-app)); exits 1 when it is not installed, and on Linux and Windows. |
 | `self-check [--json]` | Whether a newer skillcask is released, from the `skillcask-app` cask file of the tap; one anonymous request, only when run; writes nothing. |
+| `self-update [--dry-run]` | Update skillcask: reruns the release's installer for an installer-script install (Linux, macOS), else prints the Homebrew, npm, cargo or app command and exits 1. `--dry-run` prints what would run. |
 | `<other>` | Runs `skillcask-<other>` from `PATH`, like git and cargo plugins. |
 
 `status`, `outdated`, `info`, `search`, `doctor`, `audit`, `projects`, `config` and
@@ -352,7 +355,8 @@ the cask holds no readable version). For example `skillcask outdated --json | jq
 '.packages[] | select(.within != .locked)'`.
 
 Exit codes: 0 ok, 1 manifest/lock/status problems, 2 authentication, 3 network, 4 hash mismatch,
-5 IO or archive error.
+5 IO or archive error. `self-update` exits 1 when it updated nothing and printed the command to run;
+when it runs the installer, the installer's exit code is its own.
 
 Output is coloured in a terminal (`NO_COLOR` turns it off, `CLICOLOR_FORCE` on) and errors name
 the next step on a `hint:` line. For coding agents, `--agent` or `SKILLCASK_AGENT=1` prints terse,
@@ -495,6 +499,11 @@ too young falls back to an older commit when the server supports partial fetches
   file, which carries the skillcask version in its User-Agent (`skillcask/<version>`): no token,
   account, project or skill data; GitHub sees your IP address. The app checks
   daily only after you say yes. `SKILLCASK_SELF_CHECK_URL` points it at a mirror (HTTPS only).
+- `self-update` sends the same request, then, for an installer-script install only, downloads that
+  release's `skillcask-installer.sh` the same way (`SKILLCASK_SELF_UPDATE_URL` replaces the
+  download base) and runs it with `/bin/sh`, without your `SKILLCASK_*`, `INSTALLER_*` and
+  `CARGO_DIST_*` variables. The script checks the archive's sha256 with `sha256sum`, so
+  `self-update` refuses to run it when `sha256sum` is not on `PATH`.
 - `add` and `update` (and `install` when it resolves) warn about characters a reviewer cannot
   see in the text files of new content: bidi controls (`U+202A`-`U+202E`, `U+2066`-`U+2069`,
   `U+200E`, `U+200F`, `U+061C`), zero-width characters (`U+200B`-`U+200D`, `U+2060`, `U+FEFF`) and

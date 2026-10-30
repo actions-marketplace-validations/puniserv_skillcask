@@ -9,25 +9,13 @@ use crate::ui;
 
 const URL: &str = "https://raw.githubusercontent.com/puniserv/homebrew-tap/main/Casks/skillcask-app.rb";
 const LIMIT: u64 = 64 * 1024;
-const RUNNING: &str = env!("CARGO_PKG_VERSION");
+pub const RUNNING: &str = env!("CARGO_PKG_VERSION");
+pub const RELEASES: &str = "https://github.com/puniserv/skillcask/releases";
 
 /// One anonymous request; writes nothing. Every failure to fetch is a network error (exit 3).
 pub fn run(verbose: bool, json: bool) -> Result<()> {
-    let url = std::env::var("SKILLCASK_SELF_CHECK_URL").ok().filter(|u| !u.is_empty()).unwrap_or_else(|| URL.into());
-    let shown = crate::http::shown_url(&url);
-    if url::Url::parse(&url).map_or(true, |u| u.scheme() != "https") {
-        return Err(Error::new(NETWORK, format!("refusing non-HTTPS URL {shown}")).hint("SKILLCASK_SELF_CHECK_URL must be an https:// URL"));
-    }
-    let hint = "check the connection; releases are listed at https://github.com/puniserv/skillcask/releases";
-    let body = crate::http::Http::anonymous(verbose)?
-        .get(&url, LIMIT)
-        .map_err(|e| Error { code: NETWORK, hint: Some(hint.into()), ..e })?
-        .ok_or_else(|| Error::new(NETWORK, format!("{shown}: not found")).hint(hint))?;
-    let latest = latest(&body);
-    if latest.is_none() {
-        ui::warn(format!("{shown}: no version \"X.Y.Z\" skillcask can read"));
-    }
-    let newer = latest.as_deref().is_some_and(|l| semver_cmp(l, RUNNING) == Ordering::Greater);
+    let latest = latest_release(verbose)?;
+    let newer = latest.as_deref().is_some_and(is_newer);
     if json {
         println!("{}", json!({ "version": RUNNING, "latest": latest, "newer": newer }));
         return Ok(());
@@ -36,11 +24,41 @@ pub fn run(verbose: bool, json: bool) -> Result<()> {
         None => println!("skillcask {RUNNING}, latest unknown"),
         Some(l) if newer => {
             println!("skillcask {RUNNING}, latest {l}: {}", ui::out(ui::Color::Yellow, "update available"));
-            ui::note(format!("release: https://github.com/puniserv/skillcask/releases/tag/v{l}"));
+            ui::note(format!("release: {RELEASES}/tag/v{l}"));
         }
         Some(l) => println!("skillcask {RUNNING}, latest {l}: {}", ui::out(ui::Color::Green, "up to date")),
     }
     Ok(())
+}
+
+/// `$var` when set, else `default`; anything but https:// is refused (exit 3).
+pub fn https_url(var: &str, default: &str) -> Result<String> {
+    let url = std::env::var(var).ok().filter(|u| !u.is_empty()).unwrap_or_else(|| default.into());
+    if url::Url::parse(&url).map_or(true, |u| u.scheme() != "https") {
+        let shown = crate::http::shown_url(&url);
+        return Err(Error::new(NETWORK, format!("refusing non-HTTPS URL {shown}")).hint(format!("{var} must be an https:// URL")));
+    }
+    Ok(url)
+}
+
+/// The released version from the cask, `None` (with a warning) when it cannot be read.
+pub fn latest_release(verbose: bool) -> Result<Option<String>> {
+    let url = https_url("SKILLCASK_SELF_CHECK_URL", URL)?;
+    let shown = crate::http::shown_url(&url);
+    let hint = format!("check the connection; releases are listed at {RELEASES}");
+    let body = crate::http::Http::anonymous(verbose)?
+        .get(&url, LIMIT)
+        .map_err(|e| Error { code: NETWORK, hint: Some(hint.clone()), ..e })?
+        .ok_or_else(|| Error::new(NETWORK, format!("{shown}: not found")).hint(hint))?;
+    let latest = latest(&body);
+    if latest.is_none() {
+        ui::warn(format!("{shown}: no version \"X.Y.Z\" skillcask can read"));
+    }
+    Ok(latest)
+}
+
+pub fn is_newer(latest: &str) -> bool {
+    semver_cmp(latest, RUNNING) == Ordering::Greater
 }
 
 /// The cask's `version "X.Y.Z"`. Every line whose first word is `version` must hold the same
