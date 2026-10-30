@@ -68,7 +68,8 @@ public enum AppUpdateCopy {
     /// the macOS zip.
     public static func howToUpdate(zip: String?) -> String {
         "Download \(zip ?? "the macOS zip") from the release page, quit Skillcask, unzip it and drag Skillcask into "
-            + "Applications, replacing the old copy."
+            + "Applications, replacing the old copy. If you installed it with skillcask-app-installer.sh, run that again "
+            + "instead."
     }
 
     /// The temporary-copy callout: the bold lead, then why it matters.

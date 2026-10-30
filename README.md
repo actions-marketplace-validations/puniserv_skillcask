@@ -613,10 +613,10 @@ brew install puniserv/tap/skillcask puniserv/tap/skillcask-app
 Every release also has `Skillcask-X.Y.Z-macos-universal.zip`, signed with a Developer ID and
 notarized (D50): unzip it into `/Applications`.
 
-The app does not update itself. Its app menu has Check for Updates…, which runs `skillcask
-self-check`; it checks daily only after you say yes once (it asks in the sidebar; Settings ›
-Updates switches it). A newer version gets a card and a sheet with the Homebrew command to copy, or
-the release page for a download (D51); it never installs anything.
+The app tells you about a newer release but installs nothing ([Update](#update)). Its app menu
+has Check for Updates…, which runs `skillcask self-check`; it checks daily only after you say yes
+once (it asks in the sidebar; Settings › Updates switches it). A newer version gets a card and a
+sheet with the Homebrew command to copy, or the release page for a download (D51).
 
 `macos/bundle.sh` builds a universal `Skillcask.app` that carries its own CLI at
 `Contents/Helpers/skillcask`. Run outside a bundle (`swift run` from `macos/`), the app uses the

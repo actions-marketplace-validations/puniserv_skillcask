@@ -85,7 +85,8 @@ import Testing
         #expect(
             AppUpdateCopy.howToUpdate(zip: "Skillcask-0.10.3-macos-universal.zip")
                 == "Download Skillcask-0.10.3-macos-universal.zip from the release page, quit Skillcask, unzip it "
-                + "and drag Skillcask into Applications, replacing the old copy.")
+                + "and drag Skillcask into Applications, replacing the old copy. If you installed it with "
+                + "skillcask-app-installer.sh, run that again instead.")
     }
 
     @Test func aVersionThatIsNotStrictNamesNoZip() {
