@@ -31,7 +31,7 @@ import Testing
     static let unknown = #"{"version":"0.10.2","latest":null,"newer":false}"#
 
     /// In memory: no plist is left behind.
-    let suite = MemoryDefaults()!
+    let suite = MemoryDefaults.make()
     let client = FakeCLIClient()
     let clock = Clock()
 
@@ -291,9 +291,9 @@ import Testing
     /// the store's values stands in for the argument domain: read by `load()`, never written. Not
     /// `register(defaults:)`: the registration domain is process-wide and would leak into parallel tests.
     @Test func launchArgumentsAreNeverPersisted() {
-        let defaults = MemoryDefaults(readOnly: [
+        let defaults = MemoryDefaults.make(readOnly: [
             UpdateDefaults.Key.consent: "declined", UpdateDefaults.Key.latestSeen: "0.10.3",
-        ])!
+        ])
         let clock = clock
         let store = AppUpdateStore(
             installed: Self.installed, defaults: UpdateDefaults(defaults), now: { clock.now }, context: { nil })

@@ -8,7 +8,7 @@ import Testing
 /// clears the waiting card for good.
 @Suite struct UpdateDefaultsTests {
     /// In memory: no plist is left behind.
-    let memory = MemoryDefaults()!
+    let memory = MemoryDefaults.make()
 
     func defaults() throws -> UserDefaults {
         memory

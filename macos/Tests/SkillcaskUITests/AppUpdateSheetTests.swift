@@ -34,7 +34,7 @@ import Testing
     static let original = URL(fileURLWithPath: "/Users/me/Downloads/Skillcask.app")
 
     /// In memory: no plist is left behind.
-    let suite = MemoryDefaults()!
+    let suite = MemoryDefaults.make()
     let client = FakeCLIClient()
     let log = SystemLog()
     let now = Date(timeIntervalSince1970: 1_800_000_000)

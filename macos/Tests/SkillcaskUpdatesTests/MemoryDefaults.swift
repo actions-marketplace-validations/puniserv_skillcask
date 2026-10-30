@@ -18,6 +18,15 @@ final class MemoryDefaults: UserDefaults, @unchecked Sendable {
         super.init(suiteName: nil)
     }
 
+    /// The double, or a test failure: the failable `init` only fails when Foundation cannot open the process's
+    /// own domain, and a force unwrap trips swift-format's NeverForceUnwrap.
+    static func make(readOnly: [String: Any] = [:]) -> MemoryDefaults {
+        guard let defaults = MemoryDefaults(readOnly: readOnly) else {
+            preconditionFailure("UserDefaults(suiteName: nil) failed")
+        }
+        return defaults
+    }
+
     override func object(forKey defaultName: String) -> Any? {
         readOnly[defaultName] ?? values[defaultName]
     }
