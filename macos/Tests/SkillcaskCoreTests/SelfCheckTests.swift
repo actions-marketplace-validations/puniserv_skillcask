@@ -41,6 +41,36 @@ import Testing
     }
 
     let capabilities = Capabilities(version: Capabilities.minimum)
+    let bundled = Locator.Choice.bundled(URL(fileURLWithPath: "/Applications/Skillcask.app/Contents/Helpers/skillcask"))
+    static let document = #"{"latest":"0.10.2","newer":true,"version":"0.10.1"}"#
+
+    /// 0.9.0–0.10.1 would run `skillcask-self-check` from PATH (plugin lookup): a configured or PATH CLI of those
+    /// versions never receives the invocation; the bundled helper does even at 0.10.1 (a development bundle), and
+    /// any CLI that reports 0.10.2 or newer does.
+    @Test func onlyCLIsThatShipSelfCheckAreAsked() async throws {
+        let configured = Locator.Choice.configured(URL(fileURLWithPath: "/usr/local/bin/skillcask"))
+        let onPath = Locator.Choice.onPath(URL(fileURLWithPath: "/opt/homebrew/bin/skillcask"))
+        for version in [Version(0, 9, 4), Version(0, 10, 1), Version(0, 10, 2, prerelease: "rc.1")] {
+            for binary in [configured, onPath, nil] {
+                let client = Scripted(stdout: Self.document)
+                let outcome = try await client.selfCheck(binary: binary, capabilities: Capabilities(version: version))
+                #expect(outcome == .unsupported, "\(version) \(String(describing: binary))")
+                #expect(client.invocations.isEmpty, "nothing ran for \(version) \(String(describing: binary))")
+            }
+        }
+        for (binary, version) in [
+            (bundled, Version(0, 10, 1)), (bundled, Version(0, 9, 4)), (configured, Version(0, 10, 2)),
+            (onPath, Version(0, 11, 0)),
+        ] {
+            let client = Scripted(stdout: Self.document)
+            let outcome = try await client.selfCheck(binary: binary, capabilities: Capabilities(version: version))
+            #expect(outcome == .checked(SelfCheckDocument(version: "0.10.1", latest: "0.10.2", newer: true)))
+            #expect(client.invocations.map(\.argv) == [["self-check", "--json"]], "\(binary) \(version)")
+        }
+        #expect(SelfCheckGate.allows(binary: bundled, capabilities: Capabilities(version: Version(0, 10, 1))))
+        #expect(!SelfCheckGate.allows(binary: configured, capabilities: Capabilities(version: Version(0, 10, 1))))
+        #expect(SelfCheckGate.allows(binary: configured, capabilities: Capabilities(version: Version(0, 10, 2))))
+    }
 
     /// The argv, the scope and the limits: no `-g`, no project needed, the 2 minutes of D35 and not the 15 of the
     /// registry reads.
@@ -58,7 +88,7 @@ import Testing
 
     @Test func decodesTheDocument() async throws {
         let client = Scripted(stdout: #"{"latest":"0.10.2","newer":true,"version":"0.10.1"}"# + "\n")
-        let outcome = try await client.selfCheck(capabilities: capabilities)
+        let outcome = try await client.selfCheck(binary: bundled, capabilities: capabilities)
         let document = SelfCheckDocument(version: "0.10.1", latest: "0.10.2", newer: true)
         #expect(outcome == .checked(document))
         #expect(document.latestVersion == Version(0, 10, 2))
@@ -71,7 +101,7 @@ import Testing
         let client = Scripted(
             stdout: #"{"latest":null,"newer":false,"version":"0.10.1"}"#,
             stderr: "warning: https://raw.githubusercontent.com/…: no version \"X.Y.Z\" skillcask can read\n")
-        let outcome = try await client.selfCheck(capabilities: capabilities)
+        let outcome = try await client.selfCheck(binary: bundled, capabilities: capabilities)
         #expect(outcome == .checked(SelfCheckDocument(version: "0.10.1", latest: nil, newer: false)))
         if case .checked(let document) = outcome {
             #expect(document.latestVersion == nil)
@@ -101,7 +131,7 @@ import Testing
                 hint: "check the connection; releases are listed at https://github.com/puniserv/skillcask/releases",
                 stderr: stderr)
         ) {
-            try await client.selfCheck(capabilities: capabilities)
+            try await client.selfCheck(binary: bundled, capabilities: capabilities)
         }
     }
 
@@ -112,7 +142,8 @@ import Testing
         (2, "error: unrecognized subcommand 'self-check'\n\nUsage: skillcask [OPTIONS] <COMMAND>\n"),
     ])
     func anOlderCLIIsUnsupported(exit: Int32, stderr: String) async throws {
-        let outcome = try await Scripted(stderr: stderr, exit: exit).selfCheck(capabilities: capabilities)
+        let outcome = try await Scripted(stderr: stderr, exit: exit)
+            .selfCheck(binary: bundled, capabilities: capabilities)
         #expect(outcome == .unsupported)
     }
 
@@ -125,16 +156,18 @@ import Testing
     ])
     func otherFailuresThrow(exit: Int32, stderr: String) async {
         await #expect(throws: CLIError.self) {
-            try await Scripted(stderr: stderr, exit: exit).selfCheck(capabilities: capabilities)
+            try await Scripted(stderr: stderr, exit: exit).selfCheck(binary: bundled, capabilities: capabilities)
         }
     }
 
     /// Exit 0 with something that is not the document: a decode error, not a silent "up to date".
     @Test func exitZeroWithoutTheDocumentThrows() async {
-        await #expect(throws: CLIError.noDocument) { try await Scripted().selfCheck(capabilities: capabilities) }
+        await #expect(throws: CLIError.noDocument) {
+            try await Scripted().selfCheck(binary: bundled, capabilities: capabilities)
+        }
         await #expect(throws: CLIError.self) {
             try await Scripted(stdout: "skillcask 0.10.1, latest 0.10.2: update available\n")
-                .selfCheck(capabilities: capabilities)
+                .selfCheck(binary: bundled, capabilities: capabilities)
         }
     }
 
@@ -142,7 +175,7 @@ import Testing
     @Test(.timeLimit(.minutes(1))) func aHangingCheckTimesOut() async {
         let guarded = GuardedClient(Scripted(hangs: true), readTimeout: .milliseconds(50))
         await #expect(throws: CLIError.timedOut(after: .milliseconds(50))) {
-            try await guarded.selfCheck(capabilities: capabilities)
+            try await guarded.selfCheck(binary: bundled, capabilities: capabilities)
         }
     }
 }

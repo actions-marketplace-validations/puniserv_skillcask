@@ -85,6 +85,22 @@ import Testing
         #expect(card(reminded, at: now + day) == .available(v131))
     }
 
+    /// A hide or remind date further ahead than its interval was set by a clock that has since gone back: expired.
+    @Test func aClockThatWentBackDoesNotHideForever() {
+        var hidden = state()
+        hidden.hide(v130, at: now + 365 * day)
+        #expect(card(hidden) == .available(v130))
+        hidden.hide(v130, at: now - day)
+        #expect(card(hidden) == .none, "6 days left: still hidden")
+        var reminded = state()
+        reminded.remindTomorrow(at: now + 30 * day)
+        #expect(card(reminded) == .available(v130))
+        reminded.remindTomorrow(at: now)
+        #expect(card(reminded) == .none)
+        reminded.remindTomorrow(at: now + 1)
+        #expect(card(reminded) == .available(v130), "1 s beyond the interval")
+    }
+
     /// Waiting for the update until the next launch, over every other state; the launch hook clears it.
     @Test func awaitingRelaunchUntilTheNextLaunch() {
         var copied = state()

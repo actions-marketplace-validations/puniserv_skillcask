@@ -131,19 +131,21 @@ import Testing
         #expect(!Capabilities(version: Version(0, 10, 1, prerelease: "rc.10")).isTooOld)
     }
 
-    /// A feature shipped in a release is on from that release and off for every pre-release of it.
+    /// A shipped feature (`selfCheck`, 0.10.2) is on from that release and off before it and for every
+    /// pre-release of it.
     @Test func shippedFeatureGateFollowsPrecedence() {
-        let shipped = Version(0, 10, 1)
-        func on(_ version: Version) -> Bool { version >= shipped }
-        #expect(on(Version(0, 10, 1)) && on(Version(0, 10, 2)) && on(Version(0, 11, 0)))
-        #expect(!on(Version(0, 10, 1, prerelease: "rc.9")) && !on(Version(0, 10, 1, prerelease: "rc.10")))
-        #expect(!on(Version(0, 10, 0)))
+        func on(_ version: Version) -> Bool { Capabilities(version: version).features == [.selfCheck] }
+        #expect(on(Version(0, 10, 2)) && on(Version(0, 10, 3)) && on(Version(0, 11, 0)))
+        #expect(on(Version(0, 10, 3, prerelease: "rc.1")))
+        #expect(!on(Version(0, 10, 2, prerelease: "rc.9")) && !on(Version(0, 10, 2, prerelease: "rc.10")))
+        #expect(Capabilities(version: Version(0, 10, 1)).features.isEmpty)
+        #expect(Capabilities(version: Version(0, 10, 0)).features.isEmpty)
         #expect(Version(0, 10, 1, prerelease: "rc.10") >= Version(0, 10, 1, prerelease: "rc.9"))
     }
 
-    /// Every feature is planned: no release turns one on until `shipped` names it.
+    /// Every other feature is planned: no release turns one on until `shipped` names it.
     @Test func aNewerReleaseHasNoPlannedFeature() {
-        #expect(Capabilities(version: Version(1, 0, 0)).features.isEmpty)
+        #expect(Capabilities(version: Version(1, 0, 0)).features == [.selfCheck])
     }
 
     @Test func explicitFeatureSet() {

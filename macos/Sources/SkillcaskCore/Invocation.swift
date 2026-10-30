@@ -58,7 +58,7 @@ public struct Invocation: Hashable, Sendable {
         /// `config --unset -- <key>`: removes the key from the file; prints `removed <key> from <file>`.
         case configUnset(key: String)
         /// `self-check --json` (D51): `{"version", "latest", "newer"}`, one anonymous request for the tap's cask
-        /// file. Not a `Capabilities.Feature`: `CLIClient.selfCheck` reads an older CLI's refusal as unsupported.
+        /// file. Only behind `SelfCheckGate` (`CLIClient.selfCheck`): older CLIs would run a plugin.
         case selfCheck
     }
 

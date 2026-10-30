@@ -27,7 +27,8 @@ public enum ManualCheckResult: Hashable, Sendable {
 public enum UpdateDecision {
     /// The card, in this order: off without an installed version; `awaitingRelaunch` until the next launch; an
     /// available version unless skipped (that version only), hidden by × (that version and older, until
-    /// `hiddenUntil`) or by Remind (any version, until `remindAfter`); else the consent prompt while undecided.
+    /// `hiddenUntil`) or by Remind (any version, until `remindAfter`); else the consent prompt while undecided. A
+    /// `hiddenUntil` or `remindAfter` further ahead than its interval (the clock went back) has expired.
     public static func card(installed: Version?, state: UpdateState, now: Date) -> UpdateCard {
         guard installed != nil else { return .none }
         if state.awaitingRelaunch {
@@ -57,13 +58,23 @@ public enum UpdateDecision {
         if state.skippedVersion == latest {
             return true
         }
-        if let until = state.remindAfter, now < until {
+        if active(state.remindAfter, UpdateState.remindInterval, now) {
             return true
         }
-        if let version = state.hiddenForVersion, let until = state.hiddenUntil, latest <= version, now < until {
+        if let version = state.hiddenForVersion, latest <= version,
+            active(state.hiddenUntil, UpdateState.hideInterval, now)
+        {
             return true
         }
         return false
+    }
+
+    /// `now` is before `until`, and `until` is no further ahead than the interval that set it: a date further out
+    /// was set while the clock ran ahead (or went back since), so it has expired, as `UpdateSchedule.isDue` treats
+    /// a future `lastCheckAt`.
+    private static func active(_ until: Date?, _ interval: TimeInterval, _ now: Date) -> Bool {
+        guard let until, now < until else { return false }
+        return until.timeIntervalSince(now) <= interval
     }
 }
 
