@@ -92,10 +92,12 @@ EOF
 windows() { osascript -l JavaScript "$tmp/windows.js" "$1" 2>/dev/null || echo "?"; }
 
 # Starts the app with a clean environment plus "$@" (extra NAME=value pairs), recording its PID.
+# `-appUpdates.consent declined` (argument domain, D51): no consent card and no automatic update check, so a smoke
+# run never asks GitHub.
 launch() {
     env -i HOME="$HOME" USER="${USER:-}" TMPDIR="$tmp" LANG="${LANG:-en_US.UTF-8}" \
         PATH="$clean_path" SKILLCASK_HOME="$tmp/home" "$@" \
-        "$exe" -binaryPath "" -ApplePersistenceIgnoreState YES >"$tmp/app.log" 2>&1 &
+        "$exe" -binaryPath "" -appUpdates.consent declined -ApplePersistenceIgnoreState YES >"$tmp/app.log" 2>&1 &
     pid=$!
 }
 

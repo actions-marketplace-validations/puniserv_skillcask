@@ -30,6 +30,7 @@ change fails until both are updated.
 | S13 | Onboarding: CLI missing or too old, first launch hints |
 | S14 | Settings: General, Search, Updates, Global, Advanced |
 | S15 | Activity drawer: one row per run this session with its transcript |
+| U1/U4 | App update (D51): sidebar card (consent, available, waiting), app menu Check for Updates…, check alerts |
 
 Flows, walked end to end through the screens: F1 first launch, F2 add a skill, F3 update with
 review, F4 adopt, F5 fix problems.
@@ -53,6 +54,7 @@ colour always uses the `.text` variant; the dot colours are only for the 8 pt do
 | `textTertiary` | `#8A8A8F` | `#7C7C82` | Icons and placeholders only |
 | `controlFill` / `controlBorder` | `#FFFFFF` / `#CFCFD4` | `#333336` / `#48484C` | Buttons, fields |
 | `accent` / `accentSoft` | `#6D4AFF` / `#EEE9FF` | `#8B74FF` / `#2E2750` | Primary, links; active chip |
+| `accentLine` | `#CFC3FF` | `#4A3F86` | App-update card border (never `statusUpdate`) |
 | `statusOk` dot · text · tint | `#34C759` · `#1B7A35` · `#E9F8EC` | `#30D158` · `#4CD964` · `#17301D` | Ok |
 | `statusUpdate` dot · text · tint | `#0A7AFF` · `#0A5FCC` · `#E6F1FF` | `#409CFF` · `#6EB2FF` · `#172A44` | Update |
 | `statusWarning` dot · text · tint | `#F5A623` · `#8A5A00` · `#FFF5DF` | `#FFB340` · `#FFC24A` · `#3A2C10` | Warning |

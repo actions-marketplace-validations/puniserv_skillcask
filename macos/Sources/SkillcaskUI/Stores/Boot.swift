@@ -1,6 +1,7 @@
 import Foundation
 import SkillcaskCore
 import SkillcaskDomain
+import SkillcaskUpdates
 
 /// Builds the app-lifetime stores: the live set over the real binary, or the fixture set the render tool and
 /// `swift run` with `SKILLCASK_UI_FIXTURES=1` use to show the boards' data without a CLI. Fixture mode is a
@@ -19,6 +20,8 @@ public enum Boot {
         public let settings: SettingsStore
         /// The seam the stores were built over, for `.environment(\.cliClient)`.
         public let client: any CLIClient
+        /// The app-update check (D51); `AppUpdateStore.disabled` under fixtures.
+        public var updates: AppUpdateStore = .disabled
     }
 
     /// The board scopes: `api` (`~/work/api`), `website` (`~/work/site`), personal.
@@ -66,7 +69,13 @@ public enum Boot {
         let app = AppStore(settings: settings, queue: queue)
         let runner = ActionRunner(queue: queue)
         app.recordActivity = { [weak runner] in runner?.record($0) }
-        return Stores(app: app, runner: runner, settings: settings, client: UnavailableCLIClient.shared)
+        // Off without a bundle version (`swift run`); `smoke-app.sh` passes `-appUpdates.consent declined`.
+        let updates = AppUpdateStore(
+            installed: AppVersion.main(), defaults: UpdateDefaults(.standard),
+            context: { [weak app] in app?.updateContext })
+        updates.launch()
+        return Stores(
+            app: app, runner: runner, settings: settings, client: UnavailableCLIClient.shared, updates: updates)
     }
 
     /// The window as the Main board shows it: the api scope open with pdf selected, website, the not-set-up

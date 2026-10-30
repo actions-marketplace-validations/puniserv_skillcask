@@ -21,14 +21,17 @@ public struct UnavailableCLIClient: CLIClient {
 }
 
 extension View {
-    /// Injects the three app-lifetime stores and the CLI seam at the root of a scene: views read them with
-    /// `@Environment(AppStore.self)`, `@Environment(ActionRunner.self)`, `@Environment(SettingsStore.self)`.
+    /// Injects the app-lifetime stores and the CLI seam at the root of a scene: views read them with
+    /// `@Environment(AppStore.self)`, `@Environment(ActionRunner.self)`, `@Environment(SettingsStore.self)`,
+    /// `@Environment(AppUpdateStore.self)`. A scene given no update store gets the disabled one (no card, no item).
     public func skillcaskEnvironment(
-        app: AppStore, runner: ActionRunner, settings: SettingsStore, client: any CLIClient
+        app: AppStore, runner: ActionRunner, settings: SettingsStore, client: any CLIClient,
+        updates: AppUpdateStore = .disabled
     ) -> some View {
         environment(app)
             .environment(runner)
             .environment(settings)
+            .environment(updates)
             .environment(\.cliClient, client)
     }
 }
