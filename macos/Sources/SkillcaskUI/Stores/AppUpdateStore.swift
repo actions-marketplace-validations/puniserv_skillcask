@@ -134,13 +134,20 @@ import SkillcaskUpdates
     /// How this copy was installed (`InstallMethodDetector`, once at boot): which steps the sheet shows.
     public let installMethod: InstallMethod
     public private(set) var state: UpdateState {
-        didSet { defaults.save(state, changedFrom: oldValue) }
+        didSet {
+            defaults.save(state, changedFrom: oldValue)
+            // A newer latest, a skip or a reset since Check Now: its answer would disagree with `· X available`.
+            if state.latestSeen != oldValue.latestSeen || state.skippedVersion != oldValue.skippedVersion {
+                settingsCheckResult = nil
+            }
+        }
     }
     /// A manual check is running: the menu item is disabled meanwhile.
     public private(set) var isChecking = false
     /// The manual check's alert; any button or Esc clears it.
     public var alert: Alert?
-    /// The last answer of a check started in Settings (`checkFromSettings()`); nil while one runs.
+    /// The last answer of a check started in Settings (`checkFromSettings()`); nil while one runs and once
+    /// `latestSeen` or the skipped version changes after it.
     public private(set) var settingsCheckResult: SettingsCheckResult?
     /// The update sheet's presentation; `presentSheet(for:)` and `dismissSheet()` set it.
     public private(set) var sheet: SheetRequest?

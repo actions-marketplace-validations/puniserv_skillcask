@@ -291,6 +291,39 @@ import Testing
         #expect(store.state.lastCheckAt == nil)
     }
 
+    @Test func checkNowAnswerClearsWhenALaterCheckFindsAnUpdate() async {
+        await client.json(.selfCheck, in: .personal, #"{"version":"0.10.2","latest":"0.10.2","newer":false}"#)
+        let store = makeStore(state: UpdateState(consent: .granted))
+        await store.checkFromSettings()
+        #expect(store.settingsCheckResult == .upToDate(Self.installed))
+        await client.json(.selfCheck, in: .personal, #"{"version":"0.10.2","latest":"0.10.3","newer":true}"#)
+        await store.automaticCheck()
+        #expect(store.state.latestSeen == Self.latest)
+        #expect(store.settingsCheckResult == nil, "no \"up to date\" next to `· 0.10.3 available`")
+    }
+
+    @Test func checkNowAnswerClearsOnSkipAndReset() async {
+        await client.json(.selfCheck, in: .personal, #"{"version":"0.10.2","latest":"0.10.3","newer":true}"#)
+        let store = makeStore()
+        await store.checkFromSettings()
+        #expect(store.settingsCheckResult == .available(Self.latest))
+        store.skip(Self.latest)
+        #expect(store.settingsCheckResult == nil)
+        await client.json(.selfCheck, in: .personal, #"{"version":"0.10.2","latest":"0.10.3","newer":true}"#)
+        await store.checkFromSettings()
+        #expect(store.settingsCheckResult == .available(Self.latest))
+        store.resetSkipped()
+        #expect(store.settingsCheckResult == nil)
+    }
+
+    @Test func checkNowAnswerStaysWhenNothingChanges() async {
+        await client.json(.selfCheck, in: .personal, #"{"version":"0.10.2","latest":"0.10.3","newer":true}"#)
+        let store = makeStore()
+        await store.checkFromSettings()
+        store.remindTomorrow()
+        #expect(store.settingsCheckResult == .available(Self.latest))
+    }
+
     @Test func seeWhatsNewWithoutAKnownUpdateOpensNothing() {
         let store = makeStore(state: UpdateState())
         store.seeWhatsNew()
