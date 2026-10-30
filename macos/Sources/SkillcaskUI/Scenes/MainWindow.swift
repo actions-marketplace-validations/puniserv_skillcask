@@ -209,7 +209,7 @@ private struct AppUpdateHost: ViewModifier {
                     set: { if $0 == nil { updates.dismissSheet() } })
             ) { request in
                 if let installed = updates.installed {
-                    AppUpdateSheet(version: request.version, installed: installed) { updates.dismissSheet() }
+                    AppUpdateSheet(version: request.version, installed: installed)
                 }
             }
     }

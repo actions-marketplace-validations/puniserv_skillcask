@@ -1,4 +1,6 @@
+import Foundation
 import SkillcaskCore
+import SkillcaskUpdates
 
 /// The words of the app-update check (D51): the sidebar card (U1), the app menu item and the manual check's alerts
 /// (U4). The brief's copy wins where the handoff differs: no release date (the cask has none), no command-line tool
@@ -33,10 +35,117 @@ public enum AppUpdateCopy {
     public static let awaitingTitle = "Waiting for the update"
     public static let awaitingBody = "Command copied. After Homebrew finishes, quit and reopen Skillcask."
 
-    // MARK: - Sheet (U2/U3; phase 4b completes it)
+    // MARK: - Sheet (U2/U3)
 
     public static let releaseNotes = "Release Notes on GitHub"
+    /// The sheet's hidden Esc button.
     public static let close = "Close"
+
+    /// The header's pill: how this copy was installed.
+    public static func pill(_ method: InstallMethod) -> String {
+        switch method {
+        case .homebrew: "Installed with Homebrew"
+        case .direct: "Installed from a download"
+        case .translocated: "Running from a temporary copy"
+        }
+    }
+
+    public static let runInTerminal = "Run in Terminal"
+    /// Under the command: the cask has no `uninstall quit:`, so Homebrew does not quit the app.
+    public static let homebrewCaption =
+        "Homebrew replaces Skillcask while it runs; quit and reopen it afterwards. Nothing in your projects, "
+        + "skills.toml or skills.lock changes."
+    public static let copy = "Copy"
+
+    /// What VoiceOver reads for a command's Copy button.
+    public static func copyLabel(_ command: String) -> String {
+        "Copy command: \(command)"
+    }
+
+    public static let howToUpdateTitle = "How to update"
+
+    /// The direct-download steps, naming the release's zip.
+    public static func howToUpdate(zip: String) -> String {
+        "Download \(zip) from the release page, quit Skillcask, unzip it and drag Skillcask into Applications, "
+            + "replacing the old copy."
+    }
+
+    /// The temporary-copy callout: the bold lead, then why it matters.
+    public static let translocatedLead = "Skillcask is running from a temporary copy."
+    public static let translocatedBody =
+        "macOS moved it there because it was opened straight from Downloads. Updating that copy would be lost on "
+        + "the next restart."
+    public static let doThisFirst = "Do this first"
+    public static let doThisFirstBody =
+        "Quit Skillcask, move it from Downloads into Applications, and open it from there. The update will then "
+        + "show the right steps."
+
+    /// A footer button's title.
+    public static func title(for action: AppUpdateStore.SheetAction) -> String {
+        switch action {
+        case .copyCommand: "Copy Command"
+        case .copyAndOpenTerminal: "Copy and Open Terminal"
+        case .openReleasePage: "Open Release Page"
+        case .showInFinder: "Show in Finder"
+        case .skip: "Skip This Version"
+        case .remindTomorrow: "Remind Me Tomorrow"
+        }
+    }
+
+    // MARK: - Settings › Updates (U5)
+
+    public static let appGroup = "Skillcask app"
+    public static let installedLabel = "Installed:"
+    public static let dailyLabel = "Check for new versions daily:"
+    /// Decision 3's privacy line beside the switch: the consent card's sentence.
+    public static let dailyNote = consentBody
+    public static let lastCheckedLabel = "Last checked:"
+    public static let checkNow = "Check Now"
+    public static let skippedLabel = "Skipped version:"
+    public static let reset = "Reset"
+    public static let never = "Never"
+    public static let none = "None"
+    /// `Check Now` waits for the command-line tool (onboarding, a re-detection).
+    public static let checkNeedsCLI = "Available once the command-line tool is ready."
+    /// The CLI chosen in Settings › General predates `self-check` (`SelfCheckGate`).
+    public static let checkNeedsNewerCLI =
+        "The command-line tool chosen in General is too old to check for updates."
+
+    /// `Skillcask 0.10.2 · Homebrew`.
+    public static func installedLine(_ version: Version, _ method: InstallMethod) -> String {
+        let how =
+            switch method {
+            case .homebrew: "Homebrew"
+            case .direct: "download"
+            case .translocated: "temporary copy"
+            }
+        return "Skillcask \(version) · \(how)"
+    }
+
+    /// `Never`, `Today at 09:14`, `Yesterday at 09:14`, else `29 Oct at 09:14` (calendar days in `timeZone`).
+    public static func lastChecked(_ date: Date?, now: Date, timeZone: TimeZone = .current) -> String {
+        guard let date else { return never }
+        let calendar = Formatters.calendar(timeZone)
+        let days =
+            calendar.dateComponents([.day], from: calendar.startOfDay(for: date), to: calendar.startOfDay(for: now))
+            .day ?? 0
+        let time = Formatters.time(date, timeZone: timeZone)
+        switch days {
+        case ..<1: return "Today at \(time)"
+        case 1: return "Yesterday at \(time)"
+        default: return "\(Formatters.dayMonth(date, timeZone: timeZone)) at \(time)"
+        }
+    }
+
+    /// After the last-checked time while an update is known.
+    public static func availableSuffix(_ version: Version) -> String {
+        " · \(version) available"
+    }
+
+    /// `None` or the skipped version.
+    public static func skipped(_ version: Version?) -> String {
+        version.map(\.description) ?? none
+    }
 
     // MARK: - App menu (U4)
 

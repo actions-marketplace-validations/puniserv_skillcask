@@ -70,8 +70,52 @@ import SkillcaskUpdates
         public let version: Version
     }
 
+    /// What the sheet's buttons hand to the system: the pasteboard, the browser, Terminal and Finder. Injected so
+    /// tests see exactly what is copied or opened; `.live` is AppKit (`AppUpdateSystem.swift`).
+    public struct System {
+        /// Puts the text on the general pasteboard as a plain string, as given (no trailing newline added).
+        public var copy: @MainActor (String) -> Void
+        /// Opens a web page in the default browser.
+        public var open: @MainActor (URL) -> Void
+        /// Launches an app bundle (Terminal), with no document and no Automation.
+        public var openApplication: @MainActor (URL) -> Void
+        /// Selects a file in Finder.
+        public var reveal: @MainActor (URL) -> Void
+
+        public init(
+            copy: @escaping @MainActor (String) -> Void, open: @escaping @MainActor (URL) -> Void,
+            openApplication: @escaping @MainActor (URL) -> Void, reveal: @escaping @MainActor (URL) -> Void
+        ) {
+            self.copy = copy
+            self.open = open
+            self.openApplication = openApplication
+            self.reveal = reveal
+        }
+    }
+
+    /// A button of the update sheet; every one closes the sheet after it acted.
+    public enum SheetAction: Hashable, Sendable {
+        /// Homebrew: the command on the pasteboard, then the waiting card.
+        case copyCommand
+        /// Homebrew: `copyCommand`, then Terminal opens; the user pastes, the app runs nothing.
+        case copyAndOpenTerminal
+        /// The release page of the version (direct download, or a temporary copy whose original is unknown).
+        case openReleasePage
+        /// A temporary copy: Finder selects where the user's copy lies.
+        case showInFinder(URL)
+        /// `Skip This Version`.
+        case skip
+        /// `Remind Me Tomorrow`.
+        case remindTomorrow
+    }
+
+    /// Terminal, opened by `Copy and Open Terminal` (`NSWorkspace.openApplication`, no AppleScript).
+    public static let terminal = URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")
+
     /// The app's own version (`AppVersion.main()`); nil turns everything off.
     public let installed: Version?
+    /// How this copy was installed (`InstallMethodDetector`, once at boot): which steps the sheet shows.
+    public let installMethod: InstallMethod
     public private(set) var state: UpdateState {
         didSet { defaults.save(state, changedFrom: oldValue) }
     }
@@ -79,10 +123,11 @@ import SkillcaskUpdates
     public private(set) var isChecking = false
     /// The manual check's alert; any button or Esc clears it.
     public var alert: Alert?
-    /// The update sheet's presentation (phase 4b draws its body); `presentSheet(for:)` and `dismissSheet()` set it.
+    /// The update sheet's presentation; `presentSheet(for:)` and `dismissSheet()` set it.
     public private(set) var sheet: SheetRequest?
 
     @ObservationIgnored private let defaults: UpdateDefaults
+    @ObservationIgnored private let system: System
     @ObservationIgnored private let now: @MainActor () -> Date
     @ObservationIgnored private let sleep: @MainActor (Duration) async throws -> Void
     @ObservationIgnored private let context: @MainActor () -> Context?
@@ -95,19 +140,24 @@ import SkillcaskUpdates
 
     /// - Parameters:
     ///   - installed: The app's version; nil (no `.app`, fixtures) turns the feature off.
+    ///   - installMethod: How the app was installed; previews and tests pass it, the app detects it at boot.
     ///   - defaults: Where `UpdateState` lives (`appUpdates.*`).
+    ///   - state: Starts from this state instead of `defaults.load()` (previews); writes still go to `defaults`.
+    ///   - system: The pasteboard, browser, Terminal and Finder.
     ///   - now: The clock.
     ///   - sleep: Waits between automatic checks.
     ///   - context: The ready CLI, or nil while it is not.
-    ///   - state: Starts from this state instead of `defaults.load()` (previews); writes still go to `defaults`.
     public init(
-        installed: Version?, defaults: UpdateDefaults, state initial: UpdateState? = nil,
+        installed: Version?, installMethod: InstallMethod = .direct, defaults: UpdateDefaults,
+        state initial: UpdateState? = nil, system: System = .live,
         now: @escaping @MainActor () -> Date = { Date() },
         sleep: @escaping @MainActor (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
         context: @escaping @MainActor () -> Context?
     ) {
         self.installed = installed
+        self.installMethod = installMethod
         self.defaults = defaults
+        self.system = system
         self.now = now
         self.sleep = sleep
         self.context = context
@@ -146,6 +196,20 @@ import SkillcaskUpdates
     /// The version the menu offers and the sheet opens on, whatever the card hides.
     public var knownUpdate: Version? {
         UpdateDecision.knownUpdate(installed: installed, latest: state.latestSeen)
+    }
+
+    /// Settings › Updates' switch: on once the user said yes; setting it is `setDailyCheck(_:)`.
+    public var dailyCheck: Bool {
+        get { state.consent == .granted }
+        set { setDailyCheck(newValue) }
+    }
+
+    /// Why Settings › Updates' `Check Now` is disabled, or nil when a check can run: the CLI is not ready yet, or
+    /// the one chosen in Settings › General predates `self-check`.
+    public var checkNowBlocker: String? {
+        guard let context = context() else { return AppUpdateCopy.checkNeedsCLI }
+        return SelfCheckGate.allows(binary: context.binary, capabilities: context.capabilities)
+            ? nil : AppUpdateCopy.checkNeedsNewerCLI
     }
 
     /// `Update to X…` when an update is known, else `Check for Updates…`.
@@ -190,7 +254,7 @@ import SkillcaskUpdates
         setDailyCheck(granted)
     }
 
-    /// Settings › Updates' switch (phase 4b) and the consent card.
+    /// Settings › Updates' switch (`dailyCheck`) and the consent card.
     public func setDailyCheck(_ on: Bool) {
         state.consent = on ? .granted : .declined
         if on {
@@ -232,6 +296,42 @@ import SkillcaskUpdates
     public func presentSheet(for version: Version) {
         guard isEnabled else { return }
         sheet = SheetRequest(id: UUID(), version: version)
+    }
+
+    /// The sheet's footer buttons (U2/U3): does what the button says through `System`, records it, closes the
+    /// sheet. URLs and the command are built here (`UpdateLinks`), never taken from a response; a version that is
+    /// not strict opens nothing.
+    public func perform(_ action: SheetAction, on version: Version) {
+        switch action {
+        case .copyCommand:
+            copyHomebrewCommand()
+        case .copyAndOpenTerminal:
+            copyHomebrewCommand()
+            system.openApplication(Self.terminal)
+        case .openReleasePage:
+            if let page = UpdateLinks.releasePage(for: version) {
+                system.open(page)
+            }
+        case .showInFinder(let original):
+            system.reveal(original)
+        case .skip:
+            skip(version)
+        case .remindTomorrow:
+            remindTomorrow()
+        }
+        dismissSheet()
+    }
+
+    /// The header's `Release Notes on GitHub`: the release page; the sheet stays.
+    public func openReleaseNotes(for version: Version) {
+        if let page = UpdateLinks.releasePage(for: version) {
+            system.open(page)
+        }
+    }
+
+    private func copyHomebrewCommand() {
+        system.copy(UpdateLinks.homebrewCommand)
+        copiedCommand()
     }
 
     /// Closes the sheet (Esc, a footer button). No state changes here: the button that closes says what it did.

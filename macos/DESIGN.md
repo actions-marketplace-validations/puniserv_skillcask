@@ -30,7 +30,7 @@ change fails until both are updated.
 | S13 | Onboarding: CLI missing or too old, first launch hints |
 | S14 | Settings: General, Search, Updates, Global, Advanced |
 | S15 | Activity drawer: one row per run this session with its transcript |
-| U1/U4 | App update (D51): sidebar card (consent, available, waiting), app menu Check for Updates…, check alerts |
+| U1–U5 | App update (D51): sidebar card (consent, available, waiting), update sheet per install method (Homebrew, download, temporary copy), app menu Check for Updates…, check alerts, Settings › Updates app group |
 
 Flows, walked end to end through the screens: F1 first launch, F2 add a skill, F3 update with
 review, F4 adopt, F5 fix problems.
@@ -97,7 +97,7 @@ The diff grid draws `monoSmall` on an 18 pt line, the Activity transcript on a 1
 | Badge (small) · button (small) · tab · search · mini progress | 18 (16) · 24 (22) · 22 · 26 · 3 |
 | Icons: toolbar · sidebar · inline | 13 · 16 · 12 |
 | Window min width · sidebar ideal / min · list ideal / min · detail min | 960 · 220 / 180 · 360 / 300 · 400 |
-| Sheets: Review Update · Add Skill · Adopt | 960×700 · 900×660 · 592×340 |
+| Sheets: Review Update · Add Skill · Adopt · App Update | 960×700 · 900×660 · 592×340 · 680 wide |
 | Settings width · label column · env remove column · env row | 600 · 200 · 40 · 28 |
 
 ### Decisions and deviations

@@ -70,8 +70,11 @@ public enum Boot {
         let runner = ActionRunner(queue: queue)
         app.recordActivity = { [weak runner] in runner?.record($0) }
         // Off without a bundle version (`swift run`); `smoke-app.sh` passes `-appUpdates.consent declined`.
+        // The install method is read once, from the bundle path and the disk (no network).
         let updates = AppUpdateStore(
-            installed: AppVersion.main(), defaults: UpdateDefaults(.standard),
+            installed: AppVersion.main(),
+            installMethod: InstallMethodDetector(bundlePath: Bundle.main.bundlePath).detect(),
+            defaults: UpdateDefaults(.standard),
             context: { [weak app] in app?.updateContext })
         updates.launch()
         return Stores(
