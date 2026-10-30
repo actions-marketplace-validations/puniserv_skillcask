@@ -66,7 +66,7 @@ updated, run this", so a script does not mistake a printed hint for success.
    with `Http::anonymous` (no credential, D51), at most 256 KiB (the 0.10.1 script is 55 KiB). The
    tag, not `/latest/`, so the version installed is the one step 2 reported.
    `SKILLCASK_SELF_UPDATE_URL` replaces the URL for tests and mirrors.
-2. Write it to a file in the temp dir, open it, remove the path.
+2. Write it to an unnamed temp file (`tempfile::tempfile`), so nothing is left behind.
 3. Print `updating skillcask X -> Y with <url>`, then `exec` `sh -s` with that file as stdin and
    `SKILLCASK_INSTALL_DIR=<install_prefix>`, `SKILLCASK_NO_MODIFY_PATH=1` in the environment: the
    same as the documented `curl … | sh`, into the same directory, without editing shell profiles
@@ -84,9 +84,10 @@ install and prints the command for every other one. D52 records the decision and
 ## Tests
 
 - Unit tests for the detection table on fake paths, receipts and `.crates2.json` in a temp dir.
-- `tests/cli`: `self-update --dry-run` against a local server through `SKILLCASK_SELF_CHECK_URL`
-  and `SKILLCASK_SELF_UPDATE_URL`.
-- The real `exec` is checked by hand on an installer install (Linux and macOS) before release.
+- `tests/self_update.rs`, against a local server through `SKILLCASK_SELF_CHECK_URL` and
+  `SKILLCASK_SELF_UPDATE_URL`: up to date, unknown install, `cargo install`, and on Unix the test
+  binary copied to `~/.cargo/bin` with a receipt, where a served script records its environment
+  (the real `exec`), `--dry-run` runs nothing and the script's exit code comes back.
 
 ## Rejected
 

@@ -18,6 +18,7 @@ mod publish;
 mod registry;
 mod scope;
 mod self_check;
+mod self_update;
 mod skill;
 mod tui;
 mod ui;
@@ -254,6 +255,13 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Update skillcask: rerun the release's installer when it installed this binary (Unix),
+    /// else name the command for Homebrew, npm, cargo or the app.
+    SelfUpdate {
+        /// Print what would run, run nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Any other command runs `skillcask-<command>` from PATH, like git and cargo plugins.
     #[command(external_subcommand)]
     External(Vec<OsString>),
@@ -308,6 +316,9 @@ fn run(cli: Cli) -> Result<(), Error> {
     if let Cmd::SelfCheck { json } = cli.cmd {
         return self_check::run(cli.verbose, json);
     }
+    if let Cmd::SelfUpdate { dry_run } = cli.cmd {
+        return self_update::run(cli.verbose, dry_run);
+    }
     let scope = if cli.global {
         Scope::global()?
     } else {
@@ -353,7 +364,14 @@ fn run(cli: Cli) -> Result<(), Error> {
             commands::search(&ctx, query.as_deref(), json, choice, remember)
         }
         Cmd::Config { key, value, unset, json } => config::run(&ctx.s, key.as_deref(), &value, unset, json),
-        Cmd::External(_) | Cmd::Auth(_) | Cmd::Validate { .. } | Cmd::Projects { .. } | Cmd::Ui | Cmd::App | Cmd::SelfCheck { .. } => {
+        Cmd::External(_)
+        | Cmd::Auth(_)
+        | Cmd::Validate { .. }
+        | Cmd::Projects { .. }
+        | Cmd::Ui
+        | Cmd::App
+        | Cmd::SelfCheck { .. }
+        | Cmd::SelfUpdate { .. } => {
             unreachable!("handled above")
         }
         Cmd::Publish { vendor, base_url, dist_url, inline, out, paths } => {

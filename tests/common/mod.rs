@@ -289,6 +289,8 @@ pub struct Project {
     pub env: Vec<(String, String)>,
     /// Working directory in place of the project dir.
     pub cwd: Option<PathBuf>,
+    /// Binary in place of the one cargo built.
+    pub bin: Option<PathBuf>,
 }
 
 impl Project {
@@ -299,6 +301,7 @@ impl Project {
             ca: server.ca_file.clone(),
             env: Vec::new(),
             cwd: None,
+            bin: None,
         };
         git(p.path(), &["init", "-q"]);
         p
@@ -375,7 +378,7 @@ impl Project {
     }
 
     fn command(&self, args: &[&str]) -> Command {
-        let mut c = Command::new(env!("CARGO_BIN_EXE_skillcask"));
+        let mut c = Command::new(self.bin.as_deref().unwrap_or(Path::new(env!("CARGO_BIN_EXE_skillcask"))));
         c.args(args)
             .current_dir(self.cwd.as_deref().unwrap_or(self.path()))
             .env("SKILLCASK_CA_FILE", &self.ca)

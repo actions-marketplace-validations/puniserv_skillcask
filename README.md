@@ -106,7 +106,8 @@ tag.
 
 ### Update
 
-Update the same way you installed; skillcask does not update itself.
+`skillcask self-update` reruns the release's installer when `skillcask-installer.sh` installed
+this binary (Linux, macOS); for any other install it prints the command to run. By hand:
 
 ```sh
 brew update && brew upgrade skillcask skillcask-app    # Homebrew (skillcask alone without the app)
@@ -339,6 +340,7 @@ Every command except `publish`, `validate` and `projects` takes `-g, --global`.
 | `ui` | A terminal UI over the commands above: skills with their state and updates, `info`, SKILL.md and `audit` per skill, add, adopt (also offered when an add hits a skill skillcask does not manage), update (diff first), remove, doctor, a filter of the list, search of the registries (and skills.sh, asked once), the repositories in use (`R`, `S` turns skills.sh on or off) and a projects picker; `g` switches between the project and `--global`. |
 | `app` | Opens the macOS app (see [macOS app](#macos-app)); exits 1 when it is not installed, and on Linux and Windows. |
 | `self-check [--json]` | Whether a newer skillcask is released, from the `skillcask-app` cask file of the tap; one anonymous request, only when run; writes nothing. |
+| `self-update [--dry-run]` | Update skillcask: reruns the release's installer for an installer-script install (Linux, macOS), else prints the Homebrew, npm, cargo or app command and exits 1. `--dry-run` prints what would run. |
 | `<other>` | Runs `skillcask-<other>` from `PATH`, like git and cargo plugins. |
 
 `status`, `outdated`, `info`, `search`, `doctor`, `audit`, `projects`, `config` and
@@ -495,6 +497,9 @@ too young falls back to an older commit when the server supports partial fetches
   file, which carries the skillcask version in its User-Agent (`skillcask/<version>`): no token,
   account, project or skill data; GitHub sees your IP address. The app checks
   daily only after you say yes. `SKILLCASK_SELF_CHECK_URL` points it at a mirror (HTTPS only).
+- `self-update` sends the same request, then, for an installer-script install only, downloads that
+  release's `skillcask-installer.sh` the same way (`SKILLCASK_SELF_UPDATE_URL` replaces it) and
+  runs it with `sh`; the script checks the archive's sha256.
 - `add` and `update` (and `install` when it resolves) warn about characters a reviewer cannot
   see in the text files of new content: bidi controls (`U+202A`-`U+202E`, `U+2066`-`U+2069`,
   `U+200E`, `U+200F`, `U+061C`), zero-width characters (`U+200B`-`U+200D`, `U+2060`, `U+FEFF`) and
