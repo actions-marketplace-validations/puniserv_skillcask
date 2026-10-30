@@ -307,6 +307,49 @@ import Testing
         #expect(defaults.values[UpdateDefaults.Key.hiddenUntil] != nil)
     }
 
+    /// Final review B1: a failed automatic check leaves `lastCheckAt`, so activation must not ask again until the
+    /// attempt itself is a day old.
+    @Test func activationAfterAFailureWaitsADay() async {
+        await client.script(.selfCheck, in: .personal, .error(.binaryMissing(searched: [])))
+        await client.script(.selfCheck, in: .personal, .error(.binaryMissing(searched: [])))
+        let store = makeStore(state: UpdateState(consent: .granted))
+        await store.checkIfDue()
+        await store.checkIfDue()
+        #expect(await client.commands == [.selfCheck])
+        #expect(store.state.lastCheckAt == nil)
+        clock.now = clock.now.addingTimeInterval(23 * 3600)
+        await store.checkIfDue()
+        #expect(await client.commands == [.selfCheck])
+        clock.now = clock.now.addingTimeInterval(3600)
+        await store.checkIfDue()
+        #expect(await client.commands == [.selfCheck, .selfCheck])
+        #expect(UpdateDefaults(suite).load() == UpdateState(consent: .granted), "the attempt is not persisted")
+    }
+
+    /// Final review B2: the menu opens a main window when none hosts the sheet and alert.
+    @Test func hostsAreCounted() {
+        let store = makeStore()
+        #expect(!store.hasHost)
+        store.hostAppeared()
+        store.hostAppeared()
+        store.hostDisappeared()
+        #expect(store.hasHost)
+        store.hostDisappeared()
+        store.hostDisappeared()
+        #expect(!store.hasHost)
+        store.hostAppeared()
+        #expect(store.hasHost)
+    }
+
+    /// `Update to X…` re-checks with the sheet open: a newer answer replaces the version it offers.
+    @Test func aNewerAnswerUpdatesTheOpenSheet() async {
+        await answer(#"{"version":"0.10.2","latest":"0.10.4","newer":true}"#)
+        let store = makeStore(state: UpdateState(consent: .declined, latestSeen: Version(0, 10, 3)))
+        await store.checkForUpdates()
+        #expect(store.sheet?.version == Version(0, 10, 4))
+        #expect(store.knownUpdate == Version(0, 10, 4))
+    }
+
     /// The consent card needs a CLI the gate lets through: none for a configured 0.10.1.
     @Test func noConsentPromptForACLIThatCannotSelfCheck() {
         let old = Locator.Choice.configured(URL(fileURLWithPath: "/opt/homebrew/bin/skillcask"))

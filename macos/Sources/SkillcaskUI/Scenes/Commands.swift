@@ -14,6 +14,7 @@ public struct SkillcaskCommands: Commands {
     @FocusedValue(\.scopeStore) private var store
     @FocusedValue(\.actionRunner) private var runner
     @FocusedValue(\.focusSearch) private var focusSearch
+    @Environment(\.openWindow) private var openWindow
     /// The app-update check (D51): app-wide, not per window, so the app menu item works from any window.
     private let updates: AppUpdateStore?
 
@@ -34,11 +35,22 @@ public struct SkillcaskCommands: Commands {
     /// The snapshot the Skill and Scope menus act on: none for a folder without skills.toml.
     private var snapshot: ScopeSnapshot? { isSetUp ? store?.snapshot : nil }
 
+    /// Check for Updates… / Update to X…: the answer shows on a main window, so one comes forward first, or opens
+    /// when every main window is closed (the app keeps running without one); then the check runs.
+    private func checkForUpdates(_ updates: AppUpdateStore) {
+        if updates.hasHost {
+            _ = Workspace.bringMainWindowForward()
+        } else {
+            openWindow(id: MainWindow.sceneID)
+        }
+        Task { await updates.checkForUpdates() }
+    }
+
     public var body: some Commands {
         // U4: under About Skillcask. `Update to X…` opens the sheet on a known update and checks again meanwhile.
         CommandGroup(after: .appInfo) {
             if let updates, updates.isEnabled {
-                Button(updates.menuTitle) { Task { await updates.checkForUpdates() } }
+                Button(updates.menuTitle) { checkForUpdates(updates) }
                     .disabled(updates.isChecking || !updates.isReady || isPresenting)
             }
         }

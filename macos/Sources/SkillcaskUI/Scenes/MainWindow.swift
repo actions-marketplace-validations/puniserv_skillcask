@@ -187,6 +187,8 @@ private struct AppUpdateHost: ViewModifier {
         content
             .background { appUpdateSheet }
             .background { appUpdateAlert }
+            .onAppear { updates.hostAppeared() }
+            .onDisappear { updates.hostDisappeared() }
             .onChange(of: app.isReady, initial: true) { updates.cliChanged(isReady: app.isReady) }
             .onChange(of: updates.isPresenting, initial: true) { app.isAppUpdatePresenting = updates.isPresenting }
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in

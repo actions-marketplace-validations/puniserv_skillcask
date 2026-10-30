@@ -66,7 +66,7 @@ import SkillcaskUpdates
     /// What Settings › Updates' `Check Now` found, shown under Last checked in Settings: the window that asked shows
     /// the answer, never the main window's alert or sheet (it may be closed, or behind Settings).
     public enum SettingsCheckResult: Hashable, Sendable {
-        case upToDate(Version)
+        case upToDate
         case available(Version)
         /// The CLI's error line, the unreadable-answer line or the too-old-CLI line.
         case failed(String)
@@ -162,6 +162,10 @@ import SkillcaskUpdates
     @ObservationIgnored private var scheduleID = UUID()
     /// The check running now: the loop, an activation, the menu and the known-update re-check share it, so they
     /// never send two requests at once.
+    /// When the last automatic check started, whatever its answer; in memory only, so nothing new is persisted.
+    @ObservationIgnored private(set) var lastAttemptAt: Date?
+    /// The main windows' `AppUpdateHost`s on screen.
+    @ObservationIgnored private var hosts = 0
     @ObservationIgnored private var inFlight: Task<Result<SelfCheckOutcome, CLIError>, Never>?
 
     /// - Parameters:
@@ -265,11 +269,29 @@ import SkillcaskUpdates
         }
     }
 
-    /// The app became active (also after a wake): a 24-hour sleep drifts across system sleep, so the check runs
-    /// here when it is due, as the loop would.
+    /// The app became active (also after a wake): the loop's `Task.sleep` counts system sleep, but a wake-up that
+    /// came due while the Mac slept fires late, so the check runs here when it is due, as the loop would. Due means
+    /// the last answer is 24 hours old and so is the last automatic attempt (`lastAttemptAt`): a failure leaves
+    /// `lastCheckAt` as it was, and without the second rule every activation after one would ask GitHub again.
     public func checkIfDue() async {
-        guard isEnabled, context() != nil, UpdateSchedule.shouldCheckAutomatically(state, now: now()) else { return }
+        guard isEnabled, context() != nil, UpdateSchedule.shouldCheckAutomatically(state, now: now()),
+            UpdateSchedule.isDue(lastCheckAt: lastAttemptAt, now: now())
+        else { return }
         await automaticCheck()
+    }
+
+    /// A main window's `AppUpdateHost` appeared or went away: the sheet and the alert need one to show.
+    public func hostAppeared() {
+        hosts += 1
+    }
+
+    public func hostDisappeared() {
+        hosts = max(0, hosts - 1)
+    }
+
+    /// A main window is open to present the sheet or the alert; the app menu item opens one when not.
+    public var hasHost: Bool {
+        hosts > 0
     }
 
     // MARK: - Consent
@@ -374,6 +396,10 @@ import SkillcaskUpdates
         if let known = knownUpdate {
             presentSheet(for: known)
             await automaticCheck()
+            // A newer version found meanwhile replaces the one the open sheet offers (same presentation).
+            if let sheet, let newer = knownUpdate, newer != sheet.version {
+                self.sheet = SheetRequest(id: sheet.id, version: newer)
+            }
             return
         }
         isChecking = true
@@ -410,7 +436,7 @@ import SkillcaskUpdates
         case .success(.checked(let document)):
             switch UpdateDecision.manual(installed: installed, document: document) {
             case .available(let version): settingsCheckResult = .available(version)
-            case .upToDate(let version): settingsCheckResult = .upToDate(version)
+            case .upToDate: settingsCheckResult = .upToDate
             case .unknown: settingsCheckResult = .failed(AppUpdateCopy.unknownMessage)
             }
         case .success(.unsupported):
@@ -441,8 +467,9 @@ import SkillcaskUpdates
         await checkForUpdates()
     }
 
-    /// One automatic check: the answer is recorded, nothing is shown, failures change nothing.
+    /// One automatic check: the answer is recorded, nothing is shown, failures change nothing but `lastAttemptAt`.
     func automaticCheck() async {
+        lastAttemptAt = now()
         record(await run())
     }
 
