@@ -453,7 +453,9 @@ jobs:
           ditto -c -k --keepParent Skillcask.app "$zip"
           shasum -a 256 -b "$zip" > "$zip.sha256"
       - name: Attach to the release
-        run: gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" macos/.build/Skillcask-*-macos-universal.zip*
+        run: |
+          cp macos/install-app.sh "$RUNNER_TEMP/skillcask-app-installer.sh"
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" macos/.build/Skillcask-*-macos-universal.zip* "$RUNNER_TEMP/skillcask-app-installer.sh"
       - name: Remove the keychain and the API key
         if: always()
         run: |

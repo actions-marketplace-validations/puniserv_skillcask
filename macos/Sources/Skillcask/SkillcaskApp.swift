@@ -25,14 +25,16 @@ struct SkillcaskApp: App {
         WindowGroup(id: MainWindow.sceneID) {
             MainWindow()
                 .skillcaskEnvironment(
-                    app: stores.app, runner: stores.runner, settings: stores.settings, client: stores.client)
+                    app: stores.app, runner: stores.runner, settings: stores.settings, client: stores.client,
+                    updates: stores.updates)
         }
-        .commands { SkillcaskCommands() }
+        .commands { SkillcaskCommands(updates: stores.updates) }
         // S14: the system Settings window, ⌘, from the app menu.
         Settings {
             SettingsView()
                 .skillcaskEnvironment(
-                    app: stores.app, runner: stores.runner, settings: stores.settings, client: stores.client)
+                    app: stores.app, runner: stores.runner, settings: stores.settings, client: stores.client,
+                    updates: stores.updates)
         }
     }
 }

@@ -14,8 +14,14 @@ public struct SkillcaskCommands: Commands {
     @FocusedValue(\.scopeStore) private var store
     @FocusedValue(\.actionRunner) private var runner
     @FocusedValue(\.focusSearch) private var focusSearch
+    @Environment(\.openWindow) private var openWindow
+    /// The app-update check (D51): app-wide, not per window, so the app menu item works from any window.
+    private let updates: AppUpdateStore?
 
-    public init() {}
+    /// - Parameter updates: The app's update store; nil or a disabled one hides Check for Updates….
+    public init(updates: AppUpdateStore? = nil) {
+        self.updates = updates
+    }
 
     /// The selected row, only in a set-up scope: a folder without skills.toml offers no skill action.
     private var selected: SkillEntry? { isSetUp ? store?.selectedEntry : nil }
@@ -29,7 +35,24 @@ public struct SkillcaskCommands: Commands {
     /// The snapshot the Skill and Scope menus act on: none for a folder without skills.toml.
     private var snapshot: ScopeSnapshot? { isSetUp ? store?.snapshot : nil }
 
+    /// Check for Updates… / Update to X…: the answer shows on a main window, so the key one stays, another comes
+    /// forward, or one opens when every main window is closed (the app keeps running without one); then the check
+    /// runs.
+    private func checkForUpdates(_ updates: AppUpdateStore) {
+        if !Workspace.bringMainWindowForward() {
+            openWindow(id: MainWindow.sceneID)
+        }
+        Task { await updates.checkForUpdates() }
+    }
+
     public var body: some Commands {
+        // U4: under About Skillcask. `Update to X…` opens the sheet on a known update and checks again meanwhile.
+        CommandGroup(after: .appInfo) {
+            if let updates, updates.isEnabled {
+                Button(updates.menuTitle) { checkForUpdates(updates) }
+                    .disabled(updates.isChecking || !updates.isReady || isPresenting)
+            }
+        }
         CommandGroup(replacing: .newItem) {
             Button(ShellCopy.openFolder) {
                 if let folder = Workspace.chooseFolder(prompt: EmptyCopy.openFolder) {

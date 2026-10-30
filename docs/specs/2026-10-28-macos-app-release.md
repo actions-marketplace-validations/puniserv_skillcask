@@ -48,7 +48,9 @@ Job `publish-macos-app` in `release.yml`, after `host`, on `macos-26` with the s
 5. `xcrun stapler staple Skillcask.app`, then deletes the zip from `bundle.sh` (made before the
    staple, so it has no ticket) and zips again with `ditto -c -k --keepParent`.
 6. Checks `spctl -a -vv` says `accepted` / `Notarized Developer ID`, then uploads
-   `Skillcask-X.Y.Z-macos-universal.zip` and its `.sha256` to the GitHub Release.
+   `Skillcask-X.Y.Z-macos-universal.zip` and its `.sha256` to the GitHub Release, with
+   `macos/install-app.sh` as `skillcask-app-installer.sh`, so
+   `releases/latest/download/skillcask-app-installer.sh` installs the app without Homebrew.
 7. Deletes the temporary keychain and the `.p8` file (`if: always()`).
 
 The import uses `security import`, not OpenSSL: Keychain exports the `.p12` with RC2-40, which
@@ -92,7 +94,8 @@ and starts no process besides `open`.
 - **One cask `skillcask` with `app` and `binary` stanzas** replacing the formula on macOS: it splits
   macOS and Linux installs and clashes with the formula name.
 - **Sparkle or another in-app updater**: Homebrew and the release zip cover updates; an updater adds
-  network code to an app that has none (D35).
+  network code to an app that has none (D35). A notice that a release exists is not an updater:
+  D51 asks through the CLI and leaves the update to Homebrew or the zip.
 
 ## Secrets
 

@@ -25,6 +25,7 @@ import Testing
         .controlBorder: ("#CFCFD4", "#48484C"),
         .accent: ("#6D4AFF", "#8B74FF"),
         .accentSoft: ("#EEE9FF", "#2E2750"),
+        .accentLine: ("#CFC3FF", "#4A3F86"),
         .statusOkDot: ("#34C759", "#30D158"),
         .statusOkText: ("#1B7A35", "#4CD964"),
         .statusOkTint: ("#E9F8EC", "#17301D"),
@@ -56,7 +57,8 @@ import Testing
         .surfaceWindow: "--win", .surfaceSidebar: "--side", .surfaceGrouped: "--grouped", .surfaceCard: "--card",
         .surfaceHover: "--hover", .separator: "--sep", .separatorStrong: "--sep2", .textPrimary: "--text",
         .textSecondary: "--text2", .textTertiary: "--text3", .controlFill: "--ctrl", .controlBorder: "--ctrl-b",
-        .accent: "--accent", .accentSoft: "--accent-soft", .statusOkDot: "--ok", .statusOkText: "--ok-t",
+        .accent: "--accent", .accentSoft: "--accent-soft", .accentLine: "--accent-line", .statusOkDot: "--ok",
+        .statusOkText: "--ok-t",
         .statusOkTint: "--ok-tint", .statusUpdateDot: "--upd", .statusUpdateText: "--upd-t",
         .statusUpdateTint: "--upd-tint", .statusWarningDot: "--warn", .statusWarningText: "--warn-t",
         .statusWarningTint: "--warn-tint", .statusErrorDot: "--err", .statusErrorText: "--err-t",
@@ -91,10 +93,10 @@ import Testing
     }
 
     @Test func catalogCoversEveryTokenOnce() {
-        #expect(Color.Token.allCases.count == 38)
+        #expect(Color.Token.allCases.count == 39)
         #expect(Set(Self.expectedHex.keys) == Set(Color.Token.allCases))
         #expect(Set(Self.expectedCSS.keys) == Set(Color.Token.allCases))
-        #expect(Set(Color.Token.allCases.map(\.cssVariable)).count == 38)
+        #expect(Set(Color.Token.allCases.map(\.cssVariable)).count == 39)
     }
 
     @Test @MainActor func staticColoursAreTheCatalogColours() throws {
@@ -103,7 +105,7 @@ import Testing
             (.surfaceCard, .surfaceCard), (.surfaceHover, .surfaceHover), (.separator, .separator),
             (.separatorStrong, .separatorStrong), (.textPrimary, .textPrimary), (.textSecondary, .textSecondary),
             (.textTertiary, .textTertiary), (.controlFill, .controlFill), (.controlBorder, .controlBorder),
-            (.accent, .accent), (.accentSoft, .accentSoft), (.statusOkDot, .statusOkDot),
+            (.accent, .accent), (.accentSoft, .accentSoft), (.accentLine, .accentLine), (.statusOkDot, .statusOkDot),
             (.statusOkText, .statusOkText), (.statusOkTint, .statusOkTint), (.statusUpdateDot, .statusUpdateDot),
             (.statusUpdateText, .statusUpdateText), (.statusUpdateTint, .statusUpdateTint),
             (.statusWarningDot, .statusWarningDot), (.statusWarningText, .statusWarningText),

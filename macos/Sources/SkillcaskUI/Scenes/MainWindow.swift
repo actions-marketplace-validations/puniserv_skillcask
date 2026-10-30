@@ -1,3 +1,4 @@
+import AppKit
 import SkillcaskCore
 import SkillcaskDomain
 import SwiftUI
@@ -12,11 +13,13 @@ import SwiftUI
 public struct MainWindow: View {
     /// The window's minimum height; the boards are 800 tall, 600 keeps the Overview grid readable.
     public static let minHeight: CGFloat = 600
-    /// The scene's id, so Settings › Advanced "Show Activity" can open the window when none is open.
+    /// The scene's id, so Settings and the app menu can open the window when none is open; SwiftUI starts its
+    /// windows' identifiers with it (`Workspace.isMainScene`).
     public static let sceneID = "main"
 
     @Environment(AppStore.self) private var app
     @Environment(ActionRunner.self) private var runner
+    @Environment(AppUpdateStore.self) private var updates
     @State private var columns = NavigationSplitViewVisibility.all
     /// The Remove alert built once per request (its plan is computed when asked for, not on every render).
     @State private var pinnedRemoval: (id: UUID, alert: RemoveAlert)?
@@ -61,6 +64,7 @@ public struct MainWindow: View {
         .onChange(of: app.cli) { app.dropOrphanedPresentation() }
         .onChange(of: app.scopes) { app.dropOrphanedPresentation() }
         .background { onboarding }
+        .modifier(AppUpdateHost(app: app, updates: updates))
         .task { await app.boot() }
     }
 
@@ -171,4 +175,61 @@ public struct MainWindow: View {
         .skillcaskEnvironment(app: stores.app, runner: stores.runner, settings: stores.settings, client: stores.client)
         .frame(width: 1280, height: 800)
         .preferredColorScheme(.dark)
+}
+
+/// The app-update check's part of the window (D51): the CLI's readiness and the app's activation feed the store,
+/// its presentation joins `AppStore.isPresenting`, and the update sheet and the manual check's alert sit on
+/// presenters of their own.
+private struct AppUpdateHost: ViewModifier {
+    let app: AppStore
+    let updates: AppUpdateStore
+
+    func body(content: Content) -> some View {
+        content
+            .background { appUpdateSheet }
+            .background { appUpdateAlert }
+            .onChange(of: app.isReady, initial: true) { updates.cliChanged(isReady: app.isReady) }
+            .onChange(of: updates.isPresenting, initial: true) { app.isAppUpdatePresenting = updates.isPresenting }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                Task { await updates.checkIfDue() }
+            }
+    }
+
+    /// The scope sheets, the Remove alert and the onboarding sheet have the window: the app-update sheet and alert
+    /// wait until none is up, so two never stack.
+    private var appUpdateMayPresent: Bool {
+        app.presentation == nil && !app.isOnboarding
+    }
+
+    /// The update sheet (U2/U3) on a presenter of its own; Esc closes it with no state change.
+    private var appUpdateSheet: some View {
+        Color.clear
+            .sheet(
+                item: Binding(
+                    get: { appUpdateMayPresent ? updates.sheet : nil },
+                    set: { if $0 == nil { updates.dismissSheet() } })
+            ) { request in
+                if let installed = updates.installed {
+                    AppUpdateSheet(version: request.version, installed: installed)
+                }
+            }
+    }
+
+    /// The manual check's answer when it is not an update (U4): OK, with Try Again where asking again can help.
+    private var appUpdateAlert: some View {
+        Color.clear
+            .alert(
+                updates.alert?.title ?? "",
+                isPresented: Binding(
+                    get: { appUpdateMayPresent && updates.alert != nil }, set: { if !$0 { updates.alert = nil } }),
+                presenting: updates.alert,
+                actions: { alert in
+                    if alert.offersRetry {
+                        Button(AppUpdateCopy.tryAgain) { Task { await updates.retry() } }
+                    }
+                    Button(AppUpdateCopy.ok, role: .cancel) { updates.alert = nil }
+                },
+                message: { alert in Text(alert.message) }
+            )
+    }
 }

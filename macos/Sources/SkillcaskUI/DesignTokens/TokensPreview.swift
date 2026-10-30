@@ -73,7 +73,7 @@ public struct TokensPreview: View {
             swatches(.controlFill, .controlBorder)
             SelectionRow()
             GroupHeading("Brand accent · Iris")
-            swatches(.accent, .accentSoft)
+            swatches(.accent, .accentSoft, .accentLine)
         }
     }
 

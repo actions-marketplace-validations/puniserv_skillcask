@@ -27,6 +27,10 @@ public struct Capabilities: Hashable, Sendable {
         case addSkill
         /// `diff --json`.
         case diffJSON
+        /// `self-check --json` (D51). Gated, not just tried: 0.9.0–0.10.1 take an unknown command for a plugin and
+        /// run `skillcask-<name>` from `PATH` (`src/main.rs` `plugin`), so asking them would start whatever
+        /// `skillcask-self-check` lies there. `SelfCheckGate` also lets the bundled CLI through.
+        case selfCheck
     }
 
     /// The oldest CLI the app drives: 0.9.4 has every `--json` document the app reads (D32, D40–D42), `status
@@ -35,8 +39,8 @@ public struct Capabilities: Hashable, Sendable {
     public static let minimum = Version(0, 9, 4)
 
     /// The release that shipped each feature beyond `minimum`. A feature that is only planned has no entry, so it
-    /// stays off; none has shipped yet.
-    static let shipped: [Feature: Version] = [:]
+    /// stays off.
+    static let shipped: [Feature: Version] = [.selfCheck: Version(0, 10, 2)]
 
     public let version: Version
     public let features: Set<Feature>

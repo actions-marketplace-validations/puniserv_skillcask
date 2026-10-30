@@ -47,6 +47,8 @@ extension Color {
     public static let accent = Token.accent.color
     /// `--accent-soft` · `accent.soft`: active filter chip fill.
     public static let accentSoft = Token.accentSoft.color
+    /// `--accent-line` · `accent.line`: the border of the app-update card (U1); never `status.update`.
+    public static let accentLine = Token.accentLine.color
 
     // MARK: - Status (dot · text · tint)
 
@@ -164,6 +166,7 @@ extension Color {
         case controlBorder
         case accent
         case accentSoft
+        case accentLine
         case statusOkDot
         case statusOkText
         case statusOkTint
@@ -217,6 +220,7 @@ extension Color {
             case .controlBorder: Spec("--ctrl-b", "#CFCFD4", "#48484C", "Push buttons, fields, segmented")
             case .accent: Spec("--accent", "#6D4AFF", "#8B74FF", "Primary buttons, links, active filter")
             case .accentSoft: Spec("--accent-soft", "#EEE9FF", "#2E2750", "Active filter chip fill")
+            case .accentLine: Spec("--accent-line", "#CFC3FF", "#4A3F86", "App-update card border")
             case .statusOkDot: Spec("--ok", "#34C759", "#30D158", "Dot, badge fill")
             case .statusOkText: Spec("--ok-t", "#1B7A35", "#4CD964", "Installed · Project skill · Linked")
             case .statusOkTint: Spec("--ok-tint", "#E9F8EC", "#17301D", "Surface behind an ok label")

@@ -57,6 +57,9 @@ public struct Invocation: Hashable, Sendable {
         case configSet(key: String, values: [String])
         /// `config --unset -- <key>`: removes the key from the file; prints `removed <key> from <file>`.
         case configUnset(key: String)
+        /// `self-check --json` (D51): `{"version", "latest", "newer"}`, one anonymous request for the tap's cask
+        /// file. Only behind `SelfCheckGate` (`CLIClient.selfCheck`): older CLIs would run a plugin.
+        case selfCheck
     }
 
     /// What the child reads. Its descriptions and mirror never show the text (a token for `auth set`), so neither
@@ -109,7 +112,8 @@ public struct Invocation: Hashable, Sendable {
     /// under `GuardedClient.readTimeout`. `search --remember` writes config.toml and stays out.
     public var isReadOnly: Bool {
         switch command {
-        case .status, .audit, .outdated, .doctor(fix: false), .info, .diff, .diffTo, .projects, .config, .configList:
+        case .status, .audit, .outdated, .doctor(fix: false), .info, .diff, .diffTo, .projects, .config, .configList,
+            .selfCheck:
             true
         case .search(_, _, let remember): !remember
         default: false
@@ -123,7 +127,7 @@ public struct Invocation: Hashable, Sendable {
     public var needsManifest: Bool {
         guard !scope.isPersonal else { return false }
         switch command {
-        case .version, .initialize, .projects, .authSet, .authRemove: return false
+        case .version, .initialize, .projects, .authSet, .authRemove, .selfCheck: return false
         default: return true
         }
     }
@@ -131,7 +135,7 @@ public struct Invocation: Hashable, Sendable {
     /// May talk to a registry or GitHub; shown with a network affordance and a Retry on exit 3.
     public var needsNetwork: Bool {
         switch command {
-        case .outdated, .search, .diff, .diffTo, .info(.package), .install, .update, .add: true
+        case .outdated, .search, .diff, .diffTo, .info(.package), .install, .update, .add, .selfCheck: true
         default: false
         }
     }
@@ -139,7 +143,7 @@ public struct Invocation: Hashable, Sendable {
     /// `--json` is on the command line, so stdout is a document (even on exit 1 for the read-only verbs).
     public var expectsDocument: Bool {
         switch command {
-        case .status, .audit, .outdated, .doctor, .info, .search, .projects, .config, .configList: true
+        case .status, .audit, .outdated, .doctor, .info, .search, .projects, .config, .configList, .selfCheck: true
         case .initialize, .install, .update, .add, .remove: capabilities.supports(.jsonMutations)
         case .version, .diff, .diffTo, .authSet, .authRemove, .configSet, .configUnset: false
         }
@@ -170,7 +174,7 @@ public struct Invocation: Hashable, Sendable {
 
     private var acceptsGlobal: Bool {
         switch command {
-        case .version, .projects, .authSet, .authRemove: false
+        case .version, .projects, .authSet, .authRemove, .selfCheck: false
         default: true
         }
     }
@@ -245,6 +249,8 @@ public struct Invocation: Hashable, Sendable {
             return ["config", "--", key] + values
         case .configUnset(let key):
             return ["config", "--unset", "--", key]
+        case .selfCheck:
+            return ["self-check"] + json
         }
     }
 
@@ -290,7 +296,7 @@ public struct Invocation: Hashable, Sendable {
                 !key.isEmpty && !values.isEmpty && values.allSatisfy { !$0.isEmpty }, "config needs a key and a value")
         case .configUnset(let key):
             try require(!key.isEmpty, "config --unset needs a key")
-        case .version, .status, .audit, .outdated, .doctor, .initialize, .install, .configList:
+        case .version, .status, .audit, .outdated, .doctor, .initialize, .install, .configList, .selfCheck:
             break
         }
     }

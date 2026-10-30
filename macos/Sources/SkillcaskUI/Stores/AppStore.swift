@@ -151,10 +151,14 @@ import SkillcaskDomain
         detectionFailed && !isReady
     }
 
-    /// A sheet, the Remove alert or the onboarding sheet is up: every other request is refused and the commands
-    /// that make one are disabled.
+    /// The app-update sheet or its alert is up (`AppUpdateStore.isPresenting`, mirrored by `MainWindow`): it has a
+    /// presenter of its own, so this keeps a scope sheet from stacking on it.
+    public var isAppUpdatePresenting = false
+
+    /// A sheet, the Remove alert, the onboarding sheet or the app-update sheet is up: every other request is
+    /// refused and the commands that make one are disabled.
     public var isPresenting: Bool {
-        presentation != nil || isOnboarding
+        presentation != nil || isOnboarding || isAppUpdatePresenting
     }
 
     /// The presentation when it is a sheet, for `.sheet(item:)`.
@@ -353,6 +357,13 @@ import SkillcaskDomain
     public func configFile(base: [String: String] = ProcessInfo.processInfo.environment) -> URL {
         CLIConfig.file(
             environment: environment.environment(from: base), home: FileManager.default.homeDirectoryForCurrentUser)
+    }
+
+    /// What the app-update check runs with (`AppUpdateStore.Context`): the ready client, where the binary was found
+    /// (the bundled helper passes `SelfCheckGate` whatever it reports) and its capabilities; nil until ready.
+    public var updateContext: AppUpdateStore.Context? {
+        guard let client, let capabilities else { return nil }
+        return AppUpdateStore.Context(client: client, binary: binary, capabilities: capabilities)
     }
 
     /// What Settings' own commands (skills.sh, `auth`) run with; nil until the CLI is ready.
