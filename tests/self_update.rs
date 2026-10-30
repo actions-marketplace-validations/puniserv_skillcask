@@ -5,6 +5,7 @@ use common::*;
 
 const CASK: &str = "/Casks/skillcask-app.rb";
 const BASE: &str = "/releases/download";
+#[cfg(unix)]
 const INSTALLER: &str = "/releases/download/v999.0.0/skillcask-installer.sh";
 const RUNNING: &str = env!("CARGO_PKG_VERSION");
 
