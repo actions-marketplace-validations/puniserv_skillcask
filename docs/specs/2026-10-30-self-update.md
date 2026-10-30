@@ -1,0 +1,100 @@
+# Spec: `skillcask self-update`
+
+Date: 2026-10-30. Status: accepted as D52 (2026-10-30), which amends D51.
+
+## Problem
+
+`skillcask self-check` (D51) says that a newer release exists, and the README tells people to update
+"the same way you installed". Most people do not remember how they installed, and the commands
+differ per method: `brew upgrade`, `npm install -g`, `cargo install`, or the release's installer
+script run again. Only the installer script can be re-run by skillcask itself without fighting a
+package manager.
+
+Goal: one command that updates an installer-script install and, for every other method, prints the
+exact command to run.
+
+## Constraints
+
+- **The shell installer and `cargo install` both write `~/.cargo/bin/skillcask`.** dist installs
+  to `CARGO_HOME` (`install-path = "CARGO_HOME"` in `dist-workspace.toml`), so the path alone does
+  not tell them apart.
+- **The installer writes a receipt**: `$XDG_CONFIG_HOME/skillcask/skillcask-receipt.json` (default
+  `~/.config/skillcask/`; `%LOCALAPPDATA%\skillcask\` on Windows) with `install_prefix`,
+  `install_layout` and `version`. `cargo install` writes `~/.cargo/.crates2.json` (or
+  `$CARGO_HOME/.crates2.json`) instead. A later `cargo install` over an installer install leaves
+  the receipt behind.
+- **A running binary cannot simply be overwritten.** Linux refuses to write an executing file
+  (`ETXTBSY`), macOS may kill a process whose signed pages change, Windows locks a running `.exe`.
+- **The installer verifies the archive, not itself.** Each `skillcask-installer.sh` embeds the
+  sha256 of every archive of its release and checks the download; the script itself has no
+  published checksum. Its integrity rests on HTTPS to github.com, as for the first `curl | sh`.
+- **`install --frozen` and the package invariants are untouched.** The installer is skillcask's own
+  release artifact, not package content; skillcask still never runs anything from a package.
+
+## Proposal
+
+### 1. Command
+
+`skillcask self-update [--dry-run]`, outside any project, like `self-check`. No `--json`, no
+`-g`, no confirmation prompt: running the command is the consent. `--dry-run` prints the detected
+method and the command or installer URL it would use, and runs nothing.
+
+### 2. Latest version
+
+The same anonymous request as `self-check` (D51). No newer version: prints
+`skillcask X is the latest` and exits 0. Unparsable `latest`: exits 1 and names the release page.
+
+### 3. Install method
+
+From `std::env::current_exe()` with symlinks resolved, first match wins:
+
+| Detected | Action |
+| --- | --- |
+| path inside `*.app/Contents/Helpers/` | print `brew upgrade skillcask-app` or the app installer command, exit 1 |
+| path contains `/Cellar/` | print `brew update && brew upgrade skillcask`, exit 1 |
+| path contains `node_modules` | print `npm install -g skillcask@latest`, exit 1 |
+| `.crates2.json` lists `skillcask` and the exe is in that `CARGO_HOME/bin` | print `cargo install --locked skillcask`, exit 1 |
+| receipt with `install_layout` `cargo-home` and exe `== <install_prefix>/bin/skillcask` | Unix: run the installer (§4). Windows: print `irm https://github.com/puniserv/skillcask/releases/download/v<latest>/skillcask-installer.ps1 \| iex`, exit 1 |
+| anything else | print the release page and the README's update commands, exit 1 |
+
+`.crates2.json` comes before the receipt because both live in `~/.cargo`. Exit 1 means "nothing was
+updated, run this", so a script does not mistake a printed hint for success.
+
+### 4. Running the installer (Unix)
+
+1. `GET https://github.com/puniserv/skillcask/releases/download/v<latest>/skillcask-installer.sh`
+   with `Http::anonymous` (no credential, D51), at most 256 KiB (the 0.10.1 script is 55 KiB). The
+   tag, not `/latest/`, so the version installed is the one step 2 reported.
+   `SKILLCASK_SELF_UPDATE_URL` replaces the URL for tests and mirrors.
+2. Write it to a file in the temp dir, open it, remove the path.
+3. Print `updating skillcask X -> Y with <url>`, then `exec` `sh -s` with that file as stdin and
+   `SKILLCASK_INSTALL_DIR=<install_prefix>`, `SKILLCASK_NO_MODIFY_PATH=1` in the environment: the
+   same as the documented `curl … | sh`, into the same directory, without editing shell profiles
+   again.
+
+`exec` replaces the skillcask process with `sh`, so nothing of skillcask runs while the installer
+replaces the binary, and no file is left in the temp dir. A failed download exits 3 before `exec`.
+
+### 5. Documentation
+
+README "### Update": `skillcask self-update` first; it runs the installer for an installer-script
+install and prints the command for every other one. D52 records the decision and amends D51's
+"skillcask does not update itself".
+
+## Tests
+
+- Unit tests for the detection table on fake paths, receipts and `.crates2.json` in a temp dir.
+- `tests/cli`: `self-update --dry-run` against a local server through `SKILLCASK_SELF_CHECK_URL`
+  and `SKILLCASK_SELF_UPDATE_URL`.
+- The real `exec` is checked by hand on an installer install (Linux and macOS) before release.
+
+## Rejected
+
+- **`axoupdater`** (dist's updater crate, `install-updater = true`): it does the same, but brings
+  its own HTTP stack next to `Http` and a second set of network rules to keep in line with D43/D51.
+- **Downloading the archive and swapping the binary in skillcask**: a self-updater with its own
+  checksum, rename and rollback code, for what the installer already does and verifies.
+- **Running the installer on Windows**: the running `.exe` is locked; renaming it aside and cleaning
+  up a `.old` file later is code and risk for one command that the user can paste.
+- **Running `brew`, `npm` or `cargo` for the user**: they may need `sudo`, a different prefix or a
+  shell with the right `PATH`; printing the exact command is enough.
