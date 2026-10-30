@@ -84,6 +84,34 @@ import Testing
         #expect(Version(0, 10, 0, prerelease: "beta") < Version(0, 10, 0, prerelease: "rc1"))
         #expect(!(Version(0, 9, 1) < Version(0, 9, 1)))
     }
+
+    /// SemVer 2.0 §11: dot-separated identifiers, numeric ones numerically and before alphanumeric ones, a longer
+    /// set wins when the shared prefix is equal, the release after all its pre-releases.
+    @Test func ordersPrereleaseBySemverPrecedence() throws {
+        let texts = [
+            "1.0.0-alpha", "1.0.0-alpha.1", "1.0.0-alpha.beta", "1.0.0-beta", "1.0.0-beta.2", "1.0.0-beta.11",
+            "1.0.0-rc.1", "1.0.0",
+        ]
+        let ordered = try texts.map { try #require(Version($0)) }
+        #expect(ordered == ordered.shuffled().sorted())
+        for (lower, higher) in zip(ordered, ordered.dropFirst()) {
+            #expect(lower < higher && !(higher < lower))
+        }
+        #expect(try #require(Version("0.10.1-rc.9")) < #require(Version("0.10.1-rc.10")))
+        #expect(try #require(Version("0.10.1-rc.10")) < #require(Version("0.10.1")))
+        // `rc10` is one alphanumeric identifier, so ASCII order applies: the CLI tags `rc.N`.
+        #expect(Version(0, 10, 0, prerelease: "rc10") < Version(0, 10, 0, prerelease: "rc2"))
+    }
+
+    @Test func equalPrereleasesAreNeitherLess() {
+        let version = Version(0, 10, 1, prerelease: "rc.10")
+        #expect(version == Version(0, 10, 1, prerelease: "rc.10"))
+        #expect(!(version < Version(0, 10, 1, prerelease: "rc.10")))
+        #expect(!(Version(0, 10, 1) < Version(0, 10, 1)))
+        // A leading zero is not a SemVer number; ordering it apart keeps `<` consistent with `==`.
+        let padded = Version(0, 10, 1, prerelease: "rc.01")
+        #expect(padded != version && (padded < version) != (version < padded))
+    }
 }
 
 @Suite struct CapabilitiesTests {
@@ -100,6 +128,17 @@ import Testing
         #expect(Capabilities(version: Version(0, 9, 4, prerelease: "rc1")).isTooOld)
         #expect(!Capabilities(version: Version(0, 9, 4)).isTooOld)
         #expect(!Capabilities(version: Version(0, 10, 0)).isTooOld)
+        #expect(!Capabilities(version: Version(0, 10, 1, prerelease: "rc.10")).isTooOld)
+    }
+
+    /// A feature shipped in a release is on from that release and off for every pre-release of it.
+    @Test func shippedFeatureGateFollowsPrecedence() {
+        let shipped = Version(0, 10, 1)
+        func on(_ version: Version) -> Bool { version >= shipped }
+        #expect(on(Version(0, 10, 1)) && on(Version(0, 10, 2)) && on(Version(0, 11, 0)))
+        #expect(!on(Version(0, 10, 1, prerelease: "rc.9")) && !on(Version(0, 10, 1, prerelease: "rc.10")))
+        #expect(!on(Version(0, 10, 0)))
+        #expect(Version(0, 10, 1, prerelease: "rc.10") >= Version(0, 10, 1, prerelease: "rc.9"))
     }
 
     /// Every feature is planned: no release turns one on until `shipped` names it.
