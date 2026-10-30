@@ -4,10 +4,11 @@ import Foundation
 /// empties a real suite, but cfprefsd writes an empty `~/Library/Preferences/<suite>.plist` seconds later.
 /// `UpdateDefaults` reads through `object(forKey:)` (which `string(forKey:)` and `bool(forKey:)` call) and writes
 /// through `set(_:forKey:)` and `removeObject(forKey:)`, the three this overrides.
+/// Keep in sync with `macos/Tests/SkillcaskUpdatesTests/MemoryDefaults.swift`.
 final class MemoryDefaults: UserDefaults, @unchecked Sendable {
     /// What was written.
     private(set) var values: [String: Any] = [:]
-    /// Read after `values`, never written: stands in for the argument domain.
+    /// Read before `values`, never written: stands in for the argument domain, which wins over the app's own.
     private let readOnly: [String: Any]
 
     /// Fails only if Foundation cannot open the process's own domain, which sits underneath unused: every accessor
@@ -18,7 +19,7 @@ final class MemoryDefaults: UserDefaults, @unchecked Sendable {
     }
 
     override func object(forKey defaultName: String) -> Any? {
-        values[defaultName] ?? readOnly[defaultName]
+        readOnly[defaultName] ?? values[defaultName]
     }
 
     override func set(_ value: Any?, forKey defaultName: String) {
