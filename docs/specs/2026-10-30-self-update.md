@@ -50,36 +50,49 @@ From `std::env::current_exe()` with symlinks resolved, first match wins:
 
 | Detected | Action |
 | --- | --- |
-| path inside `*.app/Contents/Helpers/` | print `brew upgrade skillcask-app` or the app installer command, exit 1 |
-| path contains `/Cellar/` | print `brew update && brew upgrade skillcask`, exit 1 |
-| path contains `node_modules` | print `npm install -g skillcask@latest`, exit 1 |
-| `.crates2.json` lists `skillcask` and the exe is in that `CARGO_HOME/bin` | print `cargo install --locked skillcask`, exit 1 |
-| receipt with `install_layout` `cargo-home` and exe `== <install_prefix>/bin/skillcask` | Unix: run the installer (§4). Windows: print `irm https://github.com/puniserv/skillcask/releases/download/v<latest>/skillcask-installer.ps1 \| iex`, exit 1 |
-| anything else | print the release page and the README's update commands, exit 1 |
+| path inside `*.app/Contents/Helpers/`, `<prefix>/Caskroom/skillcask-app` exists | `brew update && brew upgrade skillcask skillcask-app`, exit 1 |
+| path inside `*.app/Contents/Helpers/` otherwise | the tagged `skillcask-app-installer.sh … \| SKILLCASK_VERSION=<latest> sh`, exit 1 |
+| path contains `/Cellar/` | `brew update && brew upgrade skillcask`, exit 1 |
+| path contains `/.bun/` | `bun add -g skillcask@latest`, exit 1 |
+| path contains `/node_modules/` | `npm install -g skillcask@latest`, exit 1 |
+| exe is `<cargo_home>/bin/skillcask` and `.crates2.json` lists `skillcask` | `cargo install --locked skillcask`, exit 1 |
+| receipt with `install_layout` `cargo-home` and exe `== <install_prefix>/bin/skillcask` | Unix: run the installer (§4). With `SKILLCASK_SELF_UPDATE=0`: the tagged `curl … \| sh`. Windows: `powershell -ExecutionPolicy Bypass -c "irm …/v<latest>/skillcask-installer.ps1 \| iex"` (works from `cmd.exe` too). Exit 1 when printed |
+| anything else | the release page, exit 1 |
 
-`.crates2.json` comes before the receipt because both live in `~/.cargo`. Exit 1 means "nothing was
-updated, run this", so a script does not mistake a printed hint for success.
+Printed as `skillcask X -> Y: installed with <method>; update with:` and the command alone on the
+`hint:` line, so it can be pasted. `.crates2.json` comes before the receipt because both live in
+`~/.cargo`. Exit 1 means "nothing was updated, run this", so a script does not mistake a printed
+hint for success.
 
 ### 4. Running the installer (Unix)
 
-1. `GET https://github.com/puniserv/skillcask/releases/download/v<latest>/skillcask-installer.sh`
-   with `Http::anonymous` (no credential, D51), at most 256 KiB (the 0.10.1 script is 55 KiB). The
-   tag, not `/latest/`, so the version installed is the one step 2 reported.
-   `SKILLCASK_SELF_UPDATE_URL` replaces the URL for tests and mirrors.
-2. Write it to an unnamed temp file (`tempfile::tempfile`), so nothing is left behind.
-3. Print `updating skillcask X -> Y with <url>`, then `exec` `sh -s` with that file as stdin and
-   `SKILLCASK_INSTALL_DIR=<install_prefix>`, `SKILLCASK_NO_MODIFY_PATH=1` in the environment: the
-   same as the documented `curl … | sh`, into the same directory, without editing shell profiles
-   again.
+1. Without `sha256sum` on `PATH`, exit 1 with the command: dist 0.32's script skips its archive
+   check then (no `shasum` fallback).
+2. `GET <base>/v<latest>/skillcask-installer.sh` with `Http::anonymous` (no credential, D51), at
+   most 256 KiB (the 0.10.1 script is 55 KiB). `<base>` is
+   `https://github.com/puniserv/skillcask/releases/download`; `SKILLCASK_SELF_UPDATE_URL` replaces
+   only the base, for tests and mirrors, so the tag still follows the reported version, and a
+   warning names it.
+3. Write it to an unnamed temp file (`tempfile::tempfile`), so nothing is left behind.
+4. Print `updating skillcask X -> Y with <url>`, then `exec` `/bin/sh -s` with that file as stdin.
+   Every `SKILLCASK_*`, `INSTALLER_*` and `CARGO_DIST_*` variable is removed first: the script reads
+   `SKILLCASK_DOWNLOAD_URL`, `INSTALLER_DOWNLOAD_URL`, `SKILLCASK_INSTALLER_GITHUB_BASE_URL`,
+   `SKILLCASK_GITHUB_TOKEN`, `SKILLCASK_UNMANAGED_INSTALL`, `CARGO_DIST_FORCE_INSTALL_DIR` and more,
+   which would change where archives come from, which token goes there, or where it installs. Then
+   `SKILLCASK_INSTALL_DIR=<install_prefix>` and `SKILLCASK_NO_MODIFY_PATH=1`: the same as the
+   documented `curl … | sh`, into the same directory, without editing shell profiles again.
 
 `exec` replaces the skillcask process with `sh`, so nothing of skillcask runs while the installer
-replaces the binary, and no file is left in the temp dir. A failed download exits 3 before `exec`.
+replaces the binary, and the installer's exit code is the command's. A failed download exits 3
+before `exec`. `SKILLCASK_SELF_UPDATE=0` turns step 1-4 into printing the command, for machines whose
+admin owns updates.
 
 ### 5. Documentation
 
 README "### Update": `skillcask self-update` first; it runs the installer for an installer-script
-install and prints the command for every other one. D52 records the decision and amends D51's
-"skillcask does not update itself".
+install and prints the command for every other one. Exit codes and the privacy notes say what it
+sends and runs. D52 records the decision and amends D51's "skillcask does not update itself" and
+D10.
 
 ## Tests
 

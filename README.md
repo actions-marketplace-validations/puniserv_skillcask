@@ -107,7 +107,8 @@ tag.
 ### Update
 
 `skillcask self-update` reruns the release's installer when `skillcask-installer.sh` installed
-this binary (Linux, macOS); for any other install it prints the command to run. By hand:
+this binary (Linux, macOS); for any other install it prints the one command to run and exits 1.
+`SKILLCASK_SELF_UPDATE=0` makes it print the installer command too. By hand:
 
 ```sh
 brew update && brew upgrade skillcask skillcask-app    # Homebrew (skillcask alone without the app)
@@ -354,7 +355,8 @@ the cask holds no readable version). For example `skillcask outdated --json | jq
 '.packages[] | select(.within != .locked)'`.
 
 Exit codes: 0 ok, 1 manifest/lock/status problems, 2 authentication, 3 network, 4 hash mismatch,
-5 IO or archive error.
+5 IO or archive error. `self-update` exits 1 when it updated nothing and printed the command to run;
+when it runs the installer, the installer's exit code is its own.
 
 Output is coloured in a terminal (`NO_COLOR` turns it off, `CLICOLOR_FORCE` on) and errors name
 the next step on a `hint:` line. For coding agents, `--agent` or `SKILLCASK_AGENT=1` prints terse,
@@ -498,8 +500,10 @@ too young falls back to an older commit when the server supports partial fetches
   account, project or skill data; GitHub sees your IP address. The app checks
   daily only after you say yes. `SKILLCASK_SELF_CHECK_URL` points it at a mirror (HTTPS only).
 - `self-update` sends the same request, then, for an installer-script install only, downloads that
-  release's `skillcask-installer.sh` the same way (`SKILLCASK_SELF_UPDATE_URL` replaces it) and
-  runs it with `sh`; the script checks the archive's sha256.
+  release's `skillcask-installer.sh` the same way (`SKILLCASK_SELF_UPDATE_URL` replaces the
+  download base) and runs it with `/bin/sh`, without your `SKILLCASK_*`, `INSTALLER_*` and
+  `CARGO_DIST_*` variables. The script checks the archive's sha256 with `sha256sum`, so
+  `self-update` refuses to run it when `sha256sum` is not on `PATH`.
 - `add` and `update` (and `install` when it resolves) warn about characters a reviewer cannot
   see in the text files of new content: bidi controls (`U+202A`-`U+202E`, `U+2066`-`U+2069`,
   `U+200E`, `U+200F`, `U+061C`), zero-width characters (`U+200B`-`U+200D`, `U+2060`, `U+FEFF`) and
