@@ -99,8 +99,10 @@ import SkillcaskUpdates
     ///   - now: The clock.
     ///   - sleep: Waits between automatic checks.
     ///   - context: The ready CLI, or nil while it is not.
+    ///   - state: Starts from this state instead of `defaults.load()` (previews); writes still go to `defaults`.
     public init(
-        installed: Version?, defaults: UpdateDefaults, now: @escaping @MainActor () -> Date = { Date() },
+        installed: Version?, defaults: UpdateDefaults, state initial: UpdateState? = nil,
+        now: @escaping @MainActor () -> Date = { Date() },
         sleep: @escaping @MainActor (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
         context: @escaping @MainActor () -> Context?
     ) {
@@ -109,7 +111,7 @@ import SkillcaskUpdates
         self.now = now
         self.sleep = sleep
         self.context = context
-        state = defaults.load()
+        state = initial ?? defaults.load()
     }
 
     /// Off: fixtures, previews and every scene given no store.

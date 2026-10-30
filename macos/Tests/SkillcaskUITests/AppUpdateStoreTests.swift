@@ -286,16 +286,25 @@ import Testing
         #expect(!stores.updates.isEnabled, "fixtures: the check is off")
     }
 
-    /// B1 of phase 4a: `-appUpdates.consent declined` (smoke) must not become permanent. The registration domain
-    /// stands in for the argument domain: read by `load()`, never written.
+    /// B1 of phase 4a: `-appUpdates.consent declined` (smoke) must not become permanent. A suite of its own, searched
+    /// after the store's (`addSuite(named:)`), stands in for the argument domain: read by `load()`, never written.
+    /// Not `register(defaults:)`: the registration domain is process-wide and would leak into parallel tests.
     @Test func launchArgumentsAreNeverPersisted() {
-        let name = "AppUpdateStoreTests-args-\(UUID().uuidString)"
+        let arguments = "AppUpdateStoreTests-args-\(UUID().uuidString)"
+        let name = "AppUpdateStoreTests-store-\(UUID().uuidString)"
+        let seeded = UserDefaults(suiteName: arguments)!
         let defaults = UserDefaults(suiteName: name)!
-        defer { defaults.removePersistentDomain(forName: name) }
-        defaults.register(defaults: [UpdateDefaults.Key.consent: "declined", UpdateDefaults.Key.latestSeen: "0.10.3"])
+        defer {
+            seeded.removePersistentDomain(forName: arguments)
+            defaults.removePersistentDomain(forName: name)
+        }
+        seeded.set("declined", forKey: UpdateDefaults.Key.consent)
+        seeded.set("0.10.3", forKey: UpdateDefaults.Key.latestSeen)
+        defaults.addSuite(named: arguments)
         let clock = clock
         let store = AppUpdateStore(
             installed: Self.installed, defaults: UpdateDefaults(defaults), now: { clock.now }, context: { nil })
+        #expect(store.state.consent == .declined)
         store.launch()
         #expect(defaults.persistentDomain(forName: name)?.isEmpty ?? true, "launch writes nothing")
         #expect(store.card == .available(Version(0, 10, 3)))

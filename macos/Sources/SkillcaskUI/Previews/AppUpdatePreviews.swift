@@ -33,15 +33,13 @@ enum AppUpdateSample {
     static let installed = Version(0, 10, 2)
     static let latest = Version(0, 10, 3)
 
-    /// A store whose state is only registered (the in-memory registration domain), so a render never writes a
-    /// plist; enabled, asking `app` for the CLI.
+    /// A store that starts from `consent` and `latestSeen` without reading or writing any defaults (its suite is
+    /// never written: the preview mutates nothing), so a render leaves no plist; enabled, asking `app` for the CLI.
     @MainActor static func store(consent: UpdateConsent, latestSeen: Version, app: AppStore) -> AppUpdateStore {
-        let defaults = UserDefaults(suiteName: "skillcask.ui.previews.updates") ?? .standard
-        defaults.register(defaults: [
-            UpdateDefaults.Key.consent: consent.rawValue, UpdateDefaults.Key.latestSeen: latestSeen.description,
-        ])
-        return AppUpdateStore(
-            installed: installed, defaults: UpdateDefaults(defaults), context: { [weak app] in app?.updateContext })
+        AppUpdateStore(
+            installed: installed,
+            defaults: UpdateDefaults(UserDefaults(suiteName: "skillcask.ui.previews.updates") ?? .standard),
+            state: UpdateState(consent: consent, latestSeen: latestSeen), context: { [weak app] in app?.updateContext })
     }
 }
 
