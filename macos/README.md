@@ -24,6 +24,12 @@ the user says yes once in the sidebar card; Settings › Updates switches it and
 check. The app shows the Homebrew command or the release page; it never installs anything. A run
 without a bundle version (`swift run`), the sample data and `smoke-app.sh` check nothing.
 
+Live refresh (spec D53): the selected scope's manifest, lock, `config.toml`, store, project skills
+directory and agent directories are watched (FSEvents), so a change made in a terminal or by an
+agent shows within about a second, and returning to the app reads a scope older than a minute
+again; these refreshes are quiet (no fade), run no network command and add no Activity row. A
+change made within 2 s of the app's own change is taken as the app's and shows at the next one.
+
 ## Build the app
 
 `bundle.sh` builds the app (one universal SwiftPM build) and the CLI (one cargo build per
@@ -71,9 +77,11 @@ warnings in unchanged files, so trust a count of 0 only after `swift package cle
 `macos-app` job runs `test.sh` on a clean checkout.
 
 `smoke-app.sh` needs a logged-in GUI session. It checks the app's `--version` refusal, then starts
-the built app on the sample data and live (with a fresh `SKILLCASK_HOME` and a `PATH` without
-skillcask; `-appUpdates.consent declined`, so no update check), signals only the processes it
-started, and restores the app's defaults afterwards.
+the built app on the sample data, again over a saved column layout whose columns overlap (it must
+be dropped), and live (with a fresh `SKILLCASK_HOME` and a `PATH` without skillcask;
+`-appUpdates.consent declined`, so no update check), signals only the processes it started, and
+afterwards restores the app's defaults and saved window state, or removes those the run wrote when
+there were none.
 
 ## Render the previews
 

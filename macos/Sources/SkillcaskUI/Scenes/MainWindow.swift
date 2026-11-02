@@ -9,13 +9,14 @@ import SwiftUI
 /// 400 is fixed, so at the 960 pt minimum the list gives first (360 → 340) and the sidebar stays at 220; the
 /// user can narrow either to its minimum (`macos/DESIGN.md` G9; this is what `NavigationSplitView`
 /// does with these values). A project without skills.toml shows the Set Up block in the detail and an empty
-/// list. The stores come from the environment (`skillcaskEnvironment`); the scene boots the app on appear.
+/// list. The stores come from the environment (`skillcaskEnvironment`); the scene boots the app on appear. It always
+/// opens with the three columns shown (`SplitViewFrames`).
 public struct MainWindow: View {
     /// The window's minimum height; the boards are 800 tall, 600 keeps the Overview grid readable.
     public static let minHeight: CGFloat = 600
     /// The scene's id, so Settings and the app menu can open the window when none is open; SwiftUI starts its
     /// windows' identifiers with it (`Workspace.isMainScene`).
-    public static let sceneID = "main"
+    public nonisolated static let sceneID = "main"
 
     @Environment(AppStore.self) private var app
     @Environment(ActionRunner.self) private var runner
@@ -65,6 +66,7 @@ public struct MainWindow: View {
         .onChange(of: app.scopes) { app.dropOrphanedPresentation() }
         .background { onboarding }
         .modifier(AppUpdateHost(app: app, updates: updates))
+        .modifier(LiveRefreshHost(app: app))
         .task { await app.boot() }
     }
 
@@ -231,5 +233,38 @@ private struct AppUpdateHost: ViewModifier {
                 },
                 message: { alert in Text(alert.message) }
             )
+    }
+}
+
+/// Live refresh's part of the window: the stream follows the selected scope (`LiveRefresh.follow`, again whenever
+/// the selection, the CLI, the environment or a snapshot changes), stops with the last window (each window attaches
+/// and detaches; a tab's window shares the one `LiveRefresh`). `LiveRefresh` observes the app's activation itself,
+/// once for all windows.
+private struct LiveRefreshHost: ViewModifier {
+    let app: AppStore
+
+    /// What the plan is built from; a new value asks `follow()`, which restarts the stream only if the plan moved.
+    private struct Followed: Hashable {
+        let scope: Scope?
+        /// A store rebuilt over a new CLI is followed anew.
+        let store: ObjectIdentifier?
+        let isReady: Bool
+        let environment: EnvironmentPolicy
+        let checkedAt: Date?
+        let targets: StatusDocument.Targets?
+    }
+
+    private var followed: Followed {
+        let store = app.selectedStore
+        return Followed(
+            scope: app.selectedScope, store: store.map(ObjectIdentifier.init), isReady: app.isReady,
+            environment: app.environment, checkedAt: store?.checkedAt, targets: store?.snapshot?.targets)
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear { app.liveRefresh.attach() }
+            .onChange(of: followed) { app.liveRefresh.follow() }
+            .onDisappear { app.liveRefresh.detach() }
     }
 }
