@@ -19,15 +19,15 @@ Composer or Node.
 **macOS, Linux**
 
 ```sh
-brew install puniserv/tap/skillcask
+brew install getresponse/tap/skillcask
 # or, without Homebrew:
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/puniserv/skillcask/releases/latest/download/skillcask-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/GetResponse/skillcask/releases/latest/download/skillcask-installer.sh | sh
 ```
 
 **Windows (PowerShell)**
 
 ```powershell
-powershell -ExecutionPolicy Bypass -c "irm https://github.com/puniserv/skillcask/releases/latest/download/skillcask-installer.ps1 | iex"
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/GetResponse/skillcask/releases/latest/download/skillcask-installer.ps1 | iex"
 ```
 
 The two installer scripts download the binary for your platform from the latest release and put
@@ -36,17 +36,27 @@ it in `~/.cargo/bin` (`%USERPROFILE%\.cargo\bin` on Windows).
 **Desktop app (macOS 14+ only for now)**
 
 ```sh
-brew install puniserv/tap/skillcask puniserv/tap/skillcask-app
+brew install getresponse/tap/skillcask getresponse/tap/skillcask-app
 skillcask app                   # or open Skillcask from Applications
 ```
 
 Install with the full names: Homebrew loads a third-party tap's cask only when it is named in full
 (or listed by `brew trust`); after that, `brew upgrade` takes the short name.
 
+The tap was `puniserv/tap` before 0.10.5. If you installed from it, move to the new name once
+(your app settings stay):
+
+```sh
+brew uninstall --cask puniserv/tap/skillcask-app   # skip if you have no app
+brew uninstall puniserv/tap/skillcask
+brew untap puniserv/tap
+brew install getresponse/tap/skillcask getresponse/tap/skillcask-app
+```
+
 Without Homebrew:
 
 ```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/puniserv/skillcask/releases/latest/download/skillcask-app-installer.sh | sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/GetResponse/skillcask/releases/latest/download/skillcask-app-installer.sh | sh
 ```
 
 The installer downloads `Skillcask-X.Y.Z-macos-universal.zip` (signed and notarized, with its own
@@ -76,12 +86,14 @@ cargo install --locked skillcask
 ```
 
 **Release archives** for macOS, Linux and Windows are on the
-[releases page](https://github.com/puniserv/skillcask/releases), with sha256 checksums and GitHub
+[releases page](https://github.com/GetResponse/skillcask/releases), with sha256 checksums and GitHub
 build provenance attestations:
 
 ```sh
-gh attestation verify skillcask-x86_64-unknown-linux-gnu.tar.xz -R puniserv/skillcask
+gh attestation verify skillcask-x86_64-unknown-linux-gnu.tar.xz -R GetResponse/skillcask
 ```
+
+Releases up to 0.10.2 were built before the repository moved and verify with `--owner puniserv --signer-repo puniserv/skillcask`.
 
 **GitHub Actions**
 
@@ -91,7 +103,7 @@ permissions:
   attestations: read   # for the provenance check
 steps:
   - uses: actions/checkout@<sha>
-  - uses: puniserv/skillcask@<commit sha of a release tag>   # vX.Y.Z
+  - uses: GetResponse/skillcask@<commit sha of a release tag>   # vX.Y.Z
     with:
       version: X.Y.Z               # needed when the action is pinned to a sha, not a tag
       args: install --frozen       # default
@@ -534,7 +546,7 @@ too young falls back to an older commit when the server supports partial fetches
   scanning, e.g. in GitHub Actions:
 
   ```yaml
-  - uses: puniserv/skillcask@v0.8.0
+  - uses: GetResponse/skillcask@v0.8.0
     with:
       args: install --frozen
   - run: skillcask audit --sarif > skills.sarif
@@ -617,7 +629,7 @@ on the formula; name both, since Homebrew loads from a third-party tap only what
 or what `brew trust` lists:
 
 ```sh
-brew install puniserv/tap/skillcask puniserv/tap/skillcask-app
+brew install getresponse/tap/skillcask getresponse/tap/skillcask-app
 ```
 
 Every release also has `Skillcask-X.Y.Z-macos-universal.zip`, signed with a Developer ID and

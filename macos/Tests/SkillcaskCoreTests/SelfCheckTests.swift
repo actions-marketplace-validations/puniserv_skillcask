@@ -117,9 +117,9 @@ import Testing
     /// Exit 3 keeps the CLI's `error:` and `hint:` lines for the alert.
     @Test func exitThreeIsANetworkFailureWithTheCLIsWords() async {
         let stderr = """
-            warning: https://raw.githubusercontent.com/puniserv/homebrew-tap/main/Casks/skillcask-app.rb: io: Connection refused (os error 61); retrying in 1s
-            error: https://raw.githubusercontent.com/puniserv/homebrew-tap/main/Casks/skillcask-app.rb: io: Connection refused (os error 61)
-              hint: check the connection; releases are listed at https://github.com/puniserv/skillcask/releases
+            warning: https://raw.githubusercontent.com/GetResponse/homebrew-tap/main/Casks/skillcask-app.rb: io: Connection refused (os error 61); retrying in 1s
+            error: https://raw.githubusercontent.com/GetResponse/homebrew-tap/main/Casks/skillcask-app.rb: io: Connection refused (os error 61)
+              hint: check the connection; releases are listed at https://github.com/GetResponse/skillcask/releases
 
             """
         let client = Scripted(stderr: stderr, exit: 3)
@@ -127,8 +127,8 @@ import Testing
             throws: CLIError.failed(
                 code: .network,
                 message:
-                    "https://raw.githubusercontent.com/puniserv/homebrew-tap/main/Casks/skillcask-app.rb: io: Connection refused (os error 61)",
-                hint: "check the connection; releases are listed at https://github.com/puniserv/skillcask/releases",
+                    "https://raw.githubusercontent.com/GetResponse/homebrew-tap/main/Casks/skillcask-app.rb: io: Connection refused (os error 61)",
+                hint: "check the connection; releases are listed at https://github.com/GetResponse/skillcask/releases",
                 stderr: stderr)
         ) {
             try await client.selfCheck(binary: bundled, capabilities: capabilities)

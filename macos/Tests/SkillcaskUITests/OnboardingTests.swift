@@ -223,8 +223,8 @@ import Testing
     // MARK: - Copy
 
     @Test func brewCommandsAreTheReleasedFormula() {
-        #expect(OnboardingCopy.installCommand == "brew install puniserv/tap/skillcask")
-        #expect(OnboardingCopy.upgradeCommand == "brew upgrade puniserv/tap/skillcask")
+        #expect(OnboardingCopy.installCommand == "brew install getresponse/tap/skillcask")
+        #expect(OnboardingCopy.upgradeCommand == "brew upgrade getresponse/tap/skillcask")
     }
 
     @Test func foundAndNeededRows() {
@@ -236,7 +236,7 @@ import Testing
     }
 
     @Test func learnMoreOpensThePublicReadme() {
-        #expect(OnboardingCopy.readme.absoluteString == "https://github.com/puniserv/skillcask")
-        #expect(OnboardingCopy.installSection.absoluteString == "https://github.com/puniserv/skillcask#install")
+        #expect(OnboardingCopy.readme.absoluteString == "https://github.com/GetResponse/skillcask")
+        #expect(OnboardingCopy.installSection.absoluteString == "https://github.com/GetResponse/skillcask#install")
     }
 }
