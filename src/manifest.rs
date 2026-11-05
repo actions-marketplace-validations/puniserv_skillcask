@@ -85,6 +85,52 @@ pub fn template(global: bool) -> &'static str {
     if global { GLOBAL_TEMPLATE } else { TEMPLATE }
 }
 
+/// D58: the project template with the `[repositories]` of the global manifest `global`, entries
+/// and their comments as written there; the template's when `global` has no such table.
+pub fn project_template(global: &str) -> Result<String> {
+    let src: DocumentMut = global.parse::<DocumentMut>().map_err(|e| crate::error::Error::new(MANIFEST, e.to_string()))?;
+    let mut doc: DocumentMut = TEMPLATE.parse().map_err(bad)?;
+    let Some(from) = src.get("repositories").and_then(Item::as_table_like) else { return Ok(TEMPLATE.into()) };
+    let to = doc["repositories"].as_table_mut().expect("template has [repositories]");
+    to.clear();
+    for (name, _) in from.iter() {
+        let (key, item) = from.get_key_value(name).expect("listed key");
+        let mut key = key.clone();
+        // `[repositories.name]` sub-tables would land after `[policy]`; one table keeps them together.
+        let item = match item.clone() {
+            Item::Table(t) => {
+                let comments = t.decor().prefix().cloned();
+                key.fmt();
+                if let Some(c) = comments {
+                    key.leaf_decor_mut().set_prefix(c);
+                }
+                let mut t = t.into_inline_table();
+                t.fmt();
+                Item::Value(Value::InlineTable(t))
+            }
+            i => i,
+        };
+        to.insert_formatted(&key, item);
+    }
+    let text = doc.to_string();
+    // The caller names the global file; `skills.toml: ` would read as the project's.
+    let m = parse_with(&text, false, &crate::policy::Outer::default()).map_err(|e| e.map_msg(unprefixed))?;
+    // The global file is private to the machine; the project's is committed.
+    let urls = m.repositories.iter().map(|r| (r.name.as_str(), r.url.as_str())).chain(m.github.as_deref().map(|u| ("github", u)));
+    for (name, url) in urls {
+        if url::Url::parse(url).is_ok_and(|u| {
+            !u.username().is_empty() || u.password().is_some() || u.query_pairs().any(|(k, _)| k.to_lowercase().contains("token"))
+        }) {
+            return Err(crate::error::Error::new(
+                MANIFEST,
+                format!("repository {name}: its URL carries credentials, which init would commit"),
+            )
+            .hint("move them to auth.json next to it"));
+        }
+    }
+    Ok(text)
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Repository {
     pub name: String,
@@ -338,6 +384,11 @@ impl Manifest {
     }
 }
 
+/// A message without the `skills.toml: ` that `bad` puts first, for a caller naming the file itself.
+pub fn unprefixed(m: String) -> String {
+    m.strip_prefix(&format!("{FILE}: ")).map(str::to_owned).unwrap_or(m)
+}
+
 fn bad(what: impl std::fmt::Display) -> crate::error::Error {
     crate::error::Error::new(MANIFEST, format!("{FILE}: {what}"))
 }
@@ -377,6 +428,9 @@ pub fn parse_with(text: &str, global: bool, outer: &crate::policy::Outer) -> Res
     let mut packagist_off = false;
     if let Some(t) = doc.get("repositories").and_then(Item::as_table_like) {
         for (name, item) in t.iter() {
+            if !crate::policy::valid_name(name) {
+                return Err(bad(format!("repository key {name:?}: use ASCII letters, digits and -_.")));
+            }
             if matches!(name, "packagist" | "github") && item.as_bool().is_some() {
                 if item.as_bool() == Some(false) {
                     if name == "github" {
@@ -924,6 +978,7 @@ mod tests {
         let fake = "https://git.example.com/acme/fake";
         let e = m.check_locked(&entry(fake, "zip", "https://evil.example/x.zip", &sha)).unwrap_err();
         assert!(e.msg.ends_with("is not in policy.allow-sources"), "{}", e.msg);
+        assert!(e.hint.is_none(), "no / entry equals this registry: {:?}", e.hint);
         assert!(!ok(entry(fake, "git", "https://evil.example/x.git", &sha)));
         assert!(!ok(entry(fake, "zip", &format!("https://api.github.com/repos/evil/x/zipball/{sha}"), &sha)));
         assert!(ok(entry(fake, "zip", "https://git.example.com/acme/dists/x.zip", &sha)));
@@ -942,13 +997,12 @@ mod tests {
                 "{key}"
             );
         }
-        // Regression: a `[repositories]` key spelled like a URL entry was "named" by it.
-        let key = parse(
-            "[repositories]\n\"https://git.example.com/acme/\" = { url = \"https://git.example.com/acme/fake\" }\n[policy]\nallow-sources = [\"https://git.example.com/acme/\"]\n",
-            false,
-        )
-        .unwrap();
-        assert!(key.check_locked(&entry("https://git.example.com/acme/fake", "zip", "https://evil.example/x.zip", &sha)).is_err());
+        // Regression: a `[repositories]` key spelled like a URL entry was "named" by it; such keys,
+        // and keys that would add a line to an error, are now refused.
+        for key in ["https://git.example.com/acme/", "a\\nb", "my repo", ""] {
+            let e = parse(&format!("[repositories]\n{key:?} = {{ url = \"https://git.example.com/acme/fake\" }}\n"), false).unwrap_err();
+            assert!(e.msg.contains("repository key"), "{key:?}: {}", e.msg);
+        }
         let at = parse("[repositories]\nr = { url = \"https://git.example.com/acme/\" }\n[policy]\nallow-sources = [\"https://git.example.com/acme/\"]\n", false).unwrap();
         let e = at.check_locked(&entry("https://git.example.com/acme/", "zip", "https://evil.example/x.zip", &sha)).unwrap_err();
         assert!(e.hint.as_deref().is_some_and(|h| h.contains("drop the /")), "{:?}", e.hint);

@@ -1419,8 +1419,13 @@ pub fn init(ctx: &Ctx) -> Result<()> {
     if path.exists() {
         bail!(MANIFEST, "{shown} already exists");
     }
+    let global = crate::scope::config_dir().map(|d| d.join(manifest::FILE)).filter(|g| !ctx.s.global && g.is_file());
+    let text = match global {
+        Some(g) => manifest::project_template(&std::fs::read_to_string(&g).ctx(g.display())?).ctx(g.display())?,
+        None => manifest::template(ctx.s.global).into(),
+    };
     std::fs::create_dir_all(&ctx.s.config).ctx(ctx.s.config.display())?;
-    std::fs::write(&path, manifest::template(ctx.s.global)).ctx(&shown)?;
+    std::fs::write(&path, text).ctx(&shown)?;
     crate::ui::done("created", &shown);
     Ok(())
 }
@@ -2352,7 +2357,8 @@ pub fn audit(ctx: &Ctx, json: bool, sarif: bool, advisories: bool) -> Result<()>
 
 /// What `audit --advisories` found (D55). `found`: `(package, rule, message)` for each advisory that
 /// affects a locked version and each package its repository marks abandoned; `unchecked`: packages
-/// no source publishes advisories for; `failed`: sources that could not be read.
+/// no source publishes advisories for, or whose repository no longer serves them; `failed`: sources
+/// that could not be read.
 #[derive(Default)]
 struct AdvisoryCheck {
     found: Vec<(String, &'static str, String)>,
@@ -2410,7 +2416,10 @@ fn advisory_findings(ctx: &Ctx, m: &Manifest, lock: &Lock) -> Result<AdvisoryChe
         for p in ps {
             match reg.versions(r, &p.name) {
                 Ok(Some(c)) => out.found.extend(registry::abandoned(&c).map(|msg| (p.name.clone(), "abandoned", msg))),
-                Ok(None) => ui::note(format!("{}: no longer in repository {}", p.name, r.name)),
+                Ok(None) => {
+                    ui::note(format!("{}: no longer in repository {}", p.name, r.name));
+                    out.unchecked.push(p.name.clone());
+                }
                 Err(e) => out.failed.push(format!("{}: {}", p.name, e.msg)),
             }
         }
