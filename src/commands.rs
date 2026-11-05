@@ -93,6 +93,13 @@ impl Ctx {
         }
     }
 
+    /// A lock entry's archive, fetched only once `m` admits the entry and its dist URL: every
+    /// download of a `Package.dist` goes through here, for `info` and `diff` as for `install`.
+    fn fetch_locked(&self, m: &Manifest, p: &Package) -> Result<Fetched> {
+        m.check_locked(p)?;
+        Ok(self.fetch(&p.name, &p.dist, Some(&p.dist_sha256), None)?.1)
+    }
+
     fn fetch(&self, name: &str, dist: &Dist, expected: Option<&str>, shasum: Option<&str>) -> Result<(String, Fetched)> {
         let (bytes, sha) = match dist.kind.as_str() {
             "zip" => {
@@ -163,7 +170,7 @@ impl Ctx {
 
     /// Prints a unified diff from `old`'s skills, as installed (none for a package new to the
     /// lock), to `new`'s in `f`. `scan`: warn about invisible Unicode in the files that changed.
-    fn show_diff(&self, old: Option<&Package>, new: &Package, f: &Fetched, scan: bool) -> Result<()> {
+    fn show_diff(&self, m: &Manifest, old: Option<&Package>, new: &Package, f: &Fetched, scan: bool) -> Result<()> {
         let title = match old {
             Some(o) => format!("{} {} -> {}", new.name, o.version, new.version),
             None => format!("{} {} (new)", new.name, new.version),
@@ -184,7 +191,7 @@ impl Ctx {
                 read_tree(&dir, files, None)?
             } else {
                 if old_dist.is_none() {
-                    old_dist = Some(self.fetch(&old.name, &old.dist, Some(&old.dist_sha256), None)?.1);
+                    old_dist = Some(self.fetch_locked(m, old)?);
                 }
                 installed_tree(old_dist.as_ref().expect("fetched above"), old, sk)?
             };
@@ -227,9 +234,7 @@ impl Ctx {
         prepared: &mut HashMap<String, Fetched>,
     ) -> Result<Option<Package>> {
         let Some(p) = p.filter(|p| !source_changed(m, req, p)) else { return Ok(None) };
-        if let Some(why) = m.refuses(&p.repository) {
-            bail!(MANIFEST, "{}: {why}", p.name);
-        }
+        m.check_locked(p)?;
         let fits = || {
             let c = Constraint::parse(&req.constraint).ok();
             c.zip(version::Version::parse(&p.version)).is_some_and(|(c, v)| c.allows(&v))
@@ -388,8 +393,31 @@ impl Ctx {
         }
         // A committed lock must not bring in what the policy refuses.
         for p in &lock.packages {
-            if let Some(why) = m.refuses(&p.repository) {
-                bail!(MANIFEST, "{}: {why}", p.name);
+            m.check_locked(p)?;
+        }
+        // Nor a version younger than a cooldown the project cannot change: a lock written under a
+        // looser one would install unchanged (D7). Its `released` is the lock's word, as at resolution.
+        if let Some((_, from)) =
+            m.policy.effective.get("min-release-age").filter(|_| crate::policy::fixed(&m.policy.effective, "min-release-age"))
+        {
+            let now = Timestamp::now();
+            for p in &lock.packages {
+                let age = m.repositories.iter().find(|r| r.url == p.repository).map_or(m.policy.min_release_age, |r| m.min_release_age(r));
+                let Some(t) = p.released.filter(|t| now.checked_sub(age).is_ok_and(|cutoff| *t > cutoff)) else { continue };
+                let eligible = t.checked_add(age).unwrap_or(Timestamp::MAX);
+                return Err(Error::new(
+                    MANIFEST,
+                    format!(
+                        "{} {} was released {} and is newer than policy.min-release-age ({age:#}, {from})",
+                        p.name,
+                        p.version,
+                        t.round(jiff::Unit::Second).unwrap_or(t)
+                    ),
+                )
+                .hint(format!(
+                    "it becomes eligible at {}; until then lock an older version",
+                    eligible.round(jiff::Unit::Second).unwrap_or(eligible)
+                )));
             }
         }
         if let Some(c) = self.conflicts(m, lock, old, &BTreeSet::new())?.first() {
@@ -595,7 +623,7 @@ impl Ctx {
                     skill_md_of(&project::store_dir(s, &sk.name))
                 } else {
                     if !prepared.contains_key(&p.name) {
-                        let f = self.fetch(&p.name, &p.dist, Some(&p.dist_sha256), None)?.1;
+                        let f = self.fetch_locked(m, p)?;
                         prepared.insert(p.name.clone(), f);
                     }
                     skill_md_of(&prepared[&p.name].dir.path().join(&sk.path))
@@ -621,7 +649,7 @@ impl Ctx {
             }
             let f = match prepared.remove(&p.name) {
                 Some(f) => f,
-                None => self.fetch(&p.name, &p.dist, Some(&p.dist_sha256), None)?.1,
+                None => self.fetch_locked(m, p)?,
             };
             for sk in need {
                 let mut files = f.skill_files(&p.name, sk.from.as_ref().unwrap_or(&sk.name), &sk.path)?;
@@ -709,28 +737,27 @@ impl Ctx {
     }
 }
 
-/// Warns about invisible Unicode in `p`'s skill files (D23).
 /// Warns about invisible characters (D23) and risky patterns (D31) in the skills of a fresh
-/// download; `deny`: risky patterns fail instead (policy.deny-patterns).
+/// download; `deny`: either fails instead (policy.deny-patterns, D56).
 fn scan_new(f: &Fetched, p: &Package, deny: bool) -> Result<()> {
-    let mut risky = 0;
+    let mut found = 0;
     for sk in &p.skills {
         for e in f.skill_files(&p.name, sk.from.as_ref().unwrap_or(&sk.name), &sk.path)? {
             let path = if sk.path.is_empty() { e.path } else { format!("{}/{}", sk.path, e.path) };
             let bytes = std::fs::read(f.dir.path().join(&path))?;
-            for w in skill::invisible_warnings(&path, &bytes) {
-                ui::warn(format!("{}: {w}", p.name));
-            }
-            let found = skill::risky_warnings(&path, &bytes);
-            risky += found.len();
-            for w in found {
+            let warnings = [skill::invisible_warnings(&path, &bytes), skill::risky_warnings(&path, &bytes)].concat();
+            found += warnings.len();
+            for w in warnings {
                 ui::warn(format!("{}: {w}", p.name));
             }
         }
     }
-    if deny && risky > 0 {
-        return Err(Error::new(MANIFEST, format!("{} {}: risky patterns found, refused by policy.deny-patterns", p.name, p.version))
-            .hint("review the lines above; if they are fine, lift deny-patterns for this run with SKILLCASK_DENY_PATTERNS=false"));
+    if deny && found > 0 {
+        return Err(Error::new(
+            MANIFEST,
+            format!("{} {}: risky patterns or invisible characters found, refused by policy.deny-patterns", p.name, p.version),
+        )
+        .hint("review the lines above; if they are fine, lift deny-patterns for this run with SKILLCASK_DENY_PATTERNS=false"));
     }
     Ok(())
 }
@@ -1329,6 +1356,7 @@ fn locked_repository<'a>(m: &'a Manifest, req: &SkillReq, locked: Option<&Packag
 }
 
 fn find(reg: &Registry, m: &Manifest, req: &SkillReq, locked: Option<&Package>) -> Result<(Repository, Vec<Candidate>)> {
+    m.check_name(&req.name)?;
     // A blocked repository fails here; searching the others could pick a namesake elsewhere.
     let blocked = |r: &Repository| m.refuses(&r.url).map(|why| Error::new(MANIFEST, format!("{}: {why}", req.name)));
     let Some(repo) = locked_repository(m, req, locked) else {
@@ -1749,7 +1777,7 @@ pub fn update(ctx: &Ctx, names: &[String], diff: bool) -> Result<()> {
             && o.is_none_or(|o| o.dist_sha256 != p.dist_sha256)
         {
             // Resolving already warned about invisible Unicode in every file.
-            ctx.show_diff(o, p, f, false)?;
+            ctx.show_diff(&m, o, p, f, false)?;
         }
     }
     let m = settle_and_save(ctx, m, &mut lock, &old, &prepared, &newcomers)?;
@@ -2576,7 +2604,7 @@ pub fn diff(ctx: &Ctx, package: Option<&str>, to: Option<&str>) -> Result<()> {
         }
         let mut prepared = HashMap::new();
         let new = ctx.lock_candidate(&req, &repo, &c, None, &mut prepared)?;
-        ctx.show_diff(old, &new, &prepared[&new.name], true)?;
+        ctx.show_diff(&m, old, &new, &prepared[&new.name], true)?;
         shown += 1;
         after.upsert(new);
         for r in deps::wanted(&m, &after)?.reqs {
@@ -2616,10 +2644,7 @@ pub fn diff_from(ctx: &Ctx, base: &Path, package: Option<&str>) -> Result<()> {
             continue;
         }
         // The lock under review chooses the URL; the policy decides whether it is fetched at all.
-        if let Some(why) = m.refuses(&new.repository) {
-            bail!(MANIFEST, "{}: {why}", new.name);
-        }
-        let f = ctx.fetch(&new.name, &new.dist, Some(&new.dist_sha256), None)?.1;
+        let f = ctx.fetch_locked(&m, new)?;
         // Shows what `install` would place, or fails where `install` would.
         for sk in &new.skills {
             let mut files = f.skill_files(&new.name, sk.from.as_ref().unwrap_or(&sk.name), &sk.path)?;
@@ -2638,7 +2663,7 @@ pub fn diff_from(ctx: &Ctx, base: &Path, package: Option<&str>) -> Result<()> {
                 );
             }
         }
-        ctx.show_diff(before, new, &f, true)?;
+        ctx.show_diff(&m, before, new, &f, true)?;
         shown += 1;
     }
     for gone in old.packages.iter().filter(|p| wanted(&p.name) && lock.get(&p.name).is_none()) {
@@ -2715,7 +2740,7 @@ pub fn info(ctx: &Ctx, target: &str, json: bool) -> Result<()> {
     let req = SkillReq { name: name.clone(), github: gh.then_some(GitHub::Tags), ..Default::default() };
     // The locked version's skills are the lock's, whatever its metadata says now.
     let (pkg, f) = match locked {
-        Some(p) => (p.clone(), ctx.fetch(&name, &p.dist, Some(&p.dist_sha256), None)?.1),
+        Some(p) => (p.clone(), ctx.fetch_locked(&m, p)?),
         None => {
             let mut prepared = HashMap::new();
             let pkg = ctx.lock_candidate(&req, &repo, &c, None, &mut prepared)?;

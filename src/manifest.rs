@@ -53,7 +53,8 @@ local = ".skills"   # project skills, linked into .agents/skills
 min-release-age = "3d"
 allow-ranges = true
 # allow-sources = ["packagist", "github"]   # only these: repository names, packagist, github, https:// prefixes
-# deny-patterns = true   # risky patterns (curl | sh, ~/.ssh, "ignore previous instructions") fail instead of warning
+# deny-patterns = true   # risky patterns (curl | sh, ~/.ssh, "ignore previous instructions") and invisible characters fail instead of warning
+# deny-packages = ["vendor/*", "vendor/name"]   # refused by name, from any source
 "#;
 
 pub const GLOBAL_TEMPLATE: &str = r#"# skillcask global manifest: personal skills in ~/.agents/skills. Lock: skills.lock.
@@ -76,7 +77,8 @@ github = { type = "github", url = "https://api.github.com" }
 min-release-age = "3d"
 allow-ranges = true
 # allow-sources = ["packagist", "github"]   # only these: repository names, packagist, github, https:// prefixes
-# deny-patterns = true   # risky patterns (curl | sh, ~/.ssh, "ignore previous instructions") fail instead of warning
+# deny-patterns = true   # risky patterns (curl | sh, ~/.ssh, "ignore previous instructions") and invisible characters fail instead of warning
+# deny-packages = ["vendor/*", "vendor/name"]   # refused by name, from any source
 "#;
 
 pub fn template(global: bool) -> &'static str {
@@ -126,6 +128,10 @@ pub struct Policy {
     pub deny_patterns: bool,
     /// The only sources allowed; `None`: all (D18).
     pub allow_sources: Option<Vec<String>>,
+    /// Packages refused by name, `vendor/name` or `vendor/*` (D57).
+    pub deny_packages: Vec<String>,
+    /// `config.toml` enforces `allow-sources`, so `"github"` there is public GitHub only (D43).
+    pub github_public: bool,
     /// Keys set by a layer, with that layer, for `status`.
     pub effective: crate::policy::Effective,
 }
@@ -171,9 +177,16 @@ impl Manifest {
     }
 
     /// The API `"github"` in `allow-sources` stands for: the one in use, unless the list comes from
-    /// the environment or an enforced key, which a project's `github` url must not widen (D43).
+    /// the environment, which a project's `github` url must not widen, or is enforced, which the
+    /// environment must not move either (D43).
     fn github_api(&self) -> String {
-        if crate::policy::fixed(&self.policy.effective, "allow-sources") { crate::github::trusted_api() } else { crate::github::api() }
+        if self.policy.github_public {
+            crate::github::API.to_string()
+        } else if crate::policy::fixed(&self.policy.effective, "allow-sources") {
+            crate::github::trusted_api()
+        } else {
+            crate::github::api()
+        }
     }
 
     /// Why packages from `url` are refused, or `None` when they are allowed.
@@ -186,14 +199,95 @@ impl Manifest {
         let github = self.policy.allow_sources.as_ref().is_some_and(|l| l.iter().any(|e| e == "github"))
             && crate::policy::under(url, &format!("{}/repos/", crate::github::api()));
         let why = if github {
-            format!(
-                "; \"github\" there means {} (SKILLCASK_GITHUB_API names another)",
-                crate::http::shown_url(&crate::github::trusted_api())
-            )
+            let other = if self.policy.github_public {
+                "an enforced list names another by its https:// prefix"
+            } else {
+                "SKILLCASK_GITHUB_API names another"
+            };
+            format!("; \"github\" there means {} ({other})", crate::http::shown_url(&self.github_api()))
         } else {
             String::new()
         };
         Some(format!("source {shown} is not in policy.allow-sources ({from}){why}"))
+    }
+
+    /// Errors when `name` (`vendor/name`) is in `deny-packages`.
+    pub fn check_name(&self, name: &str) -> Result<()> {
+        if crate::policy::denied(&self.policy.deny_packages, name) {
+            let from = self.policy.effective.get("deny-packages").map_or("", |(_, f)| f);
+            return Err(crate::error::Error::new(MANIFEST, format!("{name} is refused by policy.deny-packages ({from})"))
+                .hint(format!("pick another package, or ask whoever sets policy.deny-packages in {from} to drop it")));
+        }
+        Ok(())
+    }
+
+    /// Errors when the lock entry `p` is refused by name or by source, or, under `allow-sources`,
+    /// downloads from outside what was checked: a GitHub entry only its zipball of a commit, a git
+    /// entry only its repository, a registry the list admits only by a prefix only a dist the list
+    /// admits too (D18). The rule follows `repository`, never the lock's dist type.
+    pub fn check_locked(&self, p: &crate::lock::Package) -> Result<()> {
+        self.check_name(&p.name)?;
+        if let Some(why) = self.refuses(&p.repository) {
+            bail!(MANIFEST, "{}: {why}", p.name);
+        }
+        let Some(list) = &self.policy.allow_sources else { return Ok(()) };
+        let repo = p.repository.trim_end_matches('/');
+        let shown = |u: &str| url::Url::parse(u).map_or_else(|_| u.to_string(), |u| crate::http::redact(&u));
+        let refused = |want: &str| -> Result<()> {
+            bail!(MANIFEST, "{}: {} dist {} {} is not {want}", p.name, crate::lock::FILE, p.dist.kind, shown(&p.dist.url))
+        };
+        // The APIs in use or trusted, and any the list names a `/repos/` prefix of, say what is GitHub,
+        // not the path shape alone: a registry may have /repos/ in its path, and a project must not
+        // turn an enforced GHE prefix into "not GitHub" by leaving `github` at its default.
+        let listed =
+            list.iter().filter(|e| e.starts_with("https://")).filter_map(|e| e.split_once("/repos/").map(|(api, _)| api.to_string()));
+        let apis: Vec<String> = [crate::github::api(), self.github_api(), crate::github::trusted_api()].into_iter().chain(listed).collect();
+        let github = apis.iter().find_map(|api| github_repository(repo, api));
+        if github == Some(false) {
+            bail!(
+                MANIFEST,
+                "{}: {} repository {} is not a GitHub repository <api>/repos/<owner>/<name>",
+                p.name,
+                crate::lock::FILE,
+                shown(repo)
+            );
+        }
+        if github == Some(true) {
+            let sha = p.dist.reference.as_deref().filter(|r| r.len() == 40 && r.bytes().all(|b| b.is_ascii_hexdigit()));
+            let Some(sha) = sha else { return refused(&format!("zip {}/zipball/<40-hex commit>", shown(repo))) };
+            let want = format!("{repo}/zipball/{sha}");
+            // Parsed, so a `..` that `url` would resolve before the request cannot leave the path.
+            let ok =
+                p.dist.kind == "zip" && url::Url::parse(&p.dist.url).ok().is_some_and(|u| url::Url::parse(&want).is_ok_and(|w| u == w));
+            return if ok { Ok(()) } else { refused(&format!("zip {}", shown(&want))) };
+        }
+        if p.dist.kind == crate::git::KIND && p.dist.url.trim_end_matches('/') == repo {
+            return Ok(());
+        }
+        // A Composer registry may serve dists from any host (Packagist: GitHub zipballs). A project's
+        // own registry gets that only when the list names it, never through the "github" or
+        // "packagist" keyword, or gives its exact URL without a trailing `/`, which is a prefix;
+        // under a prefix it is the project's word.
+        let registry = self.repositories.iter().find(|r| r.url.trim_end_matches('/') == repo);
+        let name = |e: &str| !matches!(e, "github" | "packagist") && !e.starts_with("https://");
+        let named = |r: &Repository| list.iter().any(|e| name(e) && *e == r.name || !e.ends_with('/') && e == repo);
+        if repo == PACKAGIST_URL || registry.is_some_and(named) {
+            return Ok(());
+        }
+        if registry.is_some() {
+            if self.allows(&p.dist.url) {
+                return Ok(());
+            }
+            let e = refused("in policy.allow-sources").unwrap_err();
+            return Err(if list.iter().any(|e| e.ends_with('/') && e.trim_end_matches('/') == repo) {
+                e.hint(
+                    "an allow-sources entry ending in / is a prefix; drop the / to name this registry and accept its dists from any host",
+                )
+            } else {
+                e
+            });
+        }
+        refused(&format!("git {}", shown(repo)))
     }
 
     /// GitHub is on and `allow-sources` admits at least some GitHub repository.
@@ -209,8 +303,9 @@ impl Manifest {
         self.repositories.iter().filter(|r| self.allows(&r.url)).cloned().collect()
     }
 
-    /// Errors unless the GitHub or plain git source of `req` may be used.
+    /// Errors unless `req` and its GitHub or plain git source may be used.
     pub fn check_source(&self, req: &SkillReq) -> Result<()> {
+        self.check_name(&req.name)?;
         let Some(url) = &req.git else { return self.check_github(&req.name) };
         if let Some(why) = self.refuses(url) {
             bail!(MANIFEST, "{}: {why}", req.name);
@@ -245,6 +340,18 @@ impl Manifest {
 
 fn bad(what: impl std::fmt::Display) -> crate::error::Error {
     crate::error::Error::new(MANIFEST, format!("{FILE}: {what}"))
+}
+
+/// `None` when `repo` is not under `<api>/repos/`, else whether it is exactly
+/// `<api>/repos/<owner>/<name>`, as the lock records a GitHub repository.
+fn github_repository(repo: &str, api: &str) -> Option<bool> {
+    let base = format!("{api}/repos/");
+    if !crate::policy::under(&format!("{repo}/"), &base) {
+        return None;
+    }
+    let (u, b) = (url::Url::parse(repo).ok()?, url::Url::parse(&base).ok()?);
+    let rest: Vec<&str> = u.path().get(b.path().len()..).unwrap_or("").split('/').collect();
+    Some(u.query().is_none() && rest.len() == 2 && rest.iter().all(|s| !s.is_empty()))
 }
 
 /// The manifest alone, without the user config and the environment.
@@ -325,6 +432,11 @@ pub fn parse_with(text: &str, global: bool, outer: &crate::policy::Outer) -> Res
             Some((V::List(l), _)) => Some(l.clone()),
             _ => None,
         },
+        deny_packages: match effective.get("deny-packages") {
+            Some((V::List(l), _)) => l.clone(),
+            _ => Vec::new(),
+        },
+        github_public: outer.config.enforce.contains("allow-sources") && outer.config.values.contains_key("allow-sources"),
         effective,
     };
     if let Some(list) = &policy.allow_sources
@@ -341,7 +453,10 @@ pub fn parse_with(text: &str, global: bool, outer: &crate::policy::Outer) -> Res
     }
     // A public package must never shadow a private one with the same name.
     repositories.sort_by_key(is_packagist);
-    if let Some((V::Age(enforced), crate::policy::ENFORCED)) = policy.effective.get("min-release-age") {
+    // The environment can only lengthen an enforced cooldown (D18), and the floor follows it.
+    if let Some((V::Age(enforced), crate::policy::ENFORCED | crate::policy::ENVIRONMENT)) = policy.effective.get("min-release-age")
+        && outer.config.enforce.contains(&"min-release-age")
+    {
         for r in &mut repositories {
             let floor = crate::policy::repository_floor(outer, &r.url, *enforced);
             match r.min_release_age {
@@ -550,25 +665,30 @@ fn age(i: &Item, what: &str) -> Result<SignedDuration> {
 
 /// `"3d"`, `"12h"`, `"30m"`, `"1w"`, `"90s"`, `"0"`.
 pub fn parse_age(s: &str) -> Result<SignedDuration> {
+    duration(s).map_err(bad)
+}
+
+/// `parse_age` without naming a file, for `config.toml` and the environment.
+pub fn duration(s: &str) -> std::result::Result<SignedDuration, String> {
     let s = s.trim();
     if s == "0" {
         return Ok(SignedDuration::ZERO);
     }
     let (num, unit) = s.split_at(s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len()));
-    let n: i64 = num.parse().map_err(|_| bad(format!("invalid duration {s:?}")))?;
+    let n: i64 = num.parse().map_err(|_| format!("invalid duration {s:?}"))?;
     let secs = match unit {
         "s" => 1,
         "m" => 60,
         "h" => 3600,
         "d" => 86400,
         "w" => 7 * 86400,
-        _ => return Err(bad(format!("invalid duration {s:?}, use s, m, h, d or w"))),
+        _ => return Err(format!("invalid duration {s:?}, use s, m, h, d or w")),
     };
     // Past this the cutoff arithmetic in resolution could overflow and disable the cooldown.
     const MAX: i64 = 36525 * 86400;
     match n.checked_mul(secs) {
         Some(total) if total <= MAX => Ok(SignedDuration::from_secs(total)),
-        _ => Err(bad(format!("duration {s:?} is longer than 100 years"))),
+        _ => Err(format!("duration {s:?} is longer than 100 years")),
     }
 }
 
@@ -726,6 +846,127 @@ pub fn remove_skills(root: &Path, global: bool, names: &[String]) -> Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_locked_github_or_git_dist_stays_in_its_repository() {
+        let m = parse(
+            "[repositories]\nreg = { url = \"https://reg.example/repos/php\" }\n[policy]\nallow-sources = [\"https://api.github.com/\", \"https://git.example.com/\", \"https://ghe.example/\", \"packagist\", \"reg\"]\n",
+            false,
+        )
+        .unwrap();
+        let sha = "ab".repeat(20);
+        let entry = |repository: &str, kind: &str, url: &str, reference: &str| crate::lock::Package {
+            name: "acme/t".into(),
+            constraint: "^1.0".into(),
+            git_ref: None,
+            version: "1.0.0".into(),
+            repository: repository.into(),
+            dist: crate::lock::Dist { kind: kind.into(), url: url.into(), reference: Some(reference.into()) },
+            dist_sha256: "ab".repeat(32),
+            released: None,
+            selected: None,
+            requires: BTreeMap::new(),
+            skills: Vec::new(),
+        };
+        let ok = |p: crate::lock::Package| m.check_locked(&p).is_ok();
+        let gh = "https://api.github.com/repos/acme/t";
+        let git = "https://git.example.com/acme/t.git";
+        assert!(ok(entry(gh, "zip", &format!("{gh}/zipball/{sha}"), &sha)));
+        // Regression: allow-sources checked `repository` only, and `dist.url` was fetched as written.
+        let e = m.check_locked(&entry(gh, "zip", &format!("https://evil.example/repos/acme/t/zipball/{sha}"), &sha)).unwrap_err();
+        assert!(e.msg.contains("dist zip https://evil.example/") && e.msg.contains(&format!("is not zip {gh}/zipball/{sha}")), "{}", e.msg);
+        assert!(!ok(entry(gh, "zip", &format!("{gh}/zipball/{}", "cd".repeat(20)), &sha)));
+        // The reference must be both 40 characters long and hex.
+        for r in ["g".repeat(40), "ab".repeat(4)] {
+            let e = m.check_locked(&entry(gh, "zip", &format!("{gh}/zipball/{r}"), &r)).unwrap_err();
+            assert!(e.msg.ends_with(&format!("is not zip {gh}/zipball/<40-hex commit>")), "{}", e.msg);
+        }
+        // Regression: `..` in the reference left the zipball path for another repository on the host.
+        let up = format!("../../../evil/x/zipball/{sha}");
+        assert!(!ok(entry(gh, "zip", &format!("{gh}/zipball/{up}"), &up)));
+        assert!(!ok(entry(gh, "zip", &format!("{gh}/zipball/{sha}?x=1"), &sha)));
+        assert!(!ok(entry(gh, "git", &format!("{gh}/zipball/{sha}"), &sha)));
+        assert!(ok(entry(git, "git", &format!("{git}/"), &sha)));
+        assert!(!ok(entry(git, "git", "https://evil.example/t.git", &sha)));
+        // Regression: a git entry relabelled zip, or a GitHub API base without /repos/, chose no rule.
+        assert!(!ok(entry(git, "zip", "https://evil.example/t.zip", &sha)));
+        assert!(!ok(entry(git, "zip", git, &sha)));
+        assert!(!ok(entry("https://ghe.example/api/v3/", "zip", "https://evil.example/t.zip", &sha)));
+        // Composer registries serve dists from any host, also one whose URL has /repos/ in it.
+        assert!(ok(entry(PACKAGIST_URL, "zip", &format!("{gh}/zipball/{sha}"), &sha)));
+        assert!(ok(entry("https://reg.example/repos/php", "zip", "https://cdn.example/t.zip", &sha)));
+        // Without allow-sources the lock already names any source.
+        let open = parse("[skills]\n", false).unwrap();
+        assert!(open.check_locked(&entry(git, "zip", "https://evil.example/t.zip", &sha)).is_ok());
+
+        // Regression: a registry of the project's own `[repositories]` under an allowed prefix
+        // downloaded its dist from any host.
+        let m = parse(
+            "[repositories]\nr = { url = \"https://api.github.com/repos/\" }\nx = { url = \"https://git.example.com/acme/fake\" }\nphp = { url = \"https://host.example/repos/php/packages.json\" }\nexact = { url = \"https://exact.example/packages.json\" }\n[policy]\nallow-sources = [\"https://api.github.com/repos/acme/\", \"https://git.example.com/acme/\", \"https://host.example/\", \"https://exact.example/packages.json\"]\n",
+            false,
+        )
+        .unwrap();
+        let ok = |p: crate::lock::Package| m.check_locked(&p).is_ok();
+        for repo in [
+            "https://api.github.com/repos/acme/",
+            "https://api.github.com/repos/acme/t/x",
+            "https://api.github.com/repos/acme//t",
+            "https://api.github.com/repos/acme/t/packages.json",
+        ] {
+            let e = m.check_locked(&entry(repo, "zip", "https://evil.example/x.zip", &sha)).unwrap_err();
+            assert!(e.msg.contains("is not a GitHub repository"), "{repo}: {}", e.msg);
+        }
+        let common =
+            parse("[repositories]\nr = { url = \"https://api.github.com/repos/\" }\n[policy]\nallow-sources = [\"github\"]\n", false)
+                .unwrap();
+        let e = common.check_locked(&entry("https://api.github.com/repos/", "zip", "https://evil.example/x.zip", &sha)).unwrap_err();
+        assert!(e.msg.contains("is not a GitHub repository"), "{}", e.msg);
+        let fake = "https://git.example.com/acme/fake";
+        let e = m.check_locked(&entry(fake, "zip", "https://evil.example/x.zip", &sha)).unwrap_err();
+        assert!(e.msg.ends_with("is not in policy.allow-sources"), "{}", e.msg);
+        assert!(!ok(entry(fake, "git", "https://evil.example/x.git", &sha)));
+        assert!(!ok(entry(fake, "zip", &format!("https://api.github.com/repos/evil/x/zipball/{sha}"), &sha)));
+        assert!(ok(entry(fake, "zip", "https://git.example.com/acme/dists/x.zip", &sha)));
+        // The exact URL names the registry, as an enforced list cannot name it otherwise.
+        assert!(ok(entry("https://exact.example/packages.json", "zip", "https://cdn.example/x.zip", &sha)));
+        // Regression: a registry keyed like a keyword was "named" by it, and one at exactly a prefix
+        // was "given by its exact URL".
+        for key in ["github", "packagist"] {
+            let m = parse(
+                &format!("[repositories]\n{key} = {{ url = \"https://git.example.com/acme/fake\" }}\n[policy]\nallow-sources = [\"{key}\", \"https://git.example.com/acme/\"]\n"),
+                false,
+            )
+            .unwrap();
+            assert!(
+                m.check_locked(&entry("https://git.example.com/acme/fake", "zip", "https://evil.example/x.zip", &sha)).is_err(),
+                "{key}"
+            );
+        }
+        // Regression: a `[repositories]` key spelled like a URL entry was "named" by it.
+        let key = parse(
+            "[repositories]\n\"https://git.example.com/acme/\" = { url = \"https://git.example.com/acme/fake\" }\n[policy]\nallow-sources = [\"https://git.example.com/acme/\"]\n",
+            false,
+        )
+        .unwrap();
+        assert!(key.check_locked(&entry("https://git.example.com/acme/fake", "zip", "https://evil.example/x.zip", &sha)).is_err());
+        let at = parse("[repositories]\nr = { url = \"https://git.example.com/acme/\" }\n[policy]\nallow-sources = [\"https://git.example.com/acme/\"]\n", false).unwrap();
+        let e = at.check_locked(&entry("https://git.example.com/acme/", "zip", "https://evil.example/x.zip", &sha)).unwrap_err();
+        assert!(e.hint.as_deref().is_some_and(|h| h.contains("drop the /")), "{:?}", e.hint);
+        // Regression: an enforced GHE prefix counted as GitHub only when the project's API was GHE.
+        let ghe = "https://ghe.example/api/v3/repos/acme";
+        let m = parse(
+            &format!("[repositories]\nr = {{ url = \"{ghe}/t\" }}\ns = {{ url = \"{ghe}/\" }}\n[policy]\nallow-sources = [\"{ghe}/\"]\n"),
+            false,
+        )
+        .unwrap();
+        let e = m.check_locked(&entry(&format!("{ghe}/t"), "zip", "https://evil.example/x.zip", &sha)).unwrap_err();
+        assert!(e.msg.contains(&format!("is not zip {ghe}/t/zipball/{sha}")), "{}", e.msg);
+        assert!(m.check_locked(&entry(&format!("{ghe}/t"), "zip", &format!("{ghe}/t/zipball/{sha}"), &sha)).is_ok());
+        let e = m.check_locked(&entry(&format!("{ghe}/"), "zip", "https://evil.example/x.zip", &sha)).unwrap_err();
+        assert!(e.msg.contains("is not a GitHub repository"), "{}", e.msg);
+        // A registry with /repos/ in its path off the GitHub API is not held to the zipball rule.
+        assert!(ok(entry("https://host.example/repos/php/packages.json", "zip", "https://host.example/dists/x.zip", &sha)));
+    }
 
     #[test]
     fn parses_spec_example() {
@@ -920,13 +1161,16 @@ min-release-age = "12h"
         let packagist = m(r#""https://other.example/packages.json", min-release-age = "4d""#).unwrap();
         assert_eq!(packagist.min_release_age(&packagist.repositories[1]), SignedDuration::from_hours(72));
 
-        let env = crate::policy::env_layer(|k| (k == "SKILLCASK_MIN_RELEASE_AGE").then(|| "1h".to_string())).unwrap();
-        let lifted = parse_with(
-            "[repositories]\nr = { url = \"https://other.example/p.json\", min-release-age = \"0\" }",
-            false,
-            &crate::policy::Outer { env, ..o },
-        );
-        assert_eq!(age(lifted.unwrap()), SignedDuration::ZERO, "the environment lifts enforcement");
+        // The environment cannot lift the enforced cooldown, only lengthen it, and the floor follows.
+        let env = |v: &str| crate::policy::env_layer(|k| (k == "SKILLCASK_MIN_RELEASE_AGE").then(|| v.to_string())).unwrap();
+        let repo = |extra: &str| format!("[repositories]\nr = {{ url = \"https://other.example/p.json\"{extra} }}");
+        let o = |v: &str| crate::policy::Outer { env: env(v), ..o.clone() };
+        {
+            let e = parse_with(&repo(""), false, &o("1h")).unwrap_err().msg;
+            assert!(e.contains("SKILLCASK_MIN_RELEASE_AGE = \"1h\" loosens policy.min-release-age = \"72h\""), "{e}");
+        }
+        assert_eq!(age(parse_with(&repo(""), false, &o("7d")).unwrap()), SignedDuration::from_hours(168));
+        assert!(parse_with(&repo(", min-release-age = \"0\""), false, &o("7d")).unwrap_err().msg.contains("shorter than \"168h\""));
     }
 
     #[test]
